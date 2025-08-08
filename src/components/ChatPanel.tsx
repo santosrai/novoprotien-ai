@@ -1,0 +1,192 @@
+import React, { useState, useRef, useEffect } from 'react';
+import { Send, Sparkles } from 'lucide-react';
+import { useAppStore } from '../stores/appStore';
+import { CodeExecutor } from '../utils/codeExecutor';
+
+interface Message {
+  id: string;
+  content: string;
+  type: 'user' | 'ai';
+  timestamp: Date;
+}
+
+export const ChatPanel: React.FC = () => {
+  const { plugin, setCurrentCode, setIsExecuting, setActivePane } = useAppStore();
+
+  const [messages, setMessages] = useState<Message[]>([
+    {
+      id: '1',
+      content: 'Welcome to NovoProtein AI! Ask me to "show insulin" or "display hemoglobin".',
+      type: 'ai',
+      timestamp: new Date()
+    }
+  ]);
+  const [input, setInput] = useState('');
+  const [isLoading, setIsLoading] = useState(false);
+  const messagesEndRef = useRef<HTMLDivElement>(null);
+
+  const scrollToBottom = () => {
+    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  };
+
+  useEffect(() => {
+    scrollToBottom();
+  }, [messages]);
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!input.trim() || isLoading) return;
+
+    const userMessage: Message = {
+      id: Date.now().toString(),
+      content: input.trim(),
+      type: 'user',
+      timestamp: new Date()
+    };
+
+    setMessages(prev => [...prev, userMessage]);
+    setInput('');
+    setIsLoading(true);
+
+    try {
+      const text = userMessage.content;
+      let code = '';
+
+      if (plugin) {
+        const exec = new CodeExecutor(plugin);
+        code = exec.generateCodeFromPrompt(text);
+      } else {
+        // Fallback code if plugin not initialized yet
+        code = `// Fallback: Hemoglobin cartoon
+try {
+  await builder.loadStructure('1HHO');
+  await builder.addCartoonRepresentation({ color: 'secondary-structure' });
+  builder.focusView();
+} catch (e) { console.error(e); }`;
+      }
+
+      // Sync code into editor
+      setCurrentCode(code);
+
+      const aiResponse: Message = {
+        id: (Date.now() + 1).toString(),
+        content: `Generated visualization for: "${text}". Executing...`,
+        type: 'ai',
+        timestamp: new Date()
+      };
+      setMessages(prev => [...prev, aiResponse]);
+
+      if (plugin) {
+        setIsExecuting(true);
+        try {
+          const exec = new CodeExecutor(plugin);
+          await exec.executeCode(code);
+          setActivePane('viewer');
+        } finally {
+          setIsExecuting(false);
+        }
+      } else {
+        // If no plugin, show code in editor
+        setActivePane('editor');
+      }
+    } catch (err) {
+      console.error('[Molstar] chat flow failed', err);
+      const aiError: Message = {
+        id: (Date.now() + 2).toString(),
+        content: 'Sorry, I could not visualize that just now.',
+        type: 'ai',
+        timestamp: new Date()
+      };
+      setMessages(prev => [...prev, aiError]);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const quickPrompts = [
+    'Show insulin',
+    'Display hemoglobin',
+    'Visualize DNA double helix',
+    'Show antibody structure'
+  ];
+
+  return (
+    <div className="h-full flex flex-col">
+      <div className="p-4 border-b border-gray-200">
+        <h2 className="text-lg font-semibold text-gray-900 flex items-center space-x-2">
+          <Sparkles className="w-5 h-5 text-blue-600" />
+          <span>AI Assistant</span>
+        </h2>
+      </div>
+
+      <div className="flex-1 overflow-y-auto p-4 space-y-4">
+        {messages.map((message) => (
+          <div
+            key={message.id}
+            className={`flex ${message.type === 'user' ? 'justify-end' : 'justify-start'}`}
+          >
+            <div
+              className={`max-w-[80%] p-3 rounded-lg ${
+                message.type === 'user'
+                  ? 'bg-blue-600 text-white'
+                  : 'bg-gray-100 text-gray-900'
+              }`}
+            >
+              <p className="text-sm">{message.content}</p>
+              <div className="text-xs mt-1 opacity-70">
+                {message.timestamp.toLocaleTimeString()}
+              </div>
+            </div>
+          </div>
+        ))}
+        {isLoading && (
+          <div className="flex justify-start">
+            <div className="bg-gray-100 p-3 rounded-lg">
+              <div className="flex space-x-2">
+                <div className="w-2 h-2 bg-gray-400 rounded-full animate-bounce"></div>
+                <div className="w-2 h-2 bg-gray-400 rounded-full animate-bounce" style={{ animationDelay: '0.1s' }}></div>
+                <div className="w-2 h-2 bg-gray-400 rounded-full animate-bounce" style={{ animationDelay: '0.2s' }}></div>
+              </div>
+            </div>
+          </div>
+        )}
+        <div ref={messagesEndRef} />
+      </div>
+
+      <div className="p-4 border-t border-gray-200">
+        <div className="mb-3">
+          <div className="text-xs text-gray-500 mb-2">Quick start:</div>
+          <div className="flex flex-wrap gap-2">
+            {quickPrompts.map((prompt, index) => (
+              <button
+                key={index}
+                onClick={() => setInput(prompt)}
+                className="text-xs bg-gray-100 hover:bg-gray-200 text-gray-700 px-2 py-1 rounded"
+              >
+                {prompt}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        <form onSubmit={handleSubmit} className="flex space-x-2">
+          <input
+            type="text"
+            value={input}
+            onChange={(e) => setInput(e.target.value)}
+            placeholder="Ask me to visualize a protein..."
+            className="flex-1 px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent text-sm"
+            disabled={isLoading}
+          />
+          <button
+            type="submit"
+            disabled={!input.trim() || isLoading}
+            className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            <Send className="w-4 h-4" />
+          </button>
+        </form>
+      </div>
+    </div>
+  );
+};
