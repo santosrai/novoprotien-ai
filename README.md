@@ -76,6 +76,21 @@ The application can load structures from:
 
 ## Development
 
+### AI Code Generation (Claude)
+
+This app can generate Mol* builder code from natural language via a lightweight server that calls the Claude SDK.
+
+1. Create a `.env` file in the project root and set `ANTHROPIC_API_KEY=your_key_here`.
+2. Run both the API server and Vite dev server together:
+   ```bash
+   npm run dev:all
+   ```
+3. The client calls `POST /api/generate` (proxied to `http://localhost:8787`).
+
+### Persistence
+
+Generated code and UI state persist across reloads via localStorage using Zustand's persist middleware. The editor toolbar also includes a button to save timestamped code snapshots.
+
 ### Project Structure
 ```
 src/

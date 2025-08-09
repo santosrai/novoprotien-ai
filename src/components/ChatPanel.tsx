@@ -2,6 +2,7 @@ import React, { useState, useRef, useEffect } from 'react';
 import { Send, Sparkles } from 'lucide-react';
 import { useAppStore } from '../stores/appStore';
 import { CodeExecutor } from '../utils/codeExecutor';
+import axios from 'axios';
 
 interface Message {
   id: string;
@@ -11,7 +12,9 @@ interface Message {
 }
 
 export const ChatPanel: React.FC = () => {
-  const { plugin, setCurrentCode, setIsExecuting, setActivePane } = useAppStore();
+  const { plugin, currentCode, setCurrentCode, setIsExecuting, setActivePane, setPendingCodeToRun } = useAppStore();
+  const selection = useAppStore(state => state.selection);
+  const setSelection = useAppStore(state => state.setSelection);
 
   const [messages, setMessages] = useState<Message[]>([
     {
@@ -51,18 +54,45 @@ export const ChatPanel: React.FC = () => {
     try {
       const text = userMessage.content;
       let code = '';
-
-      if (plugin) {
-        const exec = new CodeExecutor(plugin);
-        code = exec.generateCodeFromPrompt(text);
-      } else {
-        // Fallback code if plugin not initialized yet
-        code = `// Fallback: Hemoglobin cartoon
+      try {
+        const payload = {
+          input: text,
+          currentCode,
+          history: messages.slice(-6).map(m => ({ type: m.type, content: m.content })),
+          selection,
+        };
+        console.log('[AI] route:request', payload);
+        const response = await axios.post('/api/agents/route', payload);
+        console.log('[AI] route:response', response?.data);
+        const agentType = response.data?.type as 'code' | 'text' | undefined;
+        if (agentType === 'text') {
+          const aiText = response.data?.text || 'Okay.';
+          console.log('[AI] route:text', { text: aiText?.slice?.(0, 400) });
+          const chatMsg: Message = {
+            id: (Date.now() + 1).toString(),
+            content: aiText,
+            type: 'ai',
+            timestamp: new Date()
+          };
+          setMessages(prev => [...prev, chatMsg]);
+          return;
+        }
+        code = response.data?.code || '';
+        console.log('[AI] route:code', { length: code?.length });
+      } catch (apiErr) {
+        console.warn('AI generation failed, falling back to local patterns', apiErr);
+        if (plugin) {
+          const exec = new CodeExecutor(plugin);
+          code = exec.generateCodeFromPrompt(text);
+        } else {
+          // Fallback code if plugin not initialized yet
+          code = `// Fallback: Hemoglobin cartoon
 try {
   await builder.loadStructure('1HHO');
   await builder.addCartoonRepresentation({ color: 'secondary-structure' });
   builder.focusView();
 } catch (e) { console.error(e); }`;
+        }
       }
 
       // Sync code into editor
@@ -70,7 +100,7 @@ try {
 
       const aiResponse: Message = {
         id: (Date.now() + 1).toString(),
-        content: `Generated visualization for: "${text}". Executing...`,
+        content: `Generated code for: "${text}". Executing...`,
         type: 'ai',
         timestamp: new Date()
       };
@@ -86,8 +116,9 @@ try {
           setIsExecuting(false);
         }
       } else {
-        // If no plugin, show code in editor
-        setActivePane('editor');
+        // If no plugin yet, queue code to run once viewer initializes
+        setPendingCodeToRun(code);
+        setActivePane('viewer');
       }
     } catch (err) {
       console.error('[Molstar] chat flow failed', err);
@@ -154,6 +185,49 @@ try {
       </div>
 
       <div className="p-4 border-t border-gray-200">
+        {/* Selection pill */}
+        {selection && (
+          <div className="mb-3 flex items-center justify-between bg-blue-50 text-blue-800 border border-blue-200 rounded px-3 py-2 gap-2">
+            <div className="text-xs font-medium truncate">
+              {(() => {
+                const chain = selection.labelAsymId ?? selection.authAsymId ?? '';
+                const seq =
+                  selection.labelSeqId != null && selection.labelSeqId !== ''
+                    ? selection.labelSeqId
+                    : selection.authSeqId != null
+                      ? selection.authSeqId
+                      : '';
+                const pdb = selection.pdbId ? ` • ${selection.pdbId}` : '';
+                const mut = selection.mutation?.toCompId ? ` → ${selection.mutation.toCompId}` : '';
+                const chainText = chain ? ` (Chain ${chain})` : '';
+                return `Selected: ${selection.compId || '?'}${seq !== '' ? ` ${seq}` : ''}${chainText}${pdb}${mut}`;
+              })()}
+            </div>
+            <div className="flex items-center gap-2">
+              <input
+                type="text"
+                placeholder="Replace with (e.g., ALA)"
+                maxLength={3}
+                className="w-36 text-xs px-2 py-1 border border-blue-200 rounded bg-white text-blue-900 placeholder-blue-400"
+                onChange={(e) => {
+                  const to = e.target.value.toUpperCase();
+                  if (!to) {
+                    setSelection({ ...selection, mutation: null });
+                  } else {
+                    setSelection({ ...selection, mutation: { toCompId: to } });
+                  }
+                }}
+                value={selection.mutation?.toCompId || ''}
+              />
+              <button
+                onClick={() => setSelection(null)}
+                className="text-xs text-blue-700 hover:text-blue-900"
+              >
+                Clear
+              </button>
+            </div>
+          </div>
+        )}
         <div className="mb-3">
           <div className="text-xs text-gray-500 mb-2">Quick start:</div>
           <div className="flex flex-wrap gap-2">

@@ -1,5 +1,6 @@
 import { PluginUIContext } from 'molstar/lib/mol-plugin-ui/context';
 import { createMolstarBuilder, MolstarBuilder } from './molstarBuilder';
+import { useAppStore } from '../stores/appStore';
 
 export interface ExecutionResult {
   success: boolean;
@@ -13,7 +14,14 @@ export class CodeExecutor {
 
   constructor(plugin: PluginUIContext) {
     this.plugin = plugin;
-    this.builder = createMolstarBuilder(plugin);
+    const setLastLoadedPdb = useAppStore.getState?.().setLastLoadedPdb;
+    this.builder = createMolstarBuilder(plugin, (pdbId: string) => {
+      try {
+        if (typeof setLastLoadedPdb === 'function') setLastLoadedPdb(pdbId);
+      } catch {
+        // ignore
+      }
+    });
   }
 
   async executeCode(code: string): Promise<ExecutionResult> {
@@ -29,7 +37,7 @@ export class CodeExecutor {
       `;
 
       // Execute with timeout
-      const result = await this.executeWithTimeout(wrappedCode, sandbox, 10000);
+      await this.executeWithTimeout(wrappedCode, sandbox, 10000);
       
       return {
         success: true,
@@ -114,6 +122,10 @@ export class CodeExecutor {
     const lowerPrompt = prompt.toLowerCase();
 
     // Simple pattern matching for demo purposes
+    // Note: In production, AI generation is used via /api/generate. This is a local fallback.
+    if (/(enable|show|display|add).*water/.test(lowerPrompt) || lowerPrompt.includes('water')) {
+      return this.generateEnableWater();
+    }
     if (lowerPrompt.includes('insulin')) {
       return this.generateInsulinVisualization();
     } else if (lowerPrompt.includes('hemoglobin')) {
@@ -125,6 +137,17 @@ export class CodeExecutor {
     }
 
     return this.generateGenericVisualization(prompt);
+  }
+
+  private generateEnableWater(): string {
+    return `// Enable water molecules on current structure
+try {
+  await builder.addWaterRepresentation();
+  builder.focusView();
+  console.log('Water enabled');
+} catch (error) {
+  console.error('Failed to enable water:', error);
+}`;
   }
 
   private generateInsulinVisualization(): string {

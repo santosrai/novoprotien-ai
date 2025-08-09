@@ -1,6 +1,6 @@
 import React, { useRef, useEffect } from 'react';
 import Editor from '@monaco-editor/react';
-import { Play, RotateCcw, Copy, FileText } from 'lucide-react';
+import { Play, RotateCcw, Copy, FileText, Save } from 'lucide-react';
 import { useAppStore } from '../stores/appStore';
 import { CodeExecutor } from '../utils/codeExecutor';
 
@@ -67,6 +67,17 @@ try {
     setCurrentCode(exampleCode);
   };
 
+  const saveSnapshot = () => {
+    // currentCode already persisted via store; force write a timestamped key too
+    try {
+      const key = `novoprotein-code-snapshot-${Date.now()}`;
+      localStorage.setItem(key, currentCode);
+      console.log('Saved code snapshot to localStorage with key:', key);
+    } catch (e) {
+      console.error('Failed to save snapshot', e);
+    }
+  };
+
   return (
     <div className="h-full flex flex-col bg-white">
       <div className="flex items-center justify-between px-4 py-2 border-b border-gray-200 bg-gray-50">
@@ -81,6 +92,13 @@ try {
             className="px-3 py-1 text-xs bg-gray-200 hover:bg-gray-300 text-gray-700 rounded"
           >
             Example
+          </button>
+          <button
+            onClick={saveSnapshot}
+            className="p-1 text-gray-600 hover:text-gray-800"
+            title="Save snapshot"
+          >
+            <Save className="w-4 h-4" />
           </button>
           <button
             onClick={copyCode}

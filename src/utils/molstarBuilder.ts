@@ -6,12 +6,16 @@ export interface MolstarBuilder {
   addCartoonRepresentation: (options?: any) => Promise<void>;
   addBallAndStickRepresentation: (options?: any) => Promise<void>;
   addSurfaceRepresentation: (options?: any) => Promise<void>;
+  addWaterRepresentation: (options?: any) => Promise<void>;
   highlightLigands: () => Promise<void>;
   focusView: () => void;
   clearStructure: () => Promise<void>;
 }
 
-export const createMolstarBuilder = (plugin: PluginUIContext): MolstarBuilder => {
+export const createMolstarBuilder = (
+  plugin: PluginUIContext,
+  onPdbLoaded?: (pdbId: string) => void
+): MolstarBuilder => {
   let currentStructure: any = null;
 
   return {
@@ -21,6 +25,11 @@ export const createMolstarBuilder = (plugin: PluginUIContext): MolstarBuilder =>
       }
 
       try {
+        // Clear any existing structure before loading a new one
+        if (currentStructure) {
+          await this.clearStructure();
+        }
+        
         const url = getPDBUrl(pdbId);
         
         const data = await plugin.builders.data.download({
@@ -31,6 +40,7 @@ export const createMolstarBuilder = (plugin: PluginUIContext): MolstarBuilder =>
         const trajectory = await plugin.builders.structure.parseTrajectory(data, 'pdb');
         const model = await plugin.builders.structure.createModel(trajectory);
         currentStructure = await plugin.builders.structure.createStructure(model);
+        if (onPdbLoaded) onPdbLoaded(pdbId);
 
         return currentStructure;
       } catch (error) {
@@ -90,6 +100,25 @@ export const createMolstarBuilder = (plugin: PluginUIContext): MolstarBuilder =>
       );
     },
 
+    async addWaterRepresentation(options = {}) {
+      if (!currentStructure) {
+        throw new Error('No structure loaded');
+      }
+
+      // Minimal water selection using label_resname = 'HOH' which is common for water in PDB
+      const defaultOptions = {
+        type: 'ball-and-stick' as const,
+        color: 'element' as const,
+        query: { kind: 'expression', expression: "label_resname = 'HOH'" },
+        ...options
+      };
+
+      await plugin.builders.structure.representation.addRepresentation(
+        currentStructure,
+        defaultOptions
+      );
+    },
+
     async highlightLigands() {
       if (!currentStructure) {
         throw new Error('No structure loaded');
@@ -101,7 +130,7 @@ export const createMolstarBuilder = (plugin: PluginUIContext): MolstarBuilder =>
         currentStructure,
         {
           type: 'ball-and-stick',
-          color: { name: 'uniform', params: { value: 0xff6b6b } }
+          color: 'element-symbol'
         }
       );
     },

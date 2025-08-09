@@ -5,6 +5,13 @@ export default defineConfig({
   plugins: [react()],
   server: {
     port: 3000,
+    proxy: {
+      '/api': {
+        target: 'http://localhost:8787',
+        changeOrigin: true,
+        secure: false,
+      }
+    }
   },
   optimizeDeps: {
     exclude: ['molstar'],
@@ -29,9 +36,10 @@ export default defineConfig({
     rollupOptions: {
       external: [],
       output: {
-        manualChunks: {
-          vendor: ['react', 'react-dom'],
-          molstar: ['molstar']
+        manualChunks(id) {
+          if (id.includes('node_modules/molstar')) return 'molstar'
+          if (id.includes('node_modules/react') || id.includes('node_modules/react-dom')) return 'vendor'
+          return undefined
         }
       }
     }

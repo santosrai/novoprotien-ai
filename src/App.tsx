@@ -1,4 +1,3 @@
-import React from 'react';
 import { Header } from './components/Header';
 import { ChatPanel } from './components/ChatPanel';
 import { CodeEditor } from './components/CodeEditor';

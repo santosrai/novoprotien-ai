@@ -191,6 +191,7 @@ Client → CloudFlare CDN → API Gateway → Services
 - **Claude Proxy**: Rate limiting, key management
 - **PDB Cache**: Redis for frequent lookups
 - **Session Store**: In-memory for active sessions
+ - **Local Dev Server**: Express server providing `POST /api/generate` using Claude SDK
 
 ### 4.3 External API Integrations
 
