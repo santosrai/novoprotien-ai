@@ -1,0 +1,61 @@
+import { Header } from './components/Header';
+import { ChatPanel } from './components/ChatPanel';
+import { CodeEditor } from './components/CodeEditor';
+import { MolstarViewer } from './components/MolstarViewer';
+import { Eye, Code2 } from 'lucide-react';
+import { useAppStore } from './stores/appStore';
+
+function App() {
+  const { activePane, setActivePane } = useAppStore();
+
+  return (
+    <div className="h-screen flex flex-col bg-gray-50">
+      <Header />
+      
+      <div className="flex-1 flex overflow-hidden">
+        {/* Left Panel - Chat */}
+        <div className="w-1/3 min-w-[300px] border-r border-gray-200 bg-white">
+          <ChatPanel />
+        </div>
+        
+        {/* Right Panel - Toolbar + Pane */}
+        <div className="flex-1 flex flex-col">
+          {/* Toolbar */}
+          <div className="h-10 flex items-center justify-end px-3 border-b border-gray-200 bg-gray-900">
+            <div className="inline-flex rounded-full overflow-hidden">
+              <button
+                onClick={() => setActivePane('viewer')}
+                className={`px-3 h-8 flex items-center gap-1 text-xs ${activePane === 'viewer' ? 'bg-gray-800 text-white' : 'bg-gray-700 text-gray-200 hover:bg-gray-600'}`}
+                title="Show viewer"
+              >
+                <Eye className="w-4 h-4" />
+              </button>
+              <button
+                onClick={() => setActivePane('editor')}
+                className={`px-3 h-8 flex items-center gap-1 text-xs ${activePane === 'editor' ? 'bg-gray-800 text-white' : 'bg-gray-700 text-gray-200 hover:bg-gray-600'}`}
+                title="Show editor"
+              >
+                <Code2 className="w-4 h-4" />
+              </button>
+            </div>
+          </div>
+
+          {/* Content Pane with fixed, responsive height */}
+          <div className="flex-1 min-h-0">
+            {activePane === 'editor' ? (
+              <div className="h-full">
+                <CodeEditor />
+              </div>
+            ) : (
+              <div className="h-full bg-gray-900">
+                <MolstarViewer />
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+export default App;
