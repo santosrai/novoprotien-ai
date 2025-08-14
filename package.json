@@ -13,16 +13,18 @@
     "dev:all": "npm-run-all --parallel start:pyserver dev"
   },
   "dependencies": {
-    "@monaco-editor/react": "^4.6.0",
     "@anthropic-ai/sdk": "^0.24.1",
+    "@modelcontextprotocol/server-puppeteer": "^2025.5.12",
+    "@monaco-editor/react": "^4.6.0",
+    "@upstash/context7-mcp": "^1.0.14",
     "axios": "^1.7.3",
     "cors": "^2.8.5",
+    "dotenv": "^16.4.5",
+    "express": "^4.19.2",
     "lucide-react": "^0.427.0",
     "molstar": "^4.1.0",
-    "express": "^4.19.2",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
-    "dotenv": "^16.4.5",
     "zustand": "^4.5.4"
   },
   "devDependencies": {
