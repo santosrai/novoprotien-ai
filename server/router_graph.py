@@ -46,10 +46,19 @@ class SimpleRouterGraph:
             "what is this", "what's this", "what am i looking at", "this residue", "selected", "identify", "which residue", "these residues", "what are these",
         ]
         low = input_text.lower()
+        
+        # Check for explicit visualization commands that should override bio-chat
+        visualization_commands = [
+            "color", "colour", "highlight", "label", "focus", "zoom", "show", "hide", 
+            "surface", "cartoon", "ball", "stick", "water", "representation"
+        ]
+        has_viz_command = any(cmd in low for cmd in visualization_commands)
         # UniProt search rule
         if "uniprot" in low and ("search" in low or "find" in low):
             return {"routedAgentId": "uniprot-search", "reason": "rule:uniprot-search"}
-        if has_selection and any(k in low for k in interrogatives):
+        
+        # Bio-chat for selection questions, BUT NOT if explicit visualization command
+        if has_selection and any(k in low for k in interrogatives) and not has_viz_command:
             return {"routedAgentId": "bio-chat", "reason": "rule:selection+question"}
         
         # MVS vs Simple Code routing rules

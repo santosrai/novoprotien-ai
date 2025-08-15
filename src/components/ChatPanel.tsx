@@ -158,10 +158,14 @@ export const ChatPanel: React.FC = () => {
         }
         
         // Check if agent changed and we need to clear the viewer
-        if (agentId && agentId !== lastAgentId && lastAgentId !== '') {
-          console.log(`[Agent Switch] ${lastAgentId} → ${agentId}, clearing viewer`);
+        // Only clear when switching to a code agent that will generate new structure code
+        const isCodeAgent = agentType === 'code';
+        const isTextAgent = agentType === 'text';
+        
+        if (agentId && agentId !== lastAgentId && lastAgentId !== '' && isCodeAgent) {
+          console.log(`[Agent Switch] ${lastAgentId} → ${agentId} (code agent), clearing viewer`);
           
-          // Clear the current code and viewer state
+          // Clear the current code and viewer state only for code agents
           setCurrentCode('');
           
           // Clear the 3D viewer if plugin is available
@@ -174,6 +178,8 @@ export const ChatPanel: React.FC = () => {
               console.warn('[Agent Switch] Failed to clear viewer:', e);
             }
           }
+        } else if (isTextAgent && agentId !== lastAgentId) {
+          console.log(`[Agent Switch] ${lastAgentId} → ${agentId} (text agent), preserving current code`);
         }
         
         // Update the last agent ID
@@ -183,6 +189,10 @@ export const ChatPanel: React.FC = () => {
         if (agentType === 'text') {
           const aiText = response.data?.text || 'Okay.';
           console.log('[AI] route:text', { text: aiText?.slice?.(0, 400) });
+          
+          // Bio-chat and other text agents should never modify the editor code
+          console.log(`[${agentId}] Text response received, preserving current editor code`);
+          
           const chatMsg: Message = {
             id: (Date.now() + 1).toString(),
             content: aiText,
@@ -190,7 +200,7 @@ export const ChatPanel: React.FC = () => {
             timestamp: new Date()
           };
           setMessages(prev => [...prev, chatMsg]);
-          return;
+          return; // Exit early - no code generation or execution
         }
         code = response.data?.code || '';
         console.log('[AI] route:code', { length: code?.length });
