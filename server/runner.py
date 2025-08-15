@@ -3,9 +3,14 @@ from typing import Any, Dict, List, Optional
 
 from anthropic import Anthropic
 
-from .utils import log_line, get_text_from_completion, strip_code_fences, trim_history
-from .safety import violates_whitelist, ensure_clear_on_change
-from .uniprot import search_uniprot
+try:
+    from .utils import log_line, get_text_from_completion, strip_code_fences, trim_history
+    from .safety import violates_whitelist, ensure_clear_on_change
+    from .uniprot import search_uniprot
+except ImportError:
+    from utils import log_line, get_text_from_completion, strip_code_fences, trim_history
+    from safety import violates_whitelist, ensure_clear_on_change
+    from uniprot import search_uniprot
 
 
 _anthropic_client: Optional[Anthropic] = None
@@ -114,7 +119,6 @@ async def run_agent(
             else ""
         )
 
-        from .runner import _get_anthropic_client  # avoid circular import typing issues
         client = _get_anthropic_client()
         
         # Enhanced system prompt with RAG for MVS agent
@@ -219,7 +223,6 @@ async def run_agent(
     messages.append({"role": "user", "content": user_text})
 
     log_line("agent:text:req", {**base_log, "hasSelection": bool(selection), "userText": user_text})
-    from .runner import _get_anthropic_client  # avoid circular import typing issues
     client = _get_anthropic_client()
     completion = client.messages.create(
         model=model,

@@ -48,6 +48,7 @@ try:
     from .runner import run_agent
     from .utils import log_line, spell_fix
     from .alphafold_handler import alphafold_handler
+    from .rfdiffusion_handler import rfdiffusion_handler
 except ImportError:
     # When running directly (not as module)
     from agents import agents, list_agents
@@ -55,6 +56,7 @@ except ImportError:
     from runner import run_agent
     from utils import log_line, spell_fix
     from alphafold_handler import alphafold_handler
+    from rfdiffusion_handler import rfdiffusion_handler
 
 DEBUG_API = os.getenv("DEBUG_API", "0") == "1"
 
@@ -274,6 +276,111 @@ async def alphafold_cancel(request: Request, job_id: str):
     except Exception as e:
         log_line("alphafold_cancel_failed", {"error": str(e), "trace": traceback.format_exc()})
         content = {"error": "alphafold_cancel_failed"}
+        if DEBUG_API:
+            content["detail"] = str(e)
+        return JSONResponse(status_code=500, content=content)
+
+
+# RFdiffusion API endpoints
+@app.post("/api/rfdiffusion/design")
+@limiter.limit("5/minute")
+async def rfdiffusion_design(request: Request):
+    try:
+        body = await request.json()
+        parameters = body.get("parameters", {})
+        job_id = body.get("jobId")
+        
+        if not job_id:
+            return JSONResponse(
+                status_code=400,
+                content={
+                    "status": "error",
+                    "error": "Missing jobId",
+                    "errorCode": "MISSING_PARAMETERS",
+                    "userMessage": "Required parameters are missing"
+                }
+            )
+        
+        result = await rfdiffusion_handler.submit_design_job({
+            "parameters": parameters,
+            "jobId": job_id
+        })
+        
+        # Check if result contains an error and return appropriate HTTP status
+        if result.get("status") == "error":
+            error_msg = result.get("error", "Unknown error")
+            
+            # Check for specific error types
+            if "API key not configured" in error_msg or "NVCF_RUN_KEY" in error_msg:
+                return JSONResponse(
+                    status_code=503,  # Service Unavailable
+                    content={
+                        "status": "error",
+                        "error": "",  # Empty for frontend error handling
+                        "errorCode": "RFDIFFUSION_API_NOT_CONFIGURED",
+                        "userMessage": "RFdiffusion service is not available. API key not configured.",
+                        "technicalMessage": error_msg,
+                        "suggestions": [
+                            {
+                                "action": "Contact administrator",
+                                "description": "The RFdiffusion service requires NVIDIA API key configuration",
+                                "type": "contact",
+                                "priority": 1
+                            }
+                        ]
+                    }
+                )
+            else:
+                return JSONResponse(
+                    status_code=500,
+                    content={
+                        "status": "error",
+                        "error": "",  # Empty for frontend error handling
+                        "errorCode": "DESIGN_FAILED",
+                        "userMessage": "Protein design computation failed",
+                        "technicalMessage": error_msg
+                    }
+                )
+        
+        return result
+        
+    except Exception as e:
+        log_line("rfdiffusion_design_failed", {"error": str(e), "trace": traceback.format_exc()})
+        return JSONResponse(
+            status_code=500, 
+            content={
+                "status": "error",
+                "error": "",  # Empty for frontend error handling
+                "errorCode": "INTERNAL_ERROR",
+                "userMessage": "An unexpected error occurred",
+                "technicalMessage": str(e) if DEBUG_API else "Internal server error"
+            }
+        )
+
+
+@app.get("/api/rfdiffusion/status/{job_id}")
+@limiter.limit("30/minute")
+async def rfdiffusion_status(request: Request, job_id: str):
+    try:
+        status = rfdiffusion_handler.get_job_status(job_id)
+        return status
+    except Exception as e:
+        log_line("rfdiffusion_status_failed", {"error": str(e), "trace": traceback.format_exc()})
+        content = {"error": "rfdiffusion_status_failed"}
+        if DEBUG_API:
+            content["detail"] = str(e)
+        return JSONResponse(status_code=500, content=content)
+
+
+@app.post("/api/rfdiffusion/cancel/{job_id}")
+@limiter.limit("10/minute")
+async def rfdiffusion_cancel(request: Request, job_id: str):
+    try:
+        result = rfdiffusion_handler.cancel_job(job_id)
+        return result
+    except Exception as e:
+        log_line("rfdiffusion_cancel_failed", {"error": str(e), "trace": traceback.format_exc()})
+        content = {"error": "rfdiffusion_cancel_failed"}
         if DEBUG_API:
             content["detail"] = str(e)
         return JSONResponse(status_code=500, content=content)
