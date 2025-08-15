@@ -2,11 +2,13 @@ import { Header } from './components/Header';
 import { ChatPanel } from './components/ChatPanel';
 import { CodeEditor } from './components/CodeEditor';
 import { MolstarViewer } from './components/MolstarViewer';
+import { ErrorDashboard, useErrorDashboard } from './components/ErrorDashboard';
 import { Eye, Code2 } from 'lucide-react';
 import { useAppStore } from './stores/appStore';
 
 function App() {
   const { activePane, setActivePane } = useAppStore();
+  const errorDashboard = useErrorDashboard();
 
   return (
     <div className="h-screen flex flex-col bg-gray-50">
@@ -54,6 +56,12 @@ function App() {
           </div>
         </div>
       </div>
+
+      {/* Error Dashboard (Ctrl+Shift+E to open) */}
+      <ErrorDashboard 
+        isOpen={errorDashboard.isOpen} 
+        onClose={errorDashboard.closeDashboard} 
+      />
     </div>
   );
 }
