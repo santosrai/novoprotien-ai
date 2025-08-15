@@ -113,11 +113,11 @@ export const ChatHistorySidebar: React.FC = () => {
   // Collapsed sidebar view
   if (isSidebarCollapsed) {
     return (
-      <div className="w-12 bg-gray-900 flex flex-col items-center py-2 space-y-2 flex-shrink-0">
+      <div className="w-12 bg-white border-r border-gray-200 flex flex-col items-center py-2 space-y-2 flex-shrink-0">
         {/* Toggle button */}
         <button
           onClick={toggleSidebar}
-          className="w-8 h-8 flex items-center justify-center text-gray-400 hover:text-white hover:bg-gray-800 rounded transition-colors"
+          className="w-8 h-8 flex items-center justify-center text-gray-600 hover:text-gray-900 hover:bg-gray-100 rounded transition-colors"
           title="Expand sidebar (Ctrl+B)"
         >
           <Menu className="w-5 h-5" />
@@ -126,7 +126,7 @@ export const ChatHistorySidebar: React.FC = () => {
         {/* New chat button */}
         <button
           onClick={handleNewChat}
-          className="w-8 h-8 flex items-center justify-center text-gray-400 hover:text-white hover:bg-gray-800 rounded transition-colors"
+          className="w-8 h-8 flex items-center justify-center text-gray-600 hover:text-gray-900 hover:bg-gray-100 rounded transition-colors"
           title="New chat (Ctrl+N)"
         >
           <Plus className="w-4 h-4" />
@@ -142,7 +142,7 @@ export const ChatHistorySidebar: React.FC = () => {
         {/* Session count indicator */}
         {totalSessions > 0 && (
           <div className="mt-auto mb-2">
-            <div className="w-6 h-6 bg-gray-700 rounded text-xs text-gray-300 flex items-center justify-center">
+            <div className="w-6 h-6 bg-gray-100 border border-gray-200 rounded text-xs text-gray-700 flex items-center justify-center">
               {totalSessions > 99 ? '99+' : totalSessions}
             </div>
           </div>
@@ -162,27 +162,27 @@ export const ChatHistorySidebar: React.FC = () => {
         />
       )}
       
-      <div className={`w-64 bg-gray-900 text-white flex flex-col h-full flex-shrink-0 animate-in slide-in-from-left duration-300 ${
-        isMobile ? 'fixed left-0 top-0 z-50 md:relative md:z-auto' : ''
+      <div className={`w-64 bg-white border-r border-gray-200 text-gray-900 flex flex-col h-full flex-shrink-0 animate-in slide-in-from-left duration-300 ${
+        isMobile ? 'fixed left-0 top-0 z-50 md:relative md:z-auto shadow-xl' : ''
       }`}>
       {/* Header */}
-      <div className="p-3 border-b border-gray-700">
+      <div className="p-3 border-b border-gray-200">
         <div className="flex items-center justify-between mb-3">
           <div className="flex items-center space-x-2">
-            <MessageSquare className="w-5 h-5 text-gray-400" />
-            <span className="font-medium text-sm">Chat History</span>
+            <MessageSquare className="w-5 h-5 text-gray-600" />
+            <span className="font-medium text-sm text-gray-900">Chat History</span>
           </div>
           <div className="flex items-center space-x-1">
             <button
               onClick={() => setShowBulkActions(!showBulkActions)}
-              className="p-1 text-gray-400 hover:text-white hover:bg-gray-800 rounded transition-colors"
+              className="p-1 text-gray-500 hover:text-gray-900 hover:bg-gray-100 rounded transition-colors"
               title="Bulk actions"
             >
               <Settings className="w-4 h-4" />
             </button>
             <button
               onClick={toggleSidebar}
-              className="p-1 text-gray-400 hover:text-white hover:bg-gray-800 rounded transition-colors"
+              className="p-1 text-gray-500 hover:text-gray-900 hover:bg-gray-100 rounded transition-colors"
               title="Collapse sidebar (Ctrl+B)"
             >
               <X className="w-4 h-4" />
@@ -193,16 +193,16 @@ export const ChatHistorySidebar: React.FC = () => {
         {/* New Chat Button */}
         <button
           onClick={handleNewChat}
-          className="w-full flex items-center space-x-2 px-3 py-2 bg-gray-800 hover:bg-gray-700 rounded-lg transition-colors text-sm"
+          className="w-full flex items-center space-x-2 px-3 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg transition-colors text-sm"
         >
           <Plus className="w-4 h-4" />
           <span>New Chat</span>
-          <div className="ml-auto text-xs text-gray-400">Ctrl+N</div>
+          <div className="ml-auto text-xs text-blue-100">Ctrl+N</div>
         </button>
       </div>
 
       {/* Search */}
-      <div className="p-3 border-b border-gray-700">
+      <div className="p-3 border-b border-gray-200">
         <div className="relative">
           <Search className="w-4 h-4 absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400" />
           <input
@@ -211,12 +211,12 @@ export const ChatHistorySidebar: React.FC = () => {
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
             placeholder="Search conversations..."
-            className="w-full pl-10 pr-4 py-2 bg-gray-800 border border-gray-700 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent text-sm placeholder-gray-400"
+            className="w-full pl-10 pr-4 py-2 bg-gray-50 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent text-sm placeholder-gray-400"
           />
           {searchQuery && (
             <button
               onClick={() => setSearchQuery('')}
-              className="absolute right-3 top-1/2 transform -translate-y-1/2 text-gray-400 hover:text-white"
+              className="absolute right-3 top-1/2 transform -translate-y-1/2 text-gray-400 hover:text-gray-600"
             >
               <X className="w-4 h-4" />
             </button>
@@ -226,9 +226,9 @@ export const ChatHistorySidebar: React.FC = () => {
 
       {/* Bulk Actions Bar */}
       {showBulkActions && (
-        <div className="p-3 bg-gray-800 border-b border-gray-700">
+        <div className="p-3 bg-gray-50 border-b border-gray-200">
           <div className="flex items-center justify-between text-xs">
-            <span className="text-gray-400">
+            <span className="text-gray-600">
               {hasSelections ? `${selectedSessionIds.length} selected` : 'Select conversations'}
             </span>
             <div className="flex items-center space-x-2">
@@ -236,14 +236,14 @@ export const ChatHistorySidebar: React.FC = () => {
                 <>
                   <button
                     onClick={handleExportSelected}
-                    className="flex items-center space-x-1 px-2 py-1 text-gray-400 hover:text-white hover:bg-gray-700 rounded"
+                    className="flex items-center space-x-1 px-2 py-1 text-gray-600 hover:text-gray-900 hover:bg-gray-200 rounded"
                   >
                     <Download className="w-3 h-3" />
                     <span>Export</span>
                   </button>
                   <button
                     onClick={handleDeleteSelected}
-                    className="flex items-center space-x-1 px-2 py-1 text-red-400 hover:text-red-300 hover:bg-red-900/20 rounded"
+                    className="flex items-center space-x-1 px-2 py-1 text-red-600 hover:text-red-700 hover:bg-red-50 rounded"
                   >
                     <Trash2 className="w-3 h-3" />
                     <span>Delete</span>
@@ -259,8 +259,8 @@ export const ChatHistorySidebar: React.FC = () => {
       <div className="flex-1 overflow-y-auto">
         {filteredSessions.length === 0 ? (
           <div className="p-6 text-center">
-            <MessageSquare className="w-12 h-12 text-gray-600 mx-auto mb-3" />
-            <h3 className="text-sm font-medium text-gray-300 mb-1">
+            <MessageSquare className="w-12 h-12 text-gray-400 mx-auto mb-3" />
+            <h3 className="text-sm font-medium text-gray-700 mb-1">
               {searchQuery ? 'No matching conversations' : 'No conversations yet'}
             </h3>
             <p className="text-xs text-gray-500">
@@ -272,7 +272,7 @@ export const ChatHistorySidebar: React.FC = () => {
             {!searchQuery && (
               <button
                 onClick={handleNewChat}
-                className="mt-3 px-3 py-1 bg-blue-600 hover:bg-blue-700 rounded text-xs transition-colors"
+                className="mt-3 px-3 py-1 bg-blue-600 hover:bg-blue-700 text-white rounded text-xs transition-colors"
               >
                 Start New Chat
               </button>
@@ -294,8 +294,8 @@ export const ChatHistorySidebar: React.FC = () => {
       </div>
 
       {/* Footer */}
-      <div className="p-3 border-t border-gray-700">
-        <div className="flex items-center justify-between text-xs text-gray-400">
+      <div className="p-3 border-t border-gray-200">
+        <div className="flex items-center justify-between text-xs text-gray-500">
           <span>{totalSessions} conversation{totalSessions !== 1 ? 's' : ''}</span>
           <div className="flex items-center space-x-1">
             <span>Ctrl+B</span>

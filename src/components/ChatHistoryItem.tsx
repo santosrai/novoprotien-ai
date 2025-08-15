@@ -161,12 +161,12 @@ export const ChatHistoryItem: React.FC<ChatHistoryItemProps> = ({
     <div
       className={`relative group px-3 py-2 mx-2 rounded-lg cursor-pointer transition-all duration-200 ${
         isActive 
-          ? 'bg-gray-800 border border-gray-600' 
+          ? 'bg-blue-50 border border-blue-200' 
           : isSelected
-          ? 'bg-blue-900/30 border border-blue-600/50'
+          ? 'bg-blue-100 border border-blue-300'
           : isHovered
-          ? 'bg-gray-800/50'
-          : 'hover:bg-gray-800/50'
+          ? 'bg-gray-50'
+          : 'hover:bg-gray-50'
       }`}
       onClick={handleSelect}
       onMouseEnter={() => setIsHovered(true)}
@@ -183,7 +183,7 @@ export const ChatHistoryItem: React.FC<ChatHistoryItemProps> = ({
               type="checkbox"
               checked={isSelected}
               onChange={() => toggleSessionSelection(session.id)}
-              className="w-4 h-4 text-blue-600 border-gray-600 rounded focus:ring-blue-500 bg-gray-700"
+              className="w-4 h-4 text-blue-600 border-gray-300 rounded focus:ring-blue-500 bg-white"
               onClick={(e) => e.stopPropagation()}
             />
           </div>
@@ -206,18 +206,18 @@ export const ChatHistoryItem: React.FC<ChatHistoryItemProps> = ({
                   value={editTitle}
                   onChange={(e) => setEditTitle(e.target.value)}
                   onKeyDown={handleKeyDown}
-                  className="flex-1 bg-gray-700 border border-gray-600 rounded px-2 py-1 text-sm text-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  className="flex-1 bg-white border border-gray-300 rounded px-2 py-1 text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-blue-500"
                   onClick={(e) => e.stopPropagation()}
                 />
                 <button
                   onClick={(e) => { e.stopPropagation(); handleEditSave(); }}
-                  className="p-1 text-green-400 hover:text-green-300"
+                  className="p-1 text-green-600 hover:text-green-700"
                 >
                   <Check className="w-3 h-3" />
                 </button>
                 <button
                   onClick={(e) => { e.stopPropagation(); handleEditCancel(); }}
-                  className="p-1 text-red-400 hover:text-red-300"
+                  className="p-1 text-red-600 hover:text-red-700"
                 >
                   <X className="w-3 h-3" />
                 </button>
@@ -225,7 +225,7 @@ export const ChatHistoryItem: React.FC<ChatHistoryItemProps> = ({
             ) : (
               <>
                 <h3 className={`text-sm font-medium truncate flex-1 ${
-                  isActive ? 'text-white' : 'text-gray-200'
+                  isActive ? 'text-blue-700' : 'text-gray-700'
                 }`}>
                   {session.title}
                 </h3>
@@ -272,17 +272,17 @@ export const ChatHistoryItem: React.FC<ChatHistoryItemProps> = ({
                 e.stopPropagation();
                 setShowActions(!showActions);
               }}
-              className="p-1 text-gray-400 hover:text-white rounded transition-colors"
+              className="p-1 text-gray-400 hover:text-gray-600 rounded transition-colors"
             >
               <MoreHorizontal className="w-4 h-4" />
             </button>
 
             {showActions && (
-              <div className="absolute right-2 top-8 w-40 bg-gray-800 border border-gray-700 rounded-lg shadow-xl z-20">
+              <div className="absolute right-2 top-8 w-40 bg-white border border-gray-200 rounded-lg shadow-xl z-20">
                 <div className="py-1">
                   <button
                     onClick={handleEditStart}
-                    className="w-full flex items-center space-x-2 px-3 py-2 text-sm text-gray-300 hover:bg-gray-700 hover:text-white"
+                    className="w-full flex items-center space-x-2 px-3 py-2 text-sm text-gray-700 hover:bg-gray-50 hover:text-gray-900"
                   >
                     <Edit2 className="w-4 h-4" />
                     <span>Rename</span>
@@ -290,7 +290,7 @@ export const ChatHistoryItem: React.FC<ChatHistoryItemProps> = ({
                   
                   <button
                     onClick={handleToggleStar}
-                    className="w-full flex items-center space-x-2 px-3 py-2 text-sm text-gray-300 hover:bg-gray-700 hover:text-white"
+                    className="w-full flex items-center space-x-2 px-3 py-2 text-sm text-gray-700 hover:bg-gray-50 hover:text-gray-900"
                   >
                     {isStarred ? (
                       <>
@@ -307,17 +307,17 @@ export const ChatHistoryItem: React.FC<ChatHistoryItemProps> = ({
                   
                   <button
                     onClick={handleDuplicate}
-                    className="w-full flex items-center space-x-2 px-3 py-2 text-sm text-gray-300 hover:bg-gray-700 hover:text-white"
+                    className="w-full flex items-center space-x-2 px-3 py-2 text-sm text-gray-700 hover:bg-gray-50 hover:text-gray-900"
                   >
                     <Copy className="w-4 h-4" />
                     <span>Duplicate</span>
                   </button>
                   
-                  <div className="border-t border-gray-700 my-1"></div>
+                  <div className="border-t border-gray-200 my-1"></div>
                   
                   <button
                     onClick={handleDelete}
-                    className="w-full flex items-center space-x-2 px-3 py-2 text-sm text-red-400 hover:bg-red-900/20 hover:text-red-300"
+                    className="w-full flex items-center space-x-2 px-3 py-2 text-sm text-red-600 hover:bg-red-50 hover:text-red-700"
                   >
                     <Trash2 className="w-4 h-4" />
                     <span>Delete</span>
