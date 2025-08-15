@@ -1,35 +1,35 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Send, Sparkles, X } from 'lucide-react';
+import { Send, Sparkles, X, History } from 'lucide-react';
 import { useAppStore } from '../stores/appStore';
+import { useChatHistoryStore, useActiveSession, Message } from '../stores/chatHistoryStore';
 import { CodeExecutor } from '../utils/codeExecutor';
 import { api } from '../utils/api';
-
-interface Message {
-  id: string;
-  content: string;
-  type: 'user' | 'ai';
-  timestamp: Date;
-}
+import { v4 as uuidv4 } from 'uuid';
 
 export const ChatPanel: React.FC = () => {
   const { plugin, currentCode, setCurrentCode, setIsExecuting, setActivePane, setPendingCodeToRun } = useAppStore();
-  const selection = useAppStore(state => state.selection);
   const selections = useAppStore(state => state.selections);
   const removeSelection = useAppStore(state => state.removeSelection);
   const clearSelections = useAppStore(state => state.clearSelections);
 
-  const [messages, setMessages] = useState<Message[]>([
-    {
-      id: '1',
-      content: 'Welcome to NovoProtein AI! Ask me to "show insulin" or "display hemoglobin".',
-      type: 'ai',
-      timestamp: new Date()
-    }
-  ]);
+  // Chat history store
+  const { createSession, setHistoryPanelOpen, activeSessionId } = useChatHistoryStore();
+  const { activeSession, addMessage } = useActiveSession();
+  
   const [input, setInput] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [lastAgentId, setLastAgentId] = useState<string>('');
   const messagesEndRef = useRef<HTMLDivElement>(null);
+
+  // Initialize session if none exists
+  useEffect(() => {
+    if (!activeSessionId) {
+      createSession();
+    }
+  }, [activeSessionId, createSession]);
+
+  // Get messages from active session
+  const messages = activeSession?.messages || [];
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -111,13 +111,13 @@ export const ChatPanel: React.FC = () => {
     if (!input.trim() || isLoading) return;
 
     const userMessage: Message = {
-      id: Date.now().toString(),
+      id: uuidv4(),
       content: input.trim(),
       type: 'user',
       timestamp: new Date()
     };
 
-    setMessages(prev => [...prev, userMessage]);
+    addMessage(userMessage);
     setInput('');
     setIsLoading(true);
 
@@ -194,12 +194,12 @@ export const ChatPanel: React.FC = () => {
           console.log(`[${agentId}] Text response received, preserving current editor code`);
           
           const chatMsg: Message = {
-            id: (Date.now() + 1).toString(),
+            id: uuidv4(),
             content: aiText,
             type: 'ai',
             timestamp: new Date()
           };
-          setMessages(prev => [...prev, chatMsg]);
+          addMessage(chatMsg);
           return; // Exit early - no code generation or execution
         }
         code = response.data?.code || '';
@@ -222,12 +222,12 @@ try {
           }
         } else {
           const chatMsg: Message = {
-            id: (Date.now() + 1).toString(),
+            id: uuidv4(),
             content: 'AI backend is unavailable. Please start the server and try again.',
             type: 'ai',
             timestamp: new Date()
           };
-          setMessages(prev => [...prev, chatMsg]);
+          addMessage(chatMsg);
           return;
         }
       }
@@ -236,12 +236,12 @@ try {
       setCurrentCode(code);
 
       const aiResponse: Message = {
-        id: (Date.now() + 1).toString(),
+        id: uuidv4(),
         content: `Generated code for: "${text}". Executing...`,
         type: 'ai',
         timestamp: new Date()
       };
-      setMessages(prev => [...prev, aiResponse]);
+      addMessage(aiResponse);
 
       if (plugin) {
         setIsExecuting(true);
@@ -260,12 +260,12 @@ try {
     } catch (err) {
       console.error('[Molstar] chat flow failed', err);
       const aiError: Message = {
-        id: (Date.now() + 2).toString(),
+        id: uuidv4(),
         content: 'Sorry, I could not visualize that just now.',
         type: 'ai',
         timestamp: new Date()
       };
-      setMessages(prev => [...prev, aiError]);
+      addMessage(aiError);
     } finally {
       setIsLoading(false);
     }
@@ -281,10 +281,27 @@ try {
   return (
     <div className="h-full flex flex-col">
       <div className="p-4 border-b border-gray-200">
-        <h2 className="text-lg font-semibold text-gray-900 flex items-center space-x-2">
-          <Sparkles className="w-5 h-5 text-blue-600" />
-          <span>AI Assistant</span>
-        </h2>
+        <div className="flex items-center justify-between">
+          <div className="flex items-center space-x-2">
+            <Sparkles className="w-5 h-5 text-blue-600" />
+            <div>
+              <h2 className="text-lg font-semibold text-gray-900">AI Assistant</h2>
+              {activeSession && (
+                <p className="text-xs text-gray-500 truncate max-w-[200px]">
+                  {activeSession.title}
+                </p>
+              )}
+            </div>
+          </div>
+          <button
+            onClick={() => setHistoryPanelOpen(true)}
+            className="flex items-center space-x-1 px-2 py-1 text-xs text-gray-600 hover:text-gray-900 hover:bg-gray-100 rounded transition-colors"
+            title="Chat History"
+          >
+            <History className="w-4 h-4" />
+            <span>History</span>
+          </button>
+        </div>
       </div>
 
       <div className="flex-1 overflow-y-auto p-4 space-y-4">

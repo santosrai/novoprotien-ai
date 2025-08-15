@@ -59,7 +59,7 @@ try {
 
 export const useSettingsStore = create<SettingsState>()(
   persist(
-    (set, get) => ({
+    (set) => ({
       settings: defaultSettings,
       isSettingsDialogOpen: false,
       

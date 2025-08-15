@@ -3,14 +3,17 @@ import { ChatPanel } from './components/ChatPanel';
 import { CodeEditor } from './components/CodeEditor';
 import { MolstarViewer } from './components/MolstarViewer';
 import { SettingsDialog } from './components/SettingsDialog';
+import { ChatHistoryPanel } from './components/ChatHistoryPanel';
 import { Eye, Code2, Settings } from 'lucide-react';
 import { useAppStore } from './stores/appStore';
 import { useSettingsStore } from './stores/settingsStore';
+import { useChatHistoryStore } from './stores/chatHistoryStore';
 import { useEffect } from 'react';
 
 function App() {
   const { activePane, setActivePane } = useAppStore();
   const { settings, isSettingsDialogOpen, setSettingsDialogOpen } = useSettingsStore();
+  const { isHistoryPanelOpen, setHistoryPanelOpen } = useChatHistoryStore();
   
   // Auto-switch to viewer when editor gets disabled
   useEffect(() => {
@@ -80,6 +83,12 @@ function App() {
       <SettingsDialog 
         isOpen={isSettingsDialogOpen}
         onClose={() => setSettingsDialogOpen(false)}
+      />
+      
+      {/* Chat History Panel */}
+      <ChatHistoryPanel 
+        isOpen={isHistoryPanelOpen}
+        onClose={() => setHistoryPanelOpen(false)}
       />
     </div>
   );

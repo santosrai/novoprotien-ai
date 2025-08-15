@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
-import { X, Code2, Palette, Zap, RotateCcw, Save } from 'lucide-react';
+import { X, Code2, Palette, Zap, RotateCcw, Save, History } from 'lucide-react';
 import { useSettingsStore } from '../stores/settingsStore';
+import { useChatHistoryStore } from '../stores/chatHistoryStore';
 
 interface SettingsDialogProps {
   isOpen: boolean;
@@ -9,7 +10,8 @@ interface SettingsDialogProps {
 
 export const SettingsDialog: React.FC<SettingsDialogProps> = ({ isOpen, onClose }) => {
   const { settings, updateSettings, resetSettings } = useSettingsStore();
-  const [activeTab, setActiveTab] = useState<'editor' | 'interface' | 'advanced'>('editor');
+  const { getStorageStats, cleanupOldSessions, clearAllSessions, exportSessions } = useChatHistoryStore();
+  const [activeTab, setActiveTab] = useState<'editor' | 'interface' | 'chat-history' | 'advanced'>('editor');
   const [localSettings, setLocalSettings] = useState(settings);
   const [hasChanges, setHasChanges] = useState(false);
 
@@ -137,6 +139,7 @@ export const SettingsDialog: React.FC<SettingsDialogProps> = ({ isOpen, onClose 
             <div className="space-y-2">
               <Tab id="editor" icon={Code2} label="Editor" />
               <Tab id="interface" icon={Palette} label="Interface" />
+              <Tab id="chat-history" icon={History} label="Chat History" />
               <Tab id="advanced" icon={Zap} label="Advanced" />
             </div>
           </div>
@@ -216,6 +219,118 @@ export const SettingsDialog: React.FC<SettingsDialogProps> = ({ isOpen, onClose 
                       label="Message History Limit"
                       description="Maximum number of chat messages to keep in memory"
                     />
+                  </div>
+                </div>
+              )}
+
+              {activeTab === 'chat-history' && (
+                <div className="space-y-1">
+                  <h3 className="text-lg font-medium text-gray-900 mb-4">Chat History Settings</h3>
+                  
+                  {/* Storage Statistics */}
+                  <div className="bg-gray-50 border border-gray-200 rounded-lg p-4 mb-4">
+                    <h4 className="font-medium text-gray-900 text-sm mb-2">Storage Statistics</h4>
+                    <div className="space-y-1 text-xs text-gray-600">
+                      {(() => {
+                        const stats = getStorageStats();
+                        return (
+                          <>
+                            <div>Total Sessions: {stats.totalSessions}</div>
+                            <div>Total Messages: {stats.totalMessages}</div>
+                            <div>Storage Used: {stats.estimatedSize}</div>
+                          </>
+                        );
+                      })()}
+                    </div>
+                  </div>
+
+                  {/* Message History Limit */}
+                  <Select
+                    value={localSettings.ui.messageHistoryLimit}
+                    onChange={(value) => handleSettingChange('ui.messageHistoryLimit', parseInt(value as string))}
+                    options={[
+                      { value: 25, label: '25 messages' },
+                      { value: 50, label: '50 messages' },
+                      { value: 100, label: '100 messages' },
+                      { value: 200, label: '200 messages' },
+                      { value: 500, label: '500 messages' }
+                    ]}
+                    label="Message History Limit"
+                    description="Maximum number of messages to keep per session (affects memory usage)"
+                  />
+
+                  {/* Data Management Actions */}
+                  <div className="border-t border-gray-200 pt-4">
+                    <h4 className="font-medium text-gray-900 text-sm mb-3">Data Management</h4>
+                    
+                    <div className="space-y-3">
+                      <div className="flex items-center justify-between p-3 bg-blue-50 border border-blue-200 rounded-lg">
+                        <div>
+                          <div className="font-medium text-blue-900 text-sm">Export All Sessions</div>
+                          <div className="text-blue-700 text-xs">Download all chat history as JSON backup</div>
+                        </div>
+                        <button
+                          onClick={() => {
+                            const data = exportSessions();
+                            const blob = new Blob([data], { type: 'application/json' });
+                            const url = URL.createObjectURL(blob);
+                            const a = document.createElement('a');
+                            a.href = url;
+                            a.download = `novoprotein-chat-backup-${new Date().toISOString().split('T')[0]}.json`;
+                            document.body.appendChild(a);
+                            a.click();
+                            document.body.removeChild(a);
+                            URL.revokeObjectURL(url);
+                          }}
+                          className="px-3 py-1 bg-blue-600 text-white rounded text-sm hover:bg-blue-700 transition-colors"
+                        >
+                          Export
+                        </button>
+                      </div>
+
+                      <div className="flex items-center justify-between p-3 bg-yellow-50 border border-yellow-200 rounded-lg">
+                        <div>
+                          <div className="font-medium text-yellow-900 text-sm">Cleanup Old Sessions</div>
+                          <div className="text-yellow-700 text-xs">Remove sessions older than 30 days (starred sessions are kept)</div>
+                        </div>
+                        <button
+                          onClick={() => {
+                            const deleted = cleanupOldSessions(30);
+                            alert(`Cleaned up ${deleted} old session(s)`);
+                          }}
+                          className="px-3 py-1 bg-yellow-600 text-white rounded text-sm hover:bg-yellow-700 transition-colors"
+                        >
+                          Cleanup
+                        </button>
+                      </div>
+
+                      <div className="flex items-center justify-between p-3 bg-red-50 border border-red-200 rounded-lg">
+                        <div>
+                          <div className="font-medium text-red-900 text-sm">Clear All Chat History</div>
+                          <div className="text-red-700 text-xs">Permanently delete all chat sessions and messages</div>
+                        </div>
+                        <button
+                          onClick={() => {
+                            if (confirm('Delete ALL chat history? This cannot be undone.')) {
+                              clearAllSessions();
+                              alert('All chat history has been cleared');
+                            }
+                          }}
+                          className="px-3 py-1 bg-red-600 text-white rounded text-sm hover:bg-red-700 transition-colors"
+                        >
+                          Clear All
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Auto-cleanup Settings */}
+                  <div className="border-t border-gray-200 pt-4">
+                    <h4 className="font-medium text-gray-900 text-sm mb-3">Auto-cleanup (Future Feature)</h4>
+                    <div className="text-xs text-gray-500 italic">
+                      Automatic cleanup of old sessions will be available in a future update.
+                      You can manually cleanup old sessions using the button above.
+                    </div>
                   </div>
                 </div>
               )}

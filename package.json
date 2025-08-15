@@ -16,6 +16,7 @@
     "@anthropic-ai/sdk": "^0.24.1",
     "@modelcontextprotocol/server-puppeteer": "^2025.5.12",
     "@monaco-editor/react": "^4.6.0",
+    "@types/uuid": "^10.0.0",
     "@upstash/context7-mcp": "^1.0.14",
     "axios": "^1.7.3",
     "cors": "^2.8.5",
@@ -25,6 +26,7 @@
     "molstar": "^4.1.0",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
+    "uuid": "^11.1.0",
     "zustand": "^4.5.4"
   },
   "devDependencies": {
