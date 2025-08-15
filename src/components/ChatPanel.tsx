@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Send, Sparkles, X, History } from 'lucide-react';
+import { Send, Sparkles, X } from 'lucide-react';
 import { useAppStore } from '../stores/appStore';
 import { useChatHistoryStore, useActiveSession, Message } from '../stores/chatHistoryStore';
 import { CodeExecutor } from '../utils/codeExecutor';
@@ -13,7 +13,7 @@ export const ChatPanel: React.FC = () => {
   const clearSelections = useAppStore(state => state.clearSelections);
 
   // Chat history store
-  const { createSession, setHistoryPanelOpen, activeSessionId } = useChatHistoryStore();
+  const { createSession, activeSessionId } = useChatHistoryStore();
   const { activeSession, addMessage } = useActiveSession();
   
   const [input, setInput] = useState('');
@@ -281,26 +281,16 @@ try {
   return (
     <div className="h-full flex flex-col">
       <div className="p-4 border-b border-gray-200">
-        <div className="flex items-center justify-between">
-          <div className="flex items-center space-x-2">
-            <Sparkles className="w-5 h-5 text-blue-600" />
-            <div>
-              <h2 className="text-lg font-semibold text-gray-900">AI Assistant</h2>
-              {activeSession && (
-                <p className="text-xs text-gray-500 truncate max-w-[200px]">
-                  {activeSession.title}
-                </p>
-              )}
-            </div>
+        <div className="flex items-center space-x-2">
+          <Sparkles className="w-5 h-5 text-blue-600" />
+          <div>
+            <h2 className="text-lg font-semibold text-gray-900">AI Assistant</h2>
+            {activeSession && (
+              <p className="text-xs text-gray-500 truncate max-w-[200px]">
+                {activeSession.title}
+              </p>
+            )}
           </div>
-          <button
-            onClick={() => setHistoryPanelOpen(true)}
-            className="flex items-center space-x-1 px-2 py-1 text-xs text-gray-600 hover:text-gray-900 hover:bg-gray-100 rounded transition-colors"
-            title="Chat History"
-          >
-            <History className="w-4 h-4" />
-            <span>History</span>
-          </button>
         </div>
       </div>
 

@@ -29,6 +29,7 @@ interface ChatHistoryState {
   activeSessionId: string | null;
   recentSessionIds: string[]; // Quick access to recent sessions (max 5)
   isHistoryPanelOpen: boolean;
+  isSidebarCollapsed: boolean; // New sidebar state
   searchQuery: string;
   selectedSessionIds: string[]; // For bulk operations
   
@@ -47,6 +48,8 @@ interface ChatHistoryState {
   
   // UI State Management
   setHistoryPanelOpen: (open: boolean) => void;
+  setSidebarCollapsed: (collapsed: boolean) => void;
+  toggleSidebar: () => void;
   setSearchQuery: (query: string) => void;
   toggleSessionSelection: (sessionId: string) => void;
   selectAllSessions: () => void;
@@ -102,6 +105,7 @@ export const useChatHistoryStore = create<ChatHistoryState>()(
       activeSessionId: null,
       recentSessionIds: [],
       isHistoryPanelOpen: false,
+      isSidebarCollapsed: false, // Sidebar expanded by default
       searchQuery: '',
       selectedSessionIds: [],
       
@@ -289,6 +293,8 @@ export const useChatHistoryStore = create<ChatHistoryState>()(
       },
       
       setHistoryPanelOpen: (open) => set({ isHistoryPanelOpen: open }),
+      setSidebarCollapsed: (collapsed) => set({ isSidebarCollapsed: collapsed }),
+      toggleSidebar: () => set((state) => ({ isSidebarCollapsed: !state.isSidebarCollapsed })),
       setSearchQuery: (query) => set({ searchQuery: query }),
       
       toggleSessionSelection: (sessionId) => {
@@ -443,6 +449,7 @@ export const useChatHistoryStore = create<ChatHistoryState>()(
         sessions: state.sessions,
         activeSessionId: state.activeSessionId,
         recentSessionIds: state.recentSessionIds,
+        isSidebarCollapsed: state.isSidebarCollapsed, // Persist sidebar state
         // Don't persist UI state like panel open, search query, selections
       }),
       // Custom serialization to handle Date objects

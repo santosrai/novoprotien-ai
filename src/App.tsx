@@ -4,6 +4,7 @@ import { CodeEditor } from './components/CodeEditor';
 import { MolstarViewer } from './components/MolstarViewer';
 import { SettingsDialog } from './components/SettingsDialog';
 import { ChatHistoryPanel } from './components/ChatHistoryPanel';
+import { ChatHistorySidebar } from './components/ChatHistorySidebar';
 import { ResizablePanel } from './components/ResizablePanel';
 import { Eye, Code2, Settings } from 'lucide-react';
 import { useAppStore } from './stores/appStore';
@@ -28,7 +29,10 @@ function App() {
       <Header />
       
       <div className="flex-1 flex overflow-hidden">
-        {/* Left Panel - Resizable Chat */}
+        {/* Chat History Sidebar */}
+        <ChatHistorySidebar />
+        
+        {/* Chat Panel - Resizable */}
         <ResizablePanel
           defaultWidth={chatPanelWidth}
           minWidth={280}
