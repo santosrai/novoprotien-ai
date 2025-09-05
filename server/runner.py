@@ -3,9 +3,14 @@ from typing import Any, Dict, List, Optional
 
 from anthropic import Anthropic
 
-from .utils import log_line, get_text_from_completion, strip_code_fences, trim_history
-from .safety import violates_whitelist, ensure_clear_on_change
-from .uniprot import search_uniprot
+try:
+    from .utils import log_line, get_text_from_completion, strip_code_fences, trim_history
+    from .safety import violates_whitelist, ensure_clear_on_change
+    from .uniprot import search_uniprot
+except ImportError:
+    from utils import log_line, get_text_from_completion, strip_code_fences, trim_history
+    from safety import violates_whitelist, ensure_clear_on_change
+    from uniprot import search_uniprot
 
 
 _anthropic_client: Optional[Anthropic] = None
@@ -33,6 +38,32 @@ async def run_agent(
 ) -> Dict[str, Any]:
     model = os.getenv(agent.get("modelEnv", "")) or agent.get("defaultModel")
     base_log = {"model": model, "agentId": agent.get("id")}
+
+    # Special handling for AlphaFold agent - use handler instead of LLM
+    if agent.get("id") == "alphafold-agent":
+        try:
+            from .alphafold_handler import alphafold_handler
+            result = await alphafold_handler.process_folding_request(
+                user_text, 
+                context={
+                    "current_code": current_code,
+                    "history": history,
+                    "selection": selection
+                }
+            )
+            
+            if result.get("action") == "error":
+                log_line("agent:alphafold:error", {"error": result.get("error"), "userText": user_text})
+                return {"type": "text", "text": f"Error: {result.get('error')}"}
+            else:
+                # Convert handler result to JSON text for frontend processing
+                import json
+                log_line("agent:alphafold:success", {"userText": user_text, "hasSequence": bool(result.get("sequence"))})
+                return {"type": "text", "text": json.dumps(result)}
+                
+        except Exception as e:
+            log_line("agent:alphafold:failed", {"error": str(e), "userText": user_text})
+            return {"type": "text", "text": f"AlphaFold processing failed: {str(e)}"}
 
     # Deterministic UniProt search agent (no LLM call)
     if agent.get("id") == "uniprot-search":
@@ -88,7 +119,6 @@ async def run_agent(
             else ""
         )
 
-        from .runner import _get_anthropic_client  # avoid circular import typing issues
         client = _get_anthropic_client()
         
         # Enhanced system prompt with RAG for MVS agent
@@ -193,7 +223,6 @@ async def run_agent(
     messages.append({"role": "user", "content": user_text})
 
     log_line("agent:text:req", {**base_log, "hasSelection": bool(selection), "userText": user_text})
-    from .runner import _get_anthropic_client  # avoid circular import typing issues
     client = _get_anthropic_client()
     completion = client.messages.create(
         model=model,
