@@ -1,19 +1,23 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Send, Sparkles, Download, Play, X } from 'lucide-react';
+import { Send, Sparkles, Download, Play, X, Copy } from 'lucide-react';
 import { useAppStore } from '../stores/appStore';
 import { useChatHistoryStore, useActiveSession, Message } from '../stores/chatHistoryStore';
 import { CodeExecutor } from '../utils/codeExecutor';
-import { api } from '../utils/api';
+import { api, fetchAgents, fetchModels, Agent, Model } from '../utils/api';
 import { v4 as uuidv4 } from 'uuid';
 import { AlphaFoldDialog } from './AlphaFoldDialog';
 import { RFdiffusionDialog } from './RFdiffusionDialog';
-import { ProgressTracker, useAlphaFoldProgress } from './ProgressTracker';
+import { ProteinMPNNDialog } from './ProteinMPNNDialog';
+import { ProgressTracker, useAlphaFoldProgress, useProteinMPNNProgress } from './ProgressTracker';
 import { ErrorDisplay } from './ErrorDisplay';
-import { ErrorDetails, AlphaFoldErrorHandler, RFdiffusionErrorHandler } from '../utils/errorHandler';
+import { ErrorDetails, AlphaFoldErrorHandler, RFdiffusionErrorHandler, ErrorCategory, ErrorSeverity } from '../utils/errorHandler';
 import { logAlphaFoldError } from '../utils/errorLogger';
+import { AgentSelector } from './AgentSelector';
+import { ModelSelector } from './ModelSelector';
+import { useAgentSettings } from '../stores/settingsStore';
 
-// Enhanced Message interface for AlphaFold support
-interface AlphaFoldMessage extends Message {
+// Extended message metadata for structured agent results
+interface ExtendedMessage extends Message {
   alphafoldResult?: {
     pdbContent?: string;
     filename?: string;
@@ -21,8 +25,171 @@ interface AlphaFoldMessage extends Message {
     parameters?: any;
     metadata?: any;
   };
+  proteinmpnnResult?: {
+    jobId: string;
+    sequences: Array<{
+      id: string;
+      sequence: string;
+      length: number;
+      metadata?: Record<string, any>;
+    }>;
+    downloads: {
+      json: string;
+      fasta: string;
+      raw?: string;
+    };
+    metadata?: Record<string, any>;
+  };
   error?: ErrorDetails;
 }
+
+const renderProteinMPNNResult = (result: ExtendedMessage['proteinmpnnResult']) => {
+  if (!result) return null;
+
+  const copySequence = async (sequence: string) => {
+    try {
+      await navigator.clipboard.writeText(sequence);
+      console.log('[ProteinMPNN] Sequence copied to clipboard');
+    } catch (err) {
+      console.warn('Failed to copy sequence', err);
+    }
+  };
+
+  return (
+    <div className="mt-3 p-4 bg-gradient-to-r from-emerald-50 to-teal-50 border border-emerald-200 rounded-lg">
+      <div className="flex items-center space-x-2 mb-3">
+        <div className="w-8 h-8 bg-emerald-600 rounded-full flex items-center justify-center">
+          <span className="text-white text-sm font-bold">PM</span>
+        </div>
+        <div>
+          <h4 className="font-medium text-gray-900">ProteinMPNN Sequence Design</h4>
+          <p className="text-xs text-gray-600">
+            Job {result.jobId} • {result.sequences.length} sequence{result.sequences.length === 1 ? '' : 's'}
+          </p>
+        </div>
+      </div>
+
+      <div className="flex flex-wrap gap-2 mb-3">
+        <a
+          href={result.downloads.json}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="inline-flex items-center space-x-1 px-3 py-1 text-xs bg-emerald-100 text-emerald-700 rounded-full hover:bg-emerald-200"
+        >
+          <Download className="w-3 h-3" />
+          <span>JSON</span>
+        </a>
+        <a
+          href={result.downloads.fasta}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="inline-flex items-center space-x-1 px-3 py-1 text-xs bg-emerald-100 text-emerald-700 rounded-full hover:bg-emerald-200"
+        >
+          <Download className="w-3 h-3" />
+          <span>FASTA</span>
+        </a>
+        {result.downloads.raw && (
+          <a
+            href={result.downloads.raw}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="inline-flex items-center space-x-1 px-3 py-1 text-xs bg-emerald-100 text-emerald-700 rounded-full hover:bg-emerald-200"
+          >
+            <Download className="w-3 h-3" />
+            <span>Raw data</span>
+          </a>
+        )}
+      </div>
+
+      <div className="space-y-4">
+        {result.sequences.map((seq, index) => (
+          <div key={seq.id} className="border border-emerald-200 rounded-lg bg-white">
+            <div className="flex items-center justify-between px-3 py-2 border-b border-emerald-100 bg-emerald-50">
+              <div>
+                <p className="text-sm font-medium text-emerald-800">Design {index + 1}</p>
+                <p className="text-xs text-emerald-600">{seq.length} residues</p>
+              </div>
+              <button
+                onClick={() => copySequence(seq.sequence)}
+                className="inline-flex items-center space-x-1 text-xs text-emerald-700 hover:text-emerald-900"
+                title="Copy sequence"
+              >
+                <Copy className="w-3 h-3" />
+                <span>Copy</span>
+              </button>
+            </div>
+            <div className="px-3 py-3">
+              <pre className="text-xs font-mono whitespace-pre-wrap break-words bg-emerald-50 border border-emerald-100 rounded p-3">{seq.sequence}</pre>
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+};
+
+const extractProteinMPNNSequences = (payload: any): string[] => {
+  if (!payload) return [];
+
+  const search = (data: any): string[] => {
+    if (!data) return [];
+    const candidates: string[] = [];
+    const possibleFields = ['designed_sequences', 'designed_seqs', 'sequences', 'output_sequences'];
+
+    for (const field of possibleFields) {
+      if (Array.isArray(data?.[field])) {
+        return data[field].filter((item: unknown) => typeof item === 'string');
+      }
+    }
+
+    if (Array.isArray(data)) {
+      return data.filter((item) => typeof item === 'string');
+    }
+
+    if (typeof data === 'object') {
+      const inner = data?.result || data?.data;
+      if (inner) {
+        const nested = search(inner);
+        if (nested.length > 0) {
+          return nested;
+        }
+      }
+    }
+
+    return candidates;
+  };
+
+  return search(payload);
+};
+
+const createProteinMPNNError = (
+  code: string,
+  userMessage: string,
+  technicalMessage: string,
+  context: Record<string, any>
+): ErrorDetails => ({
+  code,
+  category: ErrorCategory.PROCESSING,
+  severity: ErrorSeverity.HIGH,
+  userMessage,
+  technicalMessage,
+  context,
+  suggestions: [
+    {
+      action: 'Retry sequence design',
+      description: 'Try submitting the ProteinMPNN job again or adjust the parameters.',
+      type: 'retry',
+      priority: 1,
+    },
+    {
+      action: 'Verify backbone structure',
+      description: 'Ensure the selected PDB backbone is valid and contains the intended chains.',
+      type: 'fix',
+      priority: 2,
+    },
+  ],
+  timestamp: new Date(),
+});
 
 export const ChatPanel: React.FC = () => {
   const { plugin, currentCode, setCurrentCode, setIsExecuting, setActivePane, setPendingCodeToRun } = useAppStore();
@@ -33,11 +200,15 @@ export const ChatPanel: React.FC = () => {
   // Chat history store
   const { createSession, activeSessionId } = useChatHistoryStore();
   const { activeSession, addMessage } = useActiveSession();
+
+  // Agent and model settings
+  const { settings: agentSettings } = useAgentSettings();
   
   const [input, setInput] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [lastAgentId, setLastAgentId] = useState<string>('');
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   // Initialize session if none exists
   useEffect(() => {
@@ -46,17 +217,50 @@ export const ChatPanel: React.FC = () => {
     }
   }, [activeSessionId, createSession]);
 
+  // Fetch agents and models on mount
+  useEffect(() => {
+    const loadAgentsAndModels = async () => {
+      try {
+        console.log('[ChatPanel] Loading agents and models...');
+        const [agentsData, modelsData] = await Promise.all([
+          fetchAgents(),
+          fetchModels(),
+        ]);
+        console.log('[ChatPanel] Agents loaded:', agentsData.length);
+        console.log('[ChatPanel] Models loaded:', modelsData.length);
+        setAgents(agentsData);
+        setModels(modelsData);
+      } catch (error) {
+        console.error('[ChatPanel] Failed to load agents or models:', error);
+        // Set empty arrays on error so components still render
+        setAgents([]);
+        setModels([]);
+      }
+    };
+    loadAgentsAndModels();
+  }, []);
+
   // Get messages from active session
-  const messages = activeSession?.messages || [];
+  const rawMessages = activeSession?.messages || [];
+  const messages = rawMessages as ExtendedMessage[];
 
   // AlphaFold state
   const [showAlphaFoldDialog, setShowAlphaFoldDialog] = useState(false);
   const [alphafoldData, setAlphafoldData] = useState<any>(null);
-  const progressTracker = useAlphaFoldProgress();
+  const alphafoldProgress = useAlphaFoldProgress();
+
+  // ProteinMPNN state
+  const [showProteinMPNNDialog, setShowProteinMPNNDialog] = useState(false);
+  const [proteinmpnnData, setProteinmpnnData] = useState<any>(null);
+  const proteinmpnnProgress = useProteinMPNNProgress();
 
   // RFdiffusion state
   const [showRFdiffusionDialog, setShowRFdiffusionDialog] = useState(false);
   const [rfdiffusionData, setRfdiffusionData] = useState<any>(null);
+
+  // Agent and model selection state
+  const [agents, setAgents] = useState<Agent[]>([]);
+  const [models, setModels] = useState<Model[]>([]);
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -76,6 +280,14 @@ export const ChatPanel: React.FC = () => {
   useEffect(() => {
     scrollToBottom();
   }, [messages]);
+
+  // Auto-resize textarea
+  useEffect(() => {
+    if (textareaRef.current) {
+      textareaRef.current.style.height = 'auto';
+      textareaRef.current.style.height = `${Math.min(textareaRef.current.scrollHeight, 200)}px`;
+    }
+  }, [input]);
 
   const renderMessageContent = (content: string) => {
     try {
@@ -125,7 +337,7 @@ export const ChatPanel: React.FC = () => {
     return <p className="text-sm">{content}</p>;
   };
 
-  const renderAlphaFoldResult = (result: Message['alphafoldResult']) => {
+  const renderAlphaFoldResult = (result: ExtendedMessage['alphafoldResult']) => {
     if (!result) return null;
 
     const downloadPDB = () => {
@@ -234,9 +446,14 @@ try {
 
   // AlphaFold handling functions
   const handleAlphaFoldConfirm = async (sequence: string, parameters: any) => {
+    console.log('🚀 [AlphaFold] User confirmed folding request');
+    console.log('📊 [AlphaFold] Sequence length:', sequence.length);
+    console.log('⚙️ [AlphaFold] Parameters:', parameters);
+    
     setShowAlphaFoldDialog(false);
     
     const jobId = `af_${Date.now()}`;
+    console.log('🆔 [AlphaFold] Generated job ID:', jobId);
     
     // Validate sequence before proceeding
     const validationError = AlphaFoldErrorHandler.handleSequenceValidation(sequence, jobId);
@@ -244,32 +461,130 @@ try {
       // Log the validation error
       logAlphaFoldError(validationError, { sequence: sequence.slice(0, 100), parameters });
       
-      const errorMessage: Message = {
+      const errorMessage: ExtendedMessage = {
         id: (Date.now() + 1).toString(),
         content: validationError.userMessage,
         type: 'ai',
         timestamp: new Date(),
         error: validationError
       };
-      setMessages(prev => [...prev, errorMessage]);
+      addMessage(errorMessage);
       return;
     }
     
-    progressTracker.startProgress(jobId, 'Submitting protein folding request...');
+    alphafoldProgress.startProgress(jobId, 'Submitting protein folding request...');
+    console.log('📡 [AlphaFold] Starting progress tracking for job:', jobId);
 
     try {
-      // Simulate API call to NIMS (this would be replaced with actual API call)
+      console.log('🌐 [AlphaFold] Making API call to /api/alphafold/fold');
+      console.log('📦 [AlphaFold] Payload:', { sequence: sequence.slice(0, 50) + '...', parameters, jobId });
+      
+      // Call the AlphaFold API endpoint
       const response = await api.post('/alphafold/fold', {
         sequence,
         parameters,
         jobId
       });
+      
+      console.log('📨 [AlphaFold] API response received:', response.status, response.data);
+
+      // Async flow: 202 Accepted → poll status endpoint until completion
+      if (response.status === 202 || response.data.status === 'accepted' || response.data.status === 'queued' || response.data.status === 'running') {
+        console.log('🕒 [AlphaFold] Job accepted, starting polling for status...', { jobId });
+        const start = Date.now();
+        const poll = async () => {
+          try {
+            const statusResp = await api.get(`/alphafold/status/${jobId}`);
+            const st = statusResp.data?.status;
+            if (st === 'completed') {
+              const result = statusResp.data?.data || {};
+              const aiMessage: ExtendedMessage = {
+                id: (Date.now() + 1).toString(),
+                content: `AlphaFold2 structure prediction completed successfully! The folded structure is ready for download and visualization.`,
+                type: 'ai',
+                timestamp: new Date(),
+                alphafoldResult: {
+                  pdbContent: result.pdbContent,
+                  filename: result.filename || `folded_${Date.now()}.pdb`,
+                  sequence,
+                  parameters,
+                  metadata: result.metadata
+                }
+              };
+              addMessage(aiMessage);
+              alphafoldProgress.completeProgress();
+              return true;
+            } else if (st === 'error') {
+              const apiError = AlphaFoldErrorHandler.createError(
+                'FOLDING_FAILED',
+                { jobId, sequenceLength: sequence.length, parameters },
+                statusResp.data?.error || 'Folding computation failed',
+                undefined,
+                jobId
+              );
+              logAlphaFoldError(apiError, { apiResponse: statusResp.data, sequence: sequence.slice(0, 100), parameters });
+              const errorMessage: ExtendedMessage = {
+                id: (Date.now() + 1).toString(),
+                content: apiError.userMessage,
+                type: 'ai',
+                timestamp: new Date(),
+                error: apiError
+              };
+              addMessage(errorMessage);
+              alphafoldProgress.errorProgress(apiError.userMessage);
+              return true;
+            } else {
+              // Update progress heuristically up to 90%
+              const elapsed = (Date.now() - start) / 1000;
+              const estDuration = 300; // 5 minutes heuristic
+              const pct = Math.min(90, Math.round((elapsed / estDuration) * 90));
+              alphafoldProgress.updateProgress(`Processing... (${Math.round(elapsed)}s)`, pct);
+              return false;
+            }
+          } catch (e) {
+            console.warn('⚠️ [AlphaFold] Polling failed, will retry...', e);
+            return false;
+          }
+        };
+
+        // Poll every 3s until done or timeout (~15 minutes)
+        const timeoutSec = 15 * 60;
+        let finished = false;
+        while (!finished && (Date.now() - start) / 1000 < timeoutSec) {
+          // eslint-disable-next-line no-await-in-loop
+          finished = await poll();
+          if (finished) break;
+          // eslint-disable-next-line no-await-in-loop
+          await new Promise(res => setTimeout(res, 3000));
+        }
+
+        if (!finished) {
+          const apiError = AlphaFoldErrorHandler.createError(
+            'FOLDING_FAILED',
+            { jobId, sequenceLength: sequence.length, parameters },
+            'Folding timed out',
+            undefined,
+            jobId
+          );
+          logAlphaFoldError(apiError, { sequence: sequence.slice(0, 100), parameters, timedOut: true });
+          const errorMessage: ExtendedMessage = {
+            id: (Date.now() + 1).toString(),
+            content: apiError.userMessage,
+            type: 'ai',
+            timestamp: new Date(),
+            error: apiError
+          };
+          addMessage(errorMessage);
+          alphafoldProgress.errorProgress(apiError.userMessage);
+        }
+        return; // Exit after async flow
+      }
 
       if (response.data.status === 'success') {
         const result = response.data.data;
         
         // Add result message to chat
-        const aiMessage: Message = {
+        const aiMessage: ExtendedMessage = {
           id: (Date.now() + 1).toString(),
           content: `AlphaFold2 structure prediction completed successfully! The folded structure is ready for download and visualization.`,
           type: 'ai',
@@ -283,8 +598,8 @@ try {
           }
         };
         
-        setMessages(prev => [...prev, aiMessage]);
-        progressTracker.completeProgress();
+        addMessage(aiMessage);
+        alphafoldProgress.completeProgress();
       } else {
         // Handle API errors with structured error display
         const apiError = AlphaFoldErrorHandler.createError(
@@ -302,7 +617,7 @@ try {
           parameters 
         });
         
-        const errorMessage: Message = {
+        const errorMessage: ExtendedMessage = {
           id: (Date.now() + 1).toString(),
           content: apiError.userMessage,
           type: 'ai',
@@ -310,8 +625,8 @@ try {
           error: apiError
         };
         
-        setMessages(prev => [...prev, errorMessage]);
-        progressTracker.errorProgress(apiError.userMessage);
+        addMessage(errorMessage);
+        alphafoldProgress.errorProgress(apiError.userMessage);
       }
     } catch (error: any) {
       console.error('AlphaFold request failed:', error);
@@ -327,7 +642,7 @@ try {
         networkError: true
       });
       
-      const errorMessage: Message = {
+      const errorMessage: ExtendedMessage = {
         id: (Date.now() + 1).toString(),
         content: structuredError.userMessage,
         type: 'ai',
@@ -335,8 +650,201 @@ try {
         error: structuredError
       };
       
-      setMessages(prev => [...prev, errorMessage]);
-      progressTracker.errorProgress(structuredError.userMessage);
+      addMessage(errorMessage);
+      alphafoldProgress.errorProgress(structuredError.userMessage);
+    }
+  };
+
+  const handleProteinMPNNConfirm = async (config: {
+    pdbSource: 'rfdiffusion' | 'upload' | 'inline';
+    sourceJobId?: string;
+    uploadId?: string;
+    parameters: any;
+    message?: string;
+  }) => {
+    console.log('🧩 [ProteinMPNN] Confirm payload:', config);
+    setShowProteinMPNNDialog(false);
+
+    const jobId = `pm_${Date.now()}`;
+
+    const payload = {
+      jobId,
+      pdbSource: config.pdbSource,
+      sourceJobId: config.sourceJobId,
+      uploadId: config.uploadId,
+      parameters: config.parameters,
+    };
+
+    const context = {
+      jobId,
+      pdbSource: config.pdbSource,
+      sourceJobId: config.sourceJobId,
+      uploadId: config.uploadId,
+      parameters: config.parameters,
+    };
+
+    try {
+      proteinmpnnProgress.startProgress(jobId, 'Submitting ProteinMPNN design request...');
+      const response = await api.post('/proteinmpnn/design', payload);
+      console.log('🧬 [ProteinMPNN] Submission response:', response.status, response.data);
+
+      if (response.status !== 202) {
+        const errorDetails = createProteinMPNNError(
+          'PROTEINMPNN_SUBMIT_FAILED',
+          'ProteinMPNN job submission failed.',
+          response.data?.error || 'Unexpected response from ProteinMPNN submission endpoint.',
+          context,
+        );
+        const errorMessage: ExtendedMessage = {
+          id: uuidv4(),
+          content: errorDetails.userMessage,
+          type: 'ai',
+          timestamp: new Date(),
+          error: errorDetails,
+        };
+        addMessage(errorMessage);
+        proteinmpnnProgress.errorProgress(errorDetails.userMessage);
+        return;
+      }
+
+      const started = Date.now();
+      const timeoutSec = 15 * 60; // 15 minutes
+      let finished = false;
+      let lastProgressUpdate = 10;
+
+      const poll = async (): Promise<boolean> => {
+        try {
+          const statusResp = await api.get(`/proteinmpnn/status/${jobId}`);
+          const statusData = statusResp.data || {};
+          const status = statusData.status as string;
+          const progressState = statusData.progress;
+
+          console.log('⏱️ [ProteinMPNN] Poll status:', status, progressState);
+
+          if (status === 'completed') {
+            const resultResp = await api.get(`/proteinmpnn/result/${jobId}`);
+            const resultData = resultResp.data || {};
+            const sequences = extractProteinMPNNSequences(resultData);
+
+            const sequenceEntries = sequences.map((sequence, idx) => ({
+              id: `${jobId}_${idx + 1}`,
+              sequence,
+              length: sequence.length,
+            }));
+
+            const messageContent = sequenceEntries.length
+              ? `ProteinMPNN generated ${sequenceEntries.length} candidate sequence${sequenceEntries.length === 1 ? '' : 's'}.`
+              : 'ProteinMPNN job completed, but no sequences were returned.';
+
+            const resultMessage: ExtendedMessage = {
+              id: uuidv4(),
+              content: messageContent,
+              type: 'ai',
+              timestamp: new Date(),
+              proteinmpnnResult: {
+                jobId,
+                sequences: sequenceEntries,
+                downloads: {
+                  json: `/api/proteinmpnn/result/${jobId}?fmt=json`,
+                  fasta: `/api/proteinmpnn/result/${jobId}?fmt=fasta`,
+                  raw: `/api/proteinmpnn/result/${jobId}?fmt=raw`,
+                },
+                metadata: resultData,
+              },
+            };
+
+            addMessage(resultMessage);
+            proteinmpnnProgress.completeProgress(
+              sequenceEntries.length ? 'Sequence design completed successfully!' : 'ProteinMPNN job completed.'
+            );
+            return true;
+          }
+
+          if (status === 'error' || status === 'timeout' || status === 'polling_failed') {
+            const errorDetails = createProteinMPNNError(
+              'PROTEINMPNN_JOB_FAILED',
+              'ProteinMPNN sequence design failed.',
+              statusData.error || status || 'Job failed',
+              { ...context, status },
+            );
+            const errorMessage: ExtendedMessage = {
+              id: uuidv4(),
+              content: errorDetails.userMessage,
+              type: 'ai',
+              timestamp: new Date(),
+              error: errorDetails,
+            };
+            addMessage(errorMessage);
+            proteinmpnnProgress.errorProgress(errorDetails.userMessage);
+            return true;
+          }
+
+          if (status === 'not_found') {
+            proteinmpnnProgress.updateProgress('Waiting for ProteinMPNN job to register...', lastProgressUpdate);
+            return false;
+          }
+
+          const elapsedSeconds = (Date.now() - started) / 1000;
+          const computedProgress = Math.min(95, Math.round((elapsedSeconds / timeoutSec) * 90));
+          const progressValue = typeof progressState?.progress === 'number'
+            ? progressState.progress
+            : computedProgress;
+          lastProgressUpdate = progressValue;
+          const progressMessage = progressState?.message || 'Design in progress...';
+          proteinmpnnProgress.updateProgress(progressMessage, progressValue);
+          return false;
+        } catch (pollError: any) {
+          console.warn('⚠️ [ProteinMPNN] Polling error:', pollError);
+          const elapsedSeconds = (Date.now() - started) / 1000;
+          const fallbackProgress = Math.min(90, Math.round((elapsedSeconds / timeoutSec) * 80));
+          proteinmpnnProgress.updateProgress('Waiting for ProteinMPNN result...', fallbackProgress);
+          return false;
+        }
+      };
+
+      while (!finished && (Date.now() - started) / 1000 < timeoutSec) {
+        // eslint-disable-next-line no-await-in-loop
+        finished = await poll();
+        if (finished) break;
+        // eslint-disable-next-line no-await-in-loop
+        await new Promise((resolve) => setTimeout(resolve, 4000));
+      }
+
+      if (!finished) {
+        const errorDetails = createProteinMPNNError(
+          'PROTEINMPNN_TIMEOUT',
+          'ProteinMPNN job timed out before completion.',
+          'Job exceeded client-side timeout threshold.',
+          context,
+        );
+        const errorMessage: ExtendedMessage = {
+          id: uuidv4(),
+          content: errorDetails.userMessage,
+          type: 'ai',
+          timestamp: new Date(),
+          error: errorDetails,
+        };
+        addMessage(errorMessage);
+        proteinmpnnProgress.errorProgress(errorDetails.userMessage);
+      }
+    } catch (error: any) {
+      console.error('❌ [ProteinMPNN] Request failed:', error);
+      const technicalMessage = error?.response?.data?.error || error?.message || 'Unknown ProteinMPNN error';
+      const errorDetails = createProteinMPNNError(
+        'PROTEINMPNN_REQUEST_FAILED',
+        'Unable to submit ProteinMPNN job.',
+        technicalMessage,
+        context,
+      );
+      const errorMessage: ExtendedMessage = {
+        id: uuidv4(),
+        content: errorDetails.userMessage,
+        type: 'ai',
+        timestamp: new Date(),
+        error: errorDetails,
+      };
+      addMessage(errorMessage);
+      proteinmpnnProgress.errorProgress(errorDetails.userMessage);
     }
   };
 
@@ -356,7 +864,7 @@ try {
         const result = response.data.data;
         
         // Add result message to chat
-        const aiMessage: Message = {
+        const aiMessage: ExtendedMessage = {
           id: (Date.now() + 1).toString(),
           content: `RFdiffusion protein design completed successfully! The designed structure is ready for download and visualization.`,
           type: 'ai',
@@ -369,7 +877,7 @@ try {
           }
         };
         
-        setMessages(prev => [...prev, aiMessage]);
+        addMessage(aiMessage);
       } else {
         // Handle API error response
         const apiError = RFdiffusionErrorHandler.handleError(response.data, {
@@ -378,7 +886,7 @@ try {
           feature: 'RFdiffusion'
         });
         
-        const errorMessage: Message = {
+        const errorMessage: ExtendedMessage = {
           id: (Date.now() + 1).toString(),
           content: apiError.userMessage,
           type: 'ai',
@@ -386,7 +894,7 @@ try {
           error: apiError
         };
         
-        setMessages(prev => [...prev, errorMessage]);
+        addMessage(errorMessage);
       }
     } catch (error: any) {
       console.error('RFdiffusion request failed:', error);
@@ -398,7 +906,7 @@ try {
         feature: 'RFdiffusion'
       });
       
-      const errorMessage: Message = {
+      const errorMessage: ExtendedMessage = {
         id: (Date.now() + 1).toString(),
         content: structuredError.userMessage,
         type: 'ai',
@@ -406,28 +914,38 @@ try {
         error: structuredError
       };
       
-      setMessages(prev => [...prev, errorMessage]);
+      addMessage(errorMessage);
     }
   };
 
   const handleAlphaFoldResponse = (responseData: any) => {
     try {
-      // Log the raw response for debugging
-      console.log('[AlphaFold] Raw response:', responseData);
+      // Enhanced logging for debugging
+      console.log('🧬 [AlphaFold] Raw response received:', responseData);
+      console.log('🧬 [AlphaFold] Response type:', typeof responseData);
+      console.log('🧬 [AlphaFold] Response length:', responseData?.length || 0);
       
       const data = JSON.parse(responseData);
-      console.log('[AlphaFold] Parsed data:', data);
+      console.log('✅ [AlphaFold] Successfully parsed JSON:', data);
+      console.log('🔍 [AlphaFold] Action detected:', data.action);
       
       if (data.action === 'confirm_folding') {
+        console.log('🎯 [AlphaFold] Confirm folding action detected');
+        
         // Handle sequence extraction if needed
         if (data.sequence === 'NEEDS_EXTRACTION' && data.source) {
+          console.log('🧪 [AlphaFold] Sequence needs extraction from:', data.source);
           // Extract sequence from PDB (this would normally call a sequence extraction API)
           // For now, we'll use a mock sequence for demonstration
           const mockSequence = 'MVLSEGEWQLVLHVWAKVEADVAGHGQDILIRLFKSHPETLEKFDRFKHLKTEAEMKASEDLKKHGVTVLTALGAILKKKGHHEAELKPLAQSHATKHKIPIKYLEFISEAIIHVLHSRHPG';
           data.sequence = mockSequence;
           data.message = `Extracted sequence from ${data.source}. Ready to fold ${mockSequence.length}-residue protein.`;
+          console.log('✅ [AlphaFold] Mock sequence extracted, length:', mockSequence.length);
+        } else {
+          console.log('📝 [AlphaFold] Direct sequence provided, length:', data.sequence?.length || 0);
         }
         
+        console.log('💬 [AlphaFold] Setting dialog data and showing dialog');
         setAlphafoldData(data);
         setShowAlphaFoldDialog(true);
         return true; // Handled
@@ -438,6 +956,13 @@ try {
         setRfdiffusionData(data);
         setShowRFdiffusionDialog(true);
         return true; // Handled
+      }
+
+      if (data.action === 'confirm_proteinmpnn_design') {
+        console.log('[ProteinMPNN] Design confirmation detected');
+        setProteinmpnnData(data);
+        setShowProteinMPNNDialog(true);
+        return true;
       }
     } catch (e) {
       console.log('[AlphaFold] Response parsing failed:', e);
@@ -472,6 +997,8 @@ try {
           history: messages.slice(-6).map(m => ({ type: m.type, content: m.content })),
           selection: selections.length > 0 ? selections[0] : null, // First selection for backward compatibility
           selections: selections, // Full selections array for new multi-selection support
+          agentId: agentSettings.selectedAgentId || undefined, // Only send if manually selected
+          model: agentSettings.selectedModel || undefined, // Only send if manually selected
         };
         console.log('[AI] route:request', payload);
         console.log('[DEBUG] currentCode length:', currentCode?.length || 0);
@@ -533,11 +1060,16 @@ try {
           
           // Check if this is an AlphaFold response
           if (agentId === 'alphafold-agent') {
+            console.log('🧬 [AlphaFold] Agent detected, processing response');
+            console.log('📄 [AlphaFold] Agent response text:', aiText.slice(0, 200) + '...');
+            
             if (handleAlphaFoldResponse(aiText)) {
+              console.log('✅ [AlphaFold] Response handled successfully, dialog should be shown');
               return; // AlphaFold dialog will be shown
             } else {
               // Fallback: if JSON parsing failed, try to extract key info and show a basic dialog
-              console.log('[AlphaFold] Fallback: attempting to parse non-JSON response');
+              console.log('⚠️ [AlphaFold] Fallback: attempting to parse non-JSON response');
+              console.log('🔍 [AlphaFold] Full response text:', aiText);
               const fallbackData = {
                 action: 'confirm_folding',
                 sequence: 'NEEDS_EXTRACTION',
@@ -558,6 +1090,35 @@ try {
               handleAlphaFoldResponse(JSON.stringify(fallbackData));
               return;
             }
+          }
+
+          if (agentId === 'proteinmpnn-agent') {
+            console.log('🧪 [ProteinMPNN] Agent detected, processing response');
+            console.log('🧪 [ProteinMPNN] Agent response text:', aiText.slice(0, 200) + '...');
+
+            if (handleAlphaFoldResponse(aiText)) {
+              return;
+            }
+
+            console.log('⚠️ [ProteinMPNN] Fallback: attempting to parse non-JSON response');
+            const fallbackData = {
+              action: 'confirm_proteinmpnn_design',
+              pdbSource: 'upload',
+              parameters: {
+                numDesigns: 5,
+                temperature: 0.1,
+                chainIds: [],
+                fixedPositions: [],
+                options: {}
+              },
+              design_info: {
+                summary: 'ProteinMPNN inverse folding request detected.',
+                notes: ['Please upload a PDB file to continue.']
+              },
+              message: 'Ready to run ProteinMPNN. Please confirm backbone source and parameters.'
+            };
+            handleAlphaFoldResponse(JSON.stringify(fallbackData));
+            return;
           }
 
           // Check if this is an RFdiffusion response
@@ -713,6 +1274,7 @@ try {
                 <>
                   {renderMessageContent(message.content)}
                   {renderAlphaFoldResult(message.alphafoldResult)}
+                  {renderProteinMPNNResult(message.proteinmpnnResult)}
                   {message.error && (
                     <div className="mt-3">
                       <ErrorDisplay 
@@ -790,9 +1352,18 @@ try {
         )}
         {/* Progress Tracker */}
         <ProgressTracker
-          isVisible={progressTracker.isVisible}
-          onCancel={progressTracker.cancelProgress}
+          isVisible={alphafoldProgress.isVisible}
+          onCancel={alphafoldProgress.cancelProgress}
           className="mb-3"
+          title={alphafoldProgress.title}
+          eventName={alphafoldProgress.eventName}
+        />
+        <ProgressTracker
+          isVisible={proteinmpnnProgress.isVisible}
+          onCancel={proteinmpnnProgress.cancelProgress}
+          className="mb-3"
+          title={proteinmpnnProgress.title}
+          eventName={proteinmpnnProgress.eventName}
         />
 
         <div className="mb-3">
@@ -810,22 +1381,52 @@ try {
           </div>
         </div>
 
-        <form onSubmit={handleSubmit} className="flex space-x-2">
-          <input
-            type="text"
-            value={input}
-            onChange={(e) => setInput(e.target.value)}
-            placeholder="Ask me to visualize a protein..."
-            className="flex-1 px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent text-sm"
-            disabled={isLoading}
-          />
-          <button
-            type="submit"
-            disabled={!input.trim() || isLoading}
-            className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed"
-          >
-            <Send className="w-4 h-4" />
-          </button>
+        <form onSubmit={handleSubmit} className="flex flex-col gap-2">
+          {/* Large text input area */}
+          <div className="flex-1">
+            <textarea
+              ref={textareaRef}
+              value={input}
+              onChange={(e) => setInput(e.target.value)}
+              placeholder="Chat, visualize, or build..."
+              className="w-full px-3 py-2 bg-white text-gray-900 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent text-sm placeholder-gray-400 resize-none min-h-[100px]"
+              rows={3}
+              disabled={isLoading}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' && !e.shiftKey) {
+                  e.preventDefault();
+                  handleSubmit(e as any);
+                }
+              }}
+            />
+          </div>
+          
+          {/* Bottom row: Agent, Model selectors, and Send button */}
+          <div className="flex items-center gap-2">
+            {/* Agent Selector */}
+            {agents.length > 0 && (
+              <AgentSelector
+                agents={agents}
+              />
+            )}
+            
+            {/* Model Selector */}
+            <ModelSelector
+              models={models}
+            />
+            
+            {/* Spacer to push send button to the right */}
+            <div className="flex-1" />
+            
+            {/* Send button */}
+            <button
+              type="submit"
+              disabled={!input.trim() || isLoading}
+              className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center"
+            >
+              <Send className="w-4 h-4" />
+            </button>
+          </div>
         </form>
       </div>
 
@@ -843,6 +1444,13 @@ try {
         onClose={() => setShowRFdiffusionDialog(false)}
         onConfirm={handleRFdiffusionConfirm}
         initialData={rfdiffusionData}
+      />
+
+      <ProteinMPNNDialog
+        isOpen={showProteinMPNNDialog}
+        onClose={() => setShowProteinMPNNDialog(false)}
+        onConfirm={handleProteinMPNNConfirm}
+        initialData={proteinmpnnData}
       />
     </div>
   );

@@ -2,10 +2,10 @@ fastapi==0.111.0
 uvicorn==0.30.3
 python-dotenv==1.0.1
 slowapi==0.1.9
-anthropic==0.36.0
 langchain-openai==0.2.3
 openai>=1.52.0,<2.0.0
 httpx==0.27.2
+certifi>=2023.0.0
 pinecone>=5.0.0
 requests>=2.31.0
 aiohttp>=3.9.0

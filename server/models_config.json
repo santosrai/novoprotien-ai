@@ -1,0 +1,105 @@
+{
+  "models": [
+    {
+      "id": "openai/gpt-4.1",
+      "name": "GPT-4.1",
+      "provider": "OpenAI",
+      "description": "Most capable GPT-4 model with improved instruction following, JSON mode, reproducible outputs, parallel function calling, and more.",
+      "context_length": 128000,
+      "pricing": {
+        "prompt": "0.00001",
+        "completion": "0.00003"
+      }
+    },
+    
+    {
+      "id": "anthropic/claude-3.5-sonnet",
+      "name": "Claude 3.5 Sonnet",
+      "provider": "Anthropic",
+      "description": "Anthropic's most powerful model, great for complex tasks, code generation, and analysis.",
+      "context_length": 200000,
+      "pricing": {
+        "prompt": "0.000003",
+        "completion": "0.000015"
+      }
+    },
+    {
+      "id": "anthropic/claude-3-opus",
+      "name": "Claude 3 Opus",
+      "provider": "Anthropic",
+      "description": "Anthropic's most capable model for highly complex tasks.",
+      "context_length": 200000,
+      "pricing": {
+        "prompt": "0.000015",
+        "completion": "0.000075"
+      }
+    },
+    
+    {
+      "id": "anthropic/claude-3-haiku",
+      "name": "Claude 3 Haiku",
+      "provider": "Anthropic",
+      "description": "Fastest and most affordable Claude model.",
+      "context_length": 200000,
+      "pricing": {
+        "prompt": "0.00000025",
+        "completion": "0.00000125"
+      }
+    },
+    {
+      "id": "google/gemma-3n-e2b-it:free",
+      "name": "Gemini 3n",
+      "provider": "Google",
+      "description": "Google's advanced AI model for complex reasoning and multimodal tasks.",
+      "context_length": 32768,
+      "pricing": {
+        "prompt": "0.0000005",
+        "completion": "0.0000015"
+      }
+    },
+    {
+      "id": "meta-llama/llama-3-70b-instruct",
+      "name": "Llama 3 70B Instruct",
+      "provider": "Meta",
+      "description": "Meta's open-source 70B parameter model optimized for instruction following.",
+      "context_length": 8192,
+      "pricing": {
+        "prompt": "0.0000007",
+        "completion": "0.0000009"
+      }
+    },
+    {
+      "id": "mistralai/devstral-2512:free",
+      "name": "Devstral 2512",
+      "provider": "Mistral AI",
+      "description": "Mistral's open-source model for complex reasoning tasks.",
+      "context_length": 32768,
+      "pricing": {
+        "prompt": "0.00000027",
+        "completion": "0.00000027"
+      }
+    },
+    {
+      "id": "meta-llama/llama-3-8b-instruct",
+      "name": "Llama 3 8B Instruct",
+      "provider": "Meta",
+      "description": "Meta's efficient 8B parameter model for faster responses.",
+      "context_length": 8192,
+      "pricing": {
+        "prompt": "0.00000005",
+        "completion": "0.0000001"
+      }
+    },
+    {
+      "id": "cohere/command-r-plus",
+      "name": "Command R+",
+      "provider": "Cohere",
+      "description": "Cohere's advanced model for complex tasks and tool use.",
+      "context_length": 128000,
+      "pricing": {
+        "prompt": "0.000003",
+        "completion": "0.000015"
+      }
+    }
+  ]
+}

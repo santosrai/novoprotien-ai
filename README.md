@@ -7,6 +7,7 @@ A modern web-based molecular visualization platform that combines natural langua
 - **Natural Language Interface**: Describe what you want to visualize in plain English
 - **Real-time 3D Visualization**: Powered by Molstar for high-performance molecular graphics
 - **Interactive Code Editor**: Monaco editor with syntax highlighting and auto-completion
+- **Protein Sequence Redesign**: Run NVIDIA ProteinMPNN against RFdiffusion results or uploaded PDB backbones
 - **PDB Structure Loading**: Automatic resolution of protein names to PDB structures
 - **Example Templates**: Pre-built visualization examples for common use cases
 - **Responsive Design**: Works on desktop, tablet, and mobile devices
@@ -48,6 +49,11 @@ The Monaco editor provides a full IDE experience with:
 - **Screenshot**: Save current view as PNG
 - **Reset**: Return to default camera position
 - **Fullscreen**: Toggle immersive viewing mode
+
+### ProteinMPNN Sequence Design
+- Ask the assistant to "redesign this backbone with ProteinMPNN" or request sequence design for a specific RFdiffusion job.
+- Review the confirmation dialog: pick an existing RFdiffusion result or upload a PDB file, then adjust design parameters (number of sequences, temperature, chain filters, fixed residues).
+- Track progress in the chat sidebar; completed jobs provide download links for JSON, FASTA, and raw ProteinMPNN outputs alongside the designed sequences.
 
 ## Architecture
 
@@ -107,6 +113,20 @@ src/
 - `npm run build` - Build for production
 - `npm run preview` - Preview production build
 - `npm run lint` - Run ESLint
+
+### Environment Variables
+Configure backend behaviour by setting the following keys in `.env` (project root) or `server/.env`:
+
+| Variable | Description | Default |
+| --- | --- | --- |
+| `NVCF_RUN_KEY` | NVIDIA Cloud API key shared by AlphaFold, RFdiffusion, and ProteinMPNN clients | — |
+| `PROTEINMPNN_API_KEY` | Optional override for the ProteinMPNN client if you want a dedicated key | falls back to `NVCF_RUN_KEY` |
+| `PROTEINMPNN_URL` | ProteinMPNN inference endpoint | `https://health.api.nvidia.com/v1/biology/ipd/proteinmpnn/predict` |
+| `PROTEINMPNN_POLL_INTERVAL` | Seconds between status checks | `10` |
+| `PROTEINMPNN_MAX_WAIT_SECONDS` | Hard timeout for polling (0 = unlimited) | `1800` |
+| `PROTEINMPNN_POST_RETRIES` | Retries for initial submission on transient errors | `3` |
+
+Uploaded PDB files are stored under `server/uploads/`, and ProteinMPNN job artefacts (JSON, FASTA, logs) are written to `server/proteinmpnn_results/`.
 
 ### Adding New Features
 1. Create components in `src/components/`

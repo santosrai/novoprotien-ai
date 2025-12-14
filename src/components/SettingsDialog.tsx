@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { X, Code2, Palette, Zap, RotateCcw, Save, History } from 'lucide-react';
+import { X, Code2, Palette, Zap, RotateCcw, Save, History, Settings } from 'lucide-react';
 import { useSettingsStore } from '../stores/settingsStore';
 import { useChatHistoryStore } from '../stores/chatHistoryStore';
 
@@ -11,22 +11,34 @@ interface SettingsDialogProps {
 export const SettingsDialog: React.FC<SettingsDialogProps> = ({ isOpen, onClose }) => {
   const { settings, updateSettings, resetSettings } = useSettingsStore();
   const { getStorageStats, cleanupOldSessions, clearAllSessions, exportSessions } = useChatHistoryStore();
-  const [activeTab, setActiveTab] = useState<'editor' | 'interface' | 'chat-history' | 'advanced'>('editor');
+  const [activeTab, setActiveTab] = useState<'editor' | 'interface' | 'api' | 'chat-history' | 'advanced'>('editor');
   const [localSettings, setLocalSettings] = useState(settings);
   const [hasChanges, setHasChanges] = useState(false);
 
+  // Sync localSettings when dialog opens or settings change
+  React.useEffect(() => {
+    if (isOpen) {
+      // Ensure api field exists
+      const settingsWithApi = {
+        ...settings,
+        api: settings.api || { key: '' }
+      };
+      setLocalSettings(settingsWithApi);
+      setHasChanges(false);
+    }
+  }, [isOpen, settings]);
   if (!isOpen) return null;
 
   const handleSettingChange = (path: string, value: any) => {
     const newSettings = { ...localSettings };
     const keys = path.split('.');
     let current = newSettings as any;
-    
+
     for (let i = 0; i < keys.length - 1; i++) {
       current = current[keys[i]];
     }
     current[keys[keys.length - 1]] = value;
-    
+
     setLocalSettings(newSettings);
     setHasChanges(true);
   };
@@ -54,11 +66,10 @@ export const SettingsDialog: React.FC<SettingsDialogProps> = ({ isOpen, onClose 
   const Tab = ({ id, icon: Icon, label }: { id: typeof activeTab; icon: any; label: string }) => (
     <button
       onClick={() => setActiveTab(id)}
-      className={`flex items-center space-x-2 px-4 py-2 rounded-lg font-medium text-sm transition-colors ${
-        activeTab === id
-          ? 'bg-blue-100 text-blue-700 border border-blue-200'
-          : 'text-gray-600 hover:text-gray-800 hover:bg-gray-50'
-      }`}
+      className={`flex items-center space-x-2 px-4 py-2 rounded-lg font-medium text-sm transition-colors ${activeTab === id
+        ? 'bg-blue-100 text-blue-700 border border-blue-200'
+        : 'text-gray-600 hover:text-gray-800 hover:bg-gray-50'
+        }`}
     >
       <Icon className="w-4 h-4" />
       <span>{label}</span>
@@ -78,14 +89,13 @@ export const SettingsDialog: React.FC<SettingsDialogProps> = ({ isOpen, onClose 
       </div>
       <button
         onClick={() => onChange(!checked)}
-        className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 ${
-          checked ? 'bg-blue-600' : 'bg-gray-200'
-        }`}
+
+        className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 ${checked ? 'bg-blue-600' : 'bg-gray-200'
+          }`}
       >
         <span
-          className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
-            checked ? 'translate-x-6' : 'translate-x-1'
-          }`}
+          className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${checked ? 'translate-x-6' : 'translate-x-1'
+            }`}
         />
       </button>
     </div>
@@ -139,8 +149,9 @@ export const SettingsDialog: React.FC<SettingsDialogProps> = ({ isOpen, onClose 
             <div className="space-y-2">
               <Tab id="editor" icon={Code2} label="Editor" />
               <Tab id="interface" icon={Palette} label="Interface" />
+              <Tab id="api" icon={Zap} label="API Keys" />
               <Tab id="chat-history" icon={History} label="Chat History" />
-              <Tab id="advanced" icon={Zap} label="Advanced" />
+              <Tab id="advanced" icon={Settings} label="Advanced" />
             </div>
           </div>
 
@@ -150,7 +161,7 @@ export const SettingsDialog: React.FC<SettingsDialogProps> = ({ isOpen, onClose 
               {activeTab === 'editor' && (
                 <div className="space-y-1">
                   <h3 className="text-lg font-medium text-gray-900 mb-4">Code Editor Settings</h3>
-                  
+
                   <Switch
                     checked={localSettings.codeEditor.enabled}
                     onChange={(checked) => handleSettingChange('codeEditor.enabled', checked)}
@@ -185,7 +196,7 @@ export const SettingsDialog: React.FC<SettingsDialogProps> = ({ isOpen, onClose 
               {activeTab === 'interface' && (
                 <div className="space-y-1">
                   <h3 className="text-lg font-medium text-gray-900 mb-4">Interface Settings</h3>
-                  
+
                   <Select
                     value={localSettings.ui.theme}
                     onChange={(value) => handleSettingChange('ui.theme', value)}
@@ -223,10 +234,58 @@ export const SettingsDialog: React.FC<SettingsDialogProps> = ({ isOpen, onClose 
                 </div>
               )}
 
+              {activeTab === 'api' && (
+                <div className="space-y-1">
+                  <h3 className="text-lg font-medium text-gray-900 mb-4">API Configuration</h3>
+
+                  <div className="bg-blue-50 border border-blue-200 rounded-lg p-4 mb-4">
+                    <div className="flex items-start">
+                      <div className="flex-shrink-0">
+                        <Zap className="h-5 w-5 text-blue-400" aria-hidden="true" />
+                      </div>
+                      <div className="ml-3">
+                        <h3 className="text-sm font-medium text-blue-800">Bring Your Own Key</h3>
+                        <div className="mt-2 text-sm text-blue-700">
+                          <p>
+                            You can use your own API key to power the AI features.
+                            We support both <strong>Anthropic</strong> and <strong>OpenRouter</strong> keys.
+                          </p>
+                          <p className="mt-1">
+                            Your key is stored locally in your browser and sent directly to the server.
+                          </p>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="space-y-4">
+                    <div>
+                      <label htmlFor="apiKey" className="block text-sm font-medium text-gray-700">
+                        API Key
+                      </label>
+                      <div className="mt-1">
+                        <input
+                          type="password"
+                          name="apiKey"
+                          id="apiKey"
+                          className="shadow-sm focus:ring-blue-500 focus:border-blue-500 block w-full sm:text-sm border-gray-300 rounded-md px-3 py-2 border"
+                          placeholder="sk-ant-... or sk-or-..."
+                          value={localSettings.api?.key || ''}
+                          onChange={(e) => handleSettingChange('api.key', e.target.value)}
+                        />
+                      </div>
+                      <p className="mt-2 text-xs text-gray-500">
+                        Enter your Anthropic (starts with sk-ant-) or OpenRouter (starts with sk-or-) API key.
+                      </p>
+                    </div>
+                  </div>
+                </div>
+              )}
+
               {activeTab === 'chat-history' && (
                 <div className="space-y-1">
                   <h3 className="text-lg font-medium text-gray-900 mb-4">Chat History Settings</h3>
-                  
+
                   {/* Storage Statistics */}
                   <div className="bg-gray-50 border border-gray-200 rounded-lg p-4 mb-4">
                     <h4 className="font-medium text-gray-900 text-sm mb-2">Storage Statistics</h4>
@@ -262,7 +321,7 @@ export const SettingsDialog: React.FC<SettingsDialogProps> = ({ isOpen, onClose 
                   {/* Data Management Actions */}
                   <div className="border-t border-gray-200 pt-4">
                     <h4 className="font-medium text-gray-900 text-sm mb-3">Data Management</h4>
-                    
+
                     <div className="space-y-3">
                       <div className="flex items-center justify-between p-3 bg-blue-50 border border-blue-200 rounded-lg">
                         <div>
@@ -338,7 +397,7 @@ export const SettingsDialog: React.FC<SettingsDialogProps> = ({ isOpen, onClose 
               {activeTab === 'advanced' && (
                 <div className="space-y-1">
                   <h3 className="text-lg font-medium text-gray-900 mb-4">Advanced Settings</h3>
-                  
+
                   <Switch
                     checked={localSettings.performance.debugMode}
                     onChange={(checked) => handleSettingChange('performance.debugMode', checked)}

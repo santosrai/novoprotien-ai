@@ -49,19 +49,19 @@ function App() {
         {/* Right Panel - Toolbar + Pane */}
         <div className="flex-1 flex flex-col">
           {/* Toolbar */}
-          <div className="h-10 flex items-center justify-between px-3 border-b border-gray-200 bg-gray-900">
+          <div className="h-10 flex items-center justify-between px-3 border-b border-gray-200 bg-white">
             {/* Editor disabled message */}
             {!settings.codeEditor.enabled && (
-              <div className="text-xs text-gray-400 flex items-center space-x-2">
+              <div className="text-xs text-gray-500 flex items-center space-x-2">
                 <Settings className="w-3 h-3" />
                 <span>Code editor hidden - enable in Settings</span>
               </div>
             )}
             
-            <div className="inline-flex rounded-full overflow-hidden ml-auto">
+            <div className="inline-flex rounded-full overflow-hidden ml-auto border border-gray-300">
               <button
                 onClick={() => setActivePane('viewer')}
-                className={`px-3 h-8 flex items-center gap-1 text-xs ${activePane === 'viewer' ? 'bg-gray-800 text-white' : 'bg-gray-700 text-gray-200 hover:bg-gray-600'}`}
+                className={`px-3 h-8 flex items-center gap-1 text-xs ${activePane === 'viewer' ? 'bg-blue-600 text-white' : 'bg-white text-gray-700 hover:bg-gray-50'}`}
                 title="Show viewer"
               >
                 <Eye className="w-4 h-4" />
@@ -69,7 +69,7 @@ function App() {
               {settings.codeEditor.enabled && (
                 <button
                   onClick={() => setActivePane('editor')}
-                  className={`px-3 h-8 flex items-center gap-1 text-xs ${activePane === 'editor' ? 'bg-gray-800 text-white' : 'bg-gray-700 text-gray-200 hover:bg-gray-600'}`}
+                  className={`px-3 h-8 flex items-center gap-1 text-xs ${activePane === 'editor' ? 'bg-blue-600 text-white' : 'bg-white text-gray-700 hover:bg-gray-50'}`}
                   title="Show editor"
                 >
                   <Code2 className="w-4 h-4" />

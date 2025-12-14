@@ -45,3 +45,9 @@ __pycache__/
 .coverage
 htmlcov/
 .pyre/
+server/uploads/pdb/*.pdb
+
+# Server results (keep .gitkeep for directory structure)
+server/proteinmpnn_results/*
+!server/proteinmpnn_results/.gitkeep
+server/rfdiffusion_results/*
