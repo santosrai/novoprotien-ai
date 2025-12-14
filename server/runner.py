@@ -244,6 +244,58 @@ async def run_agent(
             log_line("agent:alphafold:failed", {"error": str(e), "userText": user_text})
             return {"type": "text", "text": f"AlphaFold processing failed: {str(e)}"}
 
+    # Special handling for RFdiffusion agent - use handler instead of LLM
+    if agent.get("id") == "rfdiffusion-agent":
+        try:
+            from .rfdiffusion_handler import rfdiffusion_handler
+            result = await rfdiffusion_handler.process_design_request(
+                user_text,
+                context={
+                    "current_code": current_code,
+                    "history": history,
+                    "selection": selection
+                }
+            )
+            
+            if result.get("action") == "error":
+                log_line("agent:rfdiffusion:error", {"error": result.get("error"), "userText": user_text})
+                return {"type": "text", "text": f"Error: {result.get('error')}"}
+            else:
+                # Convert handler result to JSON text for frontend processing
+                import json
+                log_line("agent:rfdiffusion:success", {"userText": user_text, "hasDesignMode": bool(result.get("parameters", {}).get("design_mode"))})
+                return {"type": "text", "text": json.dumps(result)}
+                
+        except Exception as e:
+            log_line("agent:rfdiffusion:failed", {"error": str(e), "userText": user_text})
+            return {"type": "text", "text": f"RFdiffusion processing failed: {str(e)}"}
+
+    # Special handling for ProteinMPNN agent - use handler instead of LLM
+    if agent.get("id") == "proteinmpnn-agent":
+        try:
+            from .proteinmpnn_handler import proteinmpnn_handler
+            result = await proteinmpnn_handler.process_design_request(
+                user_text,
+                context={
+                    "current_code": current_code,
+                    "history": history,
+                    "selection": selection
+                }
+            )
+            
+            if result.get("action") == "error":
+                log_line("agent:proteinmpnn:error", {"error": result.get("error"), "userText": user_text})
+                return {"type": "text", "text": f"Error: {result.get('error')}"}
+            else:
+                # Convert handler result to JSON text for frontend processing
+                import json
+                log_line("agent:proteinmpnn:success", {"userText": user_text, "hasPdbSource": bool(result.get("pdbSource"))})
+                return {"type": "text", "text": json.dumps(result)}
+                
+        except Exception as e:
+            log_line("agent:proteinmpnn:failed", {"error": str(e), "userText": user_text})
+            return {"type": "text", "text": f"ProteinMPNN processing failed: {str(e)}"}
+
     # Deterministic UniProt search agent (no LLM call)
     if agent.get("id") == "uniprot-search":
         import re, json

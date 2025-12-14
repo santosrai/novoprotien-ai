@@ -2,6 +2,7 @@ import React, { useRef, useEffect } from 'react';
 import Editor from '@monaco-editor/react';
 import { Play, RotateCcw, Copy, FileText, Save } from 'lucide-react';
 import { useAppStore } from '../stores/appStore';
+import { useChatHistoryStore } from '../stores/chatHistoryStore';
 import { CodeExecutor } from '../utils/codeExecutor';
 
 const defaultCode = `// Default: Cartoon view of PDB 1CBS
@@ -16,6 +17,7 @@ try {
 
 export const CodeEditor: React.FC = () => {
   const { plugin, currentCode, setCurrentCode, isExecuting, setIsExecuting } = useAppStore();
+  const { activeSessionId, saveVisualizationCode } = useChatHistoryStore();
   const editorRef = useRef<any>(null);
 
   useEffect(() => {
@@ -37,6 +39,12 @@ export const CodeEditor: React.FC = () => {
       const exec = new CodeExecutor(plugin);
       const res = await exec.executeCode(currentCode);
       console.log('[Molstar] execute result:', res);
+      
+      // Save code to active session after successful execution
+      if (activeSessionId && currentCode.trim()) {
+        saveVisualizationCode(activeSessionId, currentCode);
+        console.log('[CodeEditor] Saved visualization code to session:', activeSessionId);
+      }
     } catch (e) {
       console.error('[Molstar] execute failed', e);
     } finally {

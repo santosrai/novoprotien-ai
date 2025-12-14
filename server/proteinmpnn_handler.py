@@ -146,6 +146,119 @@ class ProteinMPNNHandler:
             "uploads": uploads,
         }
 
+    async def process_design_request(self, input_text: str, context: Dict[str, Any] = None) -> Dict[str, Any]:
+        """
+        Process a natural language ProteinMPNN design request
+        
+        Args:
+            input_text: User's design request
+            context: Optional context (current PDB, selection, etc.)
+            
+        Returns:
+            Dictionary with design parameters for user confirmation
+        """
+        import re
+        try:
+            text = input_text.lower()
+            
+            # Determine PDB source
+            pdb_source = "upload"  # Default to upload
+            source_info: Dict[str, Any] = {}
+            
+            # Check for RFdiffusion job reference
+            rf_match = re.search(r'rf[_\s]*(\w+)', text)
+            if rf_match:
+                job_id = rf_match.group(1)
+                # Check if RFdiffusion result exists
+                rfdiffusion_dir = Path(__file__).parent / "rfdiffusion_results"
+                candidate = rfdiffusion_dir / f"rfdiffusion_{job_id}.pdb"
+                if candidate.exists():
+                    pdb_source = "rfdiffusion"
+                    source_info = {"jobId": job_id}
+            
+            # Check for uploaded PDB reference
+            if "upload" in text or "file" in text or "pdb file" in text:
+                pdb_source = "upload"
+            
+            # Parse parameters
+            num_designs = 5  # Default
+            temperature = 0.1  # Default
+            chain_ids = []
+            fixed_positions = []
+            
+            # Extract number of designs
+            designs_match = re.search(r'(\d+)\s*(?:designs?|sequences?)', text)
+            if designs_match:
+                num_designs = min(max(1, int(designs_match.group(1))), 20)
+            
+            # Extract temperature
+            temp_match = re.search(r'temperature[:\s]*([0-9.]+)', text)
+            if temp_match:
+                temp_val = float(temp_match.group(1))
+                temperature = min(max(0.0, temp_val), 1.0)
+            
+            # Extract chain IDs
+            chain_match = re.search(r'chain[s]?[:\s]*([A-Z,\s]+)', text, re.I)
+            if chain_match:
+                chain_ids = [c.strip().upper() for c in chain_match.group(1).split(',') if c.strip()]
+            
+            # Extract fixed positions
+            fixed_match = re.search(r'fixed[:\s]*\[([A-Z0-9,\s]+)\]', text, re.I)
+            if fixed_match:
+                fixed_positions = [p.strip() for p in fixed_match.group(1).split(',') if p.strip()]
+            else:
+                # Try pattern like "fix A45, A46"
+                fixed_match2 = re.search(r'fix(?:ed)?[:\s]+([A-Z]\d+(?:,\s*[A-Z]\d+)*)', text, re.I)
+                if fixed_match2:
+                    fixed_positions = [p.strip() for p in fixed_match2.group(1).split(',') if p.strip()]
+            
+            # Check available sources
+            available_sources = self.list_available_sources()
+            has_rfdiffusion = len(available_sources.get("rfdiffusion", [])) > 0
+            has_uploads = len(available_sources.get("uploads", [])) > 0
+            
+            # If no source is available, default to upload
+            if pdb_source == "rfdiffusion" and not has_rfdiffusion:
+                pdb_source = "upload"
+                source_info = {}
+            
+            # Create confirmation response
+            design_info = {
+                "summary": f"Redesigning sequence for backbone structure",
+                "notes": []
+            }
+            
+            if pdb_source == "rfdiffusion":
+                design_info["summary"] = f"Using RFdiffusion result {source_info.get('jobId', 'unknown')}"
+            elif pdb_source == "upload":
+                design_info["notes"].append("Please upload a PDB file to continue")
+            
+            if chain_ids:
+                design_info["notes"].append(f"Designing chains: {', '.join(chain_ids)}")
+            if fixed_positions:
+                design_info["notes"].append(f"Fixed positions: {', '.join(fixed_positions)}")
+            
+            return {
+                "action": "confirm_proteinmpnn_design",
+                "pdbSource": pdb_source,
+                "source": source_info if source_info else {},
+                "parameters": {
+                    "numDesigns": num_designs,
+                    "temperature": temperature,
+                    "chainIds": chain_ids if chain_ids else [],
+                    "fixedPositions": fixed_positions if fixed_positions else [],
+                },
+                "design_info": design_info,
+                "message": f"Ready to run ProteinMPNN with {num_designs} design(s). Please confirm backbone source and parameters."
+            }
+            
+        except Exception as e:
+            logger.error(f"Error processing ProteinMPNN design request: {e}")
+            return {
+                "error": str(e),
+                "action": "error"
+            }
+
     async def submit_design_job(self, job_data: Dict[str, Any]) -> None:
         job_id = job_data.get("jobId")
         if not job_id:

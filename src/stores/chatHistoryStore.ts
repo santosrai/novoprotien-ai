@@ -15,6 +15,7 @@ export interface ChatSession {
   createdAt: Date;
   lastModified: Date;
   messages: Message[];
+  visualizationCode?: string; // Code for this session's 3D visualization
   metadata: {
     messageCount: number;
     lastActivity: Date;
@@ -54,6 +55,10 @@ interface ChatHistoryState {
   toggleSessionSelection: (sessionId: string) => void;
   selectAllSessions: () => void;
   clearSelection: () => void;
+  
+  // Visualization Code Management
+  saveVisualizationCode: (sessionId: string, code: string) => void;
+  getVisualizationCode: (sessionId: string) => string | undefined;
   
   // Utility Actions
   getActiveSession: () => ChatSession | null;
@@ -164,6 +169,22 @@ export const useChatHistoryStore = create<ChatHistoryState>()(
           recentSessionIds: updatedRecentIds,
           isHistoryPanelOpen: false, // Close panel after selection
         });
+      },
+      
+      saveVisualizationCode: (sessionId, code) => {
+        set((state) => ({
+          sessions: state.sessions.map(session =>
+            session.id === sessionId
+              ? { ...session, visualizationCode: code, lastModified: new Date() }
+              : session
+          )
+        }));
+      },
+      
+      getVisualizationCode: (sessionId) => {
+        const { sessions } = get();
+        const session = sessions.find(s => s.id === sessionId);
+        return session?.visualizationCode;
       },
       
       deleteSession: (sessionId) => {
