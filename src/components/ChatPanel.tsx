@@ -198,7 +198,7 @@ export const ChatPanel: React.FC = () => {
   const clearSelections = useAppStore(state => state.clearSelections);
 
   // Chat history store
-  const { createSession, activeSessionId } = useChatHistoryStore();
+  const { createSession, activeSessionId, saveVisualizationCode, getVisualizationCode } = useChatHistoryStore();
   const { activeSession, addMessage } = useActiveSession();
 
   // Agent and model settings
@@ -209,6 +209,7 @@ export const ChatPanel: React.FC = () => {
   const [lastAgentId, setLastAgentId] = useState<string>('');
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const previousSessionIdRef = useRef<string | null>(null);
 
   // Initialize session if none exists
   useEffect(() => {
@@ -216,6 +217,44 @@ export const ChatPanel: React.FC = () => {
       createSession();
     }
   }, [activeSessionId, createSession]);
+
+  // Initialize previous session ID ref on mount
+  useEffect(() => {
+    if (activeSessionId && !previousSessionIdRef.current) {
+      previousSessionIdRef.current = activeSessionId;
+    }
+  }, [activeSessionId]);
+
+  // Restore visualization code when switching sessions
+  useEffect(() => {
+    if (!activeSessionId) return;
+    
+    // Save current code to previous session before switching
+    if (previousSessionIdRef.current && previousSessionIdRef.current !== activeSessionId) {
+      const codeToSave = currentCode?.trim() || '';
+      if (codeToSave) {
+        saveVisualizationCode(previousSessionIdRef.current, codeToSave);
+        console.log('[ChatPanel] Saved code to previous session:', previousSessionIdRef.current);
+      }
+    }
+    
+    // Restore code for new session
+    const savedCode = getVisualizationCode(activeSessionId);
+    if (savedCode && savedCode.trim()) {
+      console.log('[ChatPanel] Restoring visualization code for session:', activeSessionId);
+      setCurrentCode(savedCode);
+    } else {
+      // Clear code if session has no saved visualization
+      if (currentCode && currentCode.trim()) {
+        console.log('[ChatPanel] Clearing code for session without visualization:', activeSessionId);
+        setCurrentCode('');
+      }
+    }
+    
+    // Update previous session ID
+    previousSessionIdRef.current = activeSessionId;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeSessionId, getVisualizationCode, saveVisualizationCode]);
 
   // Fetch agents and models on mount
   useEffect(() => {
@@ -1197,6 +1236,12 @@ try {
 
       // Sync code into editor
       setCurrentCode(code);
+      
+      // Save code to active session
+      if (activeSessionId) {
+        saveVisualizationCode(activeSessionId, code);
+        console.log('[ChatPanel] Saved visualization code to session:', activeSessionId);
+      }
 
       const aiResponse: Message = {
         id: uuidv4(),
