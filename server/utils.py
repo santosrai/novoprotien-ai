@@ -33,6 +33,11 @@ def get_text_from_completion(completion: Any) -> str:
     Join all text blocks into a single string.
     """
     try:
+          # Check for OpenAI response format
+        if hasattr(completion, 'choices') and completion.choices:
+            return completion.choices[0].message.content or ""
+
+        # Anthropic response format
         content = completion.content or []
         parts = []
         for block in content:

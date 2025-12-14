@@ -1,7 +1,8 @@
 import os
+import json
+import requests
+from pathlib import Path
 from typing import Any, Dict, List, Optional
-
-from anthropic import Anthropic
 
 try:
     from .utils import log_line, get_text_from_completion, strip_code_fences, trim_history
@@ -13,18 +14,191 @@ except ImportError:
     from uniprot import search_uniprot
 
 
-_anthropic_client: Optional[Anthropic] = None
+_openrouter_api_key: Optional[str] = None
+_model_map: Optional[Dict[str, str]] = None
 
-def _get_anthropic_client() -> Anthropic:
-    global _anthropic_client
-    api_key = os.getenv("ANTHROPIC_API_KEY")
-    if not api_key:
-        raise RuntimeError(
-            "Missing ANTHROPIC_API_KEY; set it in your environment or .env and restart the server."
-        )
-    if _anthropic_client is None:
-        _anthropic_client = Anthropic(api_key=api_key)
-    return _anthropic_client
+
+def _load_model_map() -> Dict[str, str]:
+    """Load model ID mappings from models_config.json.
+    Maps legacy Anthropic model IDs to OpenRouter model IDs.
+    """
+    global _model_map
+    if _model_map is not None:
+        return _model_map
+    
+    _model_map = {}
+    
+    # Try to load from models_config.json
+    config_path = Path(__file__).parent / "models_config.json"
+    try:
+        if config_path.exists():
+            with open(config_path, 'r') as f:
+                config = json.load(f)
+                models = config.get("models", [])
+                
+                # Create mapping from legacy IDs to OpenRouter IDs
+                # Map common legacy Anthropic model IDs to their OpenRouter equivalents
+                legacy_to_openrouter = {
+                    "claude-3-5-sonnet-20241022": "anthropic/claude-3.5-sonnet",
+                    "claude-3-5-sonnet-20240620": "anthropic/claude-3.5-sonnet",
+                    "claude-3-opus-20240229": "anthropic/claude-3-opus",
+                    "claude-3-sonnet-20240229": "anthropic/claude-3-sonnet",
+                    "claude-3-haiku-20240307": "anthropic/claude-3-haiku",
+                }
+                
+                # Add mappings from config file models (if they have legacy IDs)
+                for model in models:
+                    model_id = model.get("id", "")
+                    # If model ID is already in OpenRouter format, use it as-is
+                    if "/" in model_id:
+                        _model_map[model_id] = model_id
+                
+                # Add legacy mappings
+                _model_map.update(legacy_to_openrouter)
+                
+                log_line("runner:model_map", {"loaded": True, "count": len(_model_map)})
+        else:
+            log_line("runner:model_map", {"error": "models_config.json not found"})
+    except Exception as e:
+        log_line("runner:model_map", {"error": str(e)})
+        # Fallback to basic mappings
+        _model_map = {
+            "claude-3-5-sonnet-20241022": "anthropic/claude-3.5-sonnet",
+            "claude-3-5-sonnet-20240620": "anthropic/claude-3.5-sonnet",
+            "claude-3-opus-20240229": "anthropic/claude-3-opus",
+            "claude-3-sonnet-20240229": "anthropic/claude-3-sonnet",
+            "claude-3-haiku-20240307": "anthropic/claude-3-haiku",
+        }
+    
+    return _model_map
+
+
+def _get_openrouter_api_key(api_key: Optional[str] = None) -> Optional[str]:    
+    """Get OpenRouter API key. Supports OPENROUTER_API_KEY or ANTHROPIC_API_KEY env vars."""
+    global _openrouter_api_key
+    
+    # If a specific key is provided (e.g. from client request), use it
+    if api_key:
+        return api_key
+
+    # Return cached key if available
+    if _openrouter_api_key:
+        return _openrouter_api_key
+
+    # Check for OpenRouter key first in env
+    openrouter_key = os.getenv("OPENROUTER_API_KEY")
+    if openrouter_key:
+        _openrouter_api_key = openrouter_key
+        return _openrouter_api_key
+
+    # Fallback to ANTHROPIC_API_KEY (may be OpenRouter key)
+    env_api_key = os.getenv("ANTHROPIC_API_KEY")
+    if env_api_key:
+        _openrouter_api_key = env_api_key
+        return _openrouter_api_key
+    
+    return None
+
+
+def _call_openrouter_api(
+    model: str,
+    messages: List[Dict[str, Any]],
+    max_tokens: int,
+    temperature: float,
+    api_key: Optional[str] = None,
+) -> Any:
+    """Make a direct API call to OpenRouter using requests.
+    
+    Returns a response object compatible with get_text_from_completion().
+    """
+    key = _get_openrouter_api_key(api_key)
+    if not key:
+        raise RuntimeError("OpenRouter API key is missing. Please set OPENROUTER_API_KEY or ANTHROPIC_API_KEY in your .env file.")
+    
+    url = "https://openrouter.ai/api/v1/chat/completions"
+    headers = {
+        "Authorization": f"Bearer {key}",
+        "HTTP-Referer": os.getenv("APP_ORIGIN", "http://localhost:3000"),
+        "X-Title": "NovoProtein AI",
+        "Content-Type": "application/json",
+    }
+    
+    payload = {
+        "model": model,
+        "messages": messages,
+        "max_tokens": max_tokens,
+        "temperature": temperature,
+    }
+    
+    try:
+        response = requests.post(url, headers=headers, json=payload)
+        response.raise_for_status()
+        
+        # Parse response and create a compatible object
+        data = response.json()
+        
+        # Create a simple object that mimics OpenAI/OpenRouter response format
+        class CompletionResponse:
+            def __init__(self, data):
+                self.choices = [Choice(data.get("choices", [{}])[0] if data.get("choices") else {})]
+        
+        class Choice:
+            def __init__(self, choice_data):
+                self.message = Message(choice_data.get("message", {}))
+        
+        class Message:
+            def __init__(self, message_data):
+                self.content = message_data.get("content", "")
+        
+        return CompletionResponse(data)
+    except requests.exceptions.HTTPError as e:
+        # Extract the actual error message from OpenRouter's response
+        error_detail = str(e)
+        status_code = None
+        
+        if hasattr(e, 'response') and e.response is not None:
+            status_code = e.response.status_code
+            try:
+                error_data = e.response.json()
+                if isinstance(error_data, dict):
+                    # OpenRouter error format: {"error": {"message": "...", "type": "...", ...}}
+                    if 'error' in error_data:
+                        error_obj = error_data['error']
+                        if isinstance(error_obj, dict) and 'message' in error_obj:
+                            error_detail = error_obj['message']
+                        elif isinstance(error_obj, str):
+                            error_detail = error_obj
+                    # Sometimes the error is at the top level
+                    elif 'message' in error_data:
+                        error_detail = error_data['message']
+            except (ValueError, KeyError, AttributeError):
+                # If JSON parsing fails, try to get text response
+                try:
+                    error_text = e.response.text
+                    if error_text:
+                        error_detail = f"{error_detail} (Response: {error_text[:200]})"
+                except:
+                    pass
+        
+        log_line("runner:openrouter:error", {
+            "error": error_detail,
+            "status": status_code,
+            "model": model
+        })
+        raise RuntimeError(f"OpenRouter API call failed: {error_detail}")
+    except requests.exceptions.RequestException as e:
+        log_line("runner:openrouter:error", {
+            "error": str(e),
+            "status": getattr(e, 'response', {}).status_code if hasattr(e, 'response') and e.response is not None else None,
+            "model": model
+        })
+        raise RuntimeError(f"OpenRouter API call failed: {str(e)}")
+
+
+def _map_model_id(model_id: str) -> str:
+    """Map legacy model ID to OpenRouter model ID using models_config.json"""
+    model_map = _load_model_map()
+    return model_map.get(model_id, model_id)
 
 
 async def run_agent(
@@ -35,9 +209,14 @@ async def run_agent(
     history: Optional[List[Dict[str, Any]]],
     selection: Optional[Dict[str, Any]],
     selections: Optional[List[Dict[str, Any]]] = None,
+    model_override: Optional[str] = None,
 ) -> Dict[str, Any]:
-    model = os.getenv(agent.get("modelEnv", "")) or agent.get("defaultModel")
-    base_log = {"model": model, "agentId": agent.get("id")}
+    # Use model_override if provided, otherwise fall back to agent's default
+    if model_override:
+        model = model_override
+    else:
+        model = os.getenv(agent.get("modelEnv", "")) or agent.get("defaultModel")
+    base_log = {"model": model, "agentId": agent.get("id"), "model_override": bool(model_override)}
 
     # Special handling for AlphaFold agent - use handler instead of LLM
     if agent.get("id") == "alphafold-agent":
@@ -119,8 +298,6 @@ async def run_agent(
             else ""
         )
 
-        client = _get_anthropic_client()
-        
         # Enhanced system prompt with RAG for MVS agent
         system_prompt = agent.get("system")
         if agent.get("id") == "mvs-builder":
@@ -135,13 +312,21 @@ async def run_agent(
                 log_line("agent:mvs:rag_error", {"error": str(e)})
                 # Fallback to base prompt if RAG fails
         
+        # Map model ID to OpenRouter format
+        openrouter_model = _map_model_id(model)
+        
+        # Prepare messages with system prompt
+        messages = []
+        if system_prompt:
+            messages.append({"role": "system", "content": system_prompt})
+        messages.append({"role": "user", "content": context_prefix + prior_dialogue})
+        
         log_line("agent:code:req", {**base_log, "hasCurrentCode": bool(current_code and str(current_code).strip()), "userText": user_text})
-        completion = client.messages.create(
-            model=model,
+        completion = _call_openrouter_api(
+            model=openrouter_model,
+            messages=messages,
             max_tokens=800,
             temperature=0.2,
-            system=system_prompt,
-            messages=[{"role": "user", "content": context_prefix + prior_dialogue}],
         )
         content_text = get_text_from_completion(completion)
         code = strip_code_fences(content_text)
@@ -150,18 +335,19 @@ async def run_agent(
         if violates_whitelist(code):
             log_line("safety:whitelist", {"blocked": True})
             # Ask once to regenerate within constraints
-            completion2 = client.messages.create(
-                model=model,
+            safety_messages = []
+            if agent.get("system"):
+                safety_messages.append({"role": "system", "content": agent.get("system")})
+            safety_messages.append({
+                "role": "user",
+                "content": context_prefix
+                + "\n\nThe code you returned included calls that are not in the whitelist. Regenerate strictly using only the allowed builder methods.",
+            })
+            completion2 = _call_openrouter_api(
+                model=openrouter_model,
+                messages=safety_messages,
                 max_tokens=800,
                 temperature=0.2,
-                system=agent.get("system"),
-                messages=[
-                    {
-                        "role": "user",
-                        "content": context_prefix
-                        + "\n\nThe code you returned included calls that are not in the whitelist. Regenerate strictly using only the allowed builder methods.",
-                    }
-                ],
             )
             code = strip_code_fences(get_text_from_completion(completion2))
 
@@ -223,13 +409,22 @@ async def run_agent(
     messages.append({"role": "user", "content": user_text})
 
     log_line("agent:text:req", {**base_log, "hasSelection": bool(selection), "userText": user_text})
-    client = _get_anthropic_client()
-    completion = client.messages.create(
-        model=model,
+    
+    # Map model ID to OpenRouter format
+    openrouter_model = _map_model_id(model)
+    
+    # Prepare messages with system prompt
+    openrouter_messages = []
+    system_prompt = agent.get("system")
+    if system_prompt:
+        openrouter_messages.append({"role": "system", "content": system_prompt})
+    openrouter_messages.extend(messages)
+        
+    completion = _call_openrouter_api(
+        model=openrouter_model,
+        messages=openrouter_messages,
         max_tokens=1000,
         temperature=0.5,
-        system=agent.get("system"),
-        messages=messages,
     )
     text = get_text_from_completion(completion)
     log_line("agent:text:res", {"length": len(text), "preview": text[:400]})

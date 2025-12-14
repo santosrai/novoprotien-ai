@@ -1,8 +1,13 @@
+import asyncio
 import os
 import traceback
+import time
+import json
 from typing import Any, Dict
+from pathlib import Path
 
 from dotenv import load_dotenv
+import httpx
 
 # Load env as early as possible, before importing modules that read env at import-time
 # Load .env from project root (one level up from server directory)
@@ -34,13 +39,13 @@ if nvidia_key:
 else:
     print("Warning: NVCF_RUN_KEY not found in environment")
 
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, Request, UploadFile, File, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from slowapi import Limiter
 from slowapi.util import get_remote_address
 from slowapi.middleware import SlowAPIMiddleware
 from slowapi.errors import RateLimitExceeded
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, FileResponse
 
 try:
     from .agents import agents, list_agents
@@ -49,14 +54,22 @@ try:
     from .utils import log_line, spell_fix
     from .alphafold_handler import alphafold_handler
     from .rfdiffusion_handler import rfdiffusion_handler
+    from .proteinmpnn_handler import proteinmpnn_handler
+    from .pdb_storage import save_uploaded_pdb, get_uploaded_pdb
 except ImportError:
     # When running directly (not as module)
+    import sys
+    current_dir = os.path.dirname(os.path.abspath(__file__))
+    if current_dir not in sys.path:
+        sys.path.insert(0, current_dir)
     from agents import agents, list_agents
     from router_graph import init_router, routerGraph
     from runner import run_agent
     from utils import log_line, spell_fix
     from alphafold_handler import alphafold_handler
     from rfdiffusion_handler import rfdiffusion_handler
+    from proteinmpnn_handler import proteinmpnn_handler
+    from pdb_storage import save_uploaded_pdb, get_uploaded_pdb
 
 DEBUG_API = os.getenv("DEBUG_API", "0") == "1"
 
@@ -108,6 +121,55 @@ def get_agents() -> Dict[str, Any]:
     return {"agents": list_agents()}
 
 
+# Cache for models config
+_models_config_cache: Dict[str, Any] = None
+
+
+def _load_models_config() -> Dict[str, Any]:
+    """Load models configuration from JSON file."""
+    global _models_config_cache
+    
+    if _models_config_cache is not None:
+        return _models_config_cache
+    
+    try:
+        # Get the server directory path
+        server_dir = Path(__file__).parent
+        config_path = server_dir / "models_config.json"
+        
+        if not config_path.exists():
+            log_line("models_config_not_found", {"path": str(config_path)})
+            return {"models": []}
+        
+        with open(config_path, 'r', encoding='utf-8') as f:
+            config = json.load(f)
+        
+        _models_config_cache = config
+        log_line("models_config_loaded", {"count": len(config.get("models", []))})
+        return config
+        
+    except json.JSONDecodeError as e:
+        log_line("models_config_invalid_json", {"error": str(e)})
+        return {"models": []}
+    except Exception as e:
+        log_line("models_config_load_error", {"error": str(e), "trace": traceback.format_exc()})
+        return {"models": []}
+
+
+@app.get("/api/models")
+@limiter.limit("30/minute")
+async def get_models(request: Request) -> Dict[str, Any]:
+    """Get available models from configuration file."""
+    config = _load_models_config()
+    models = config.get("models", [])
+    
+    # Sort by provider, then by name
+    models.sort(key=lambda x: (x.get("provider", "Other"), x.get("name", "")))
+    
+    log_line("models_returned", {"count": len(models)})
+    return {"models": models}
+
+
 @app.post("/api/agents/invoke")
 @limiter.limit("30/minute")
 async def invoke(request: Request):
@@ -144,39 +206,56 @@ async def route(request: Request):
             return {"error": "invalid_input"}
         input_text = spell_fix(input_text)
 
+        # Check for manual agent override
+        manual_agent_id = body.get("agentId")
+        model_override = body.get("model")
+        
         # Log the input for debugging
         log_line("agent_route_input", {
             "input": input_text,
             "input_length": len(input_text),
             "has_selection": bool(body.get("selection")),
-            "has_code": bool(body.get("currentCode"))
+            "has_code": bool(body.get("currentCode")),
+            "manual_agent": manual_agent_id,
+            "model_override": model_override
         })
         
-        routed = await routerGraph.ainvoke(
-            {
-                "input": input_text,
-                "selection": body.get("selection"),
-                "selections": body.get("selections"),
-                "currentCode": body.get("currentCode"),
-                "history": body.get("history"),
-            }
-        )
-        agent_id = routed.get("routedAgentId")
+        # If agentId is provided, skip routing and use specified agent
+        if manual_agent_id:
+            if manual_agent_id not in agents:
+                return {"error": "invalid_agent_id", "agentId": manual_agent_id}
+            agent_id = manual_agent_id
+            reason = f"Manually selected: {agents[agent_id].get('name', agent_id)}"
+        else:
+            # Use router to determine agent
+            routed = await routerGraph.ainvoke(
+                {
+                    "input": input_text,
+                    "selection": body.get("selection"),
+                    "selections": body.get("selections"),
+                    "currentCode": body.get("currentCode"),
+                    "history": body.get("history"),
+                }
+            )
+            agent_id = routed.get("routedAgentId")
+            reason = routed.get("reason")
         
         log_line("agent_route_result", {
             "input": input_text,
             "agentId": agent_id,
-            "reason": routed.get("reason"),
-            "is_alphafold": agent_id == "alphafold-agent"
+            "reason": reason,
+            "is_alphafold": agent_id == "alphafold-agent",
+            "manual_override": bool(manual_agent_id)
         })
         
         if not agent_id:
-            return {"error": "router_no_decision", "reason": routed.get("reason")}
-        log_line("router", {"agentId": agent_id, "reason": routed.get("reason")})
+            return {"error": "router_no_decision", "reason": reason}
+        log_line("router", {"agentId": agent_id, "reason": reason})
         log_line("agent_executing", {
             "agentId": agent_id,
             "agent_kind": agents[agent_id].get("kind"),
-            "input": input_text
+            "input": input_text,
+            "model_override": model_override
         })
         
         res = await run_agent(
@@ -186,6 +265,7 @@ async def route(request: Request):
             history=body.get("history"),
             selection=body.get("selection"),
             selections=body.get("selections"),
+            model_override=model_override,
         )
         
         log_line("agent_completed", {
@@ -196,7 +276,7 @@ async def route(request: Request):
             "text_length": len(res.get("text", "")) if res.get("text") else 0
         })
         
-        return {"agentId": agent_id, **res, "reason": routed.get("reason")}
+        return {"agentId": agent_id, **res, "reason": reason}
     except Exception as e:
         log_line("agent_route_failed", {"error": str(e), "trace": traceback.format_exc()})
         content = {"error": "agent_route_failed"}
@@ -307,6 +387,203 @@ async def alphafold_cancel(request: Request, job_id: str):
     except Exception as e:
         log_line("alphafold_cancel_failed", {"error": str(e), "trace": traceback.format_exc()})
         content = {"error": "alphafold_cancel_failed"}
+        if DEBUG_API:
+            content["detail"] = str(e)
+        return JSONResponse(status_code=500, content=content)
+
+
+# PDB upload utilities -----------------------------------------------------
+
+
+@app.post("/api/upload/pdb")
+@limiter.limit("20/minute")
+async def upload_pdb(request: Request, file: UploadFile = File(...)):
+    _ = request
+    try:
+        contents = await file.read()
+        metadata = save_uploaded_pdb(file.filename, contents)
+        log_line(
+            "pdb_upload_success",
+            {
+                "filename": file.filename,
+                "file_id": metadata["file_id"],
+                "size": metadata.get("size"),
+                "chains": metadata.get("chains"),
+            },
+        )
+        return {
+            "status": "success",
+            "message": "File uploaded",
+            "file_info": {
+                "filename": metadata.get("filename"),
+                "file_id": metadata.get("file_id"),
+                "file_url": f"/api/upload/pdb/{metadata.get('file_id')}",
+                "file_path": metadata.get("stored_path"),
+                "size": metadata.get("size"),
+                "atoms": metadata.get("atoms"),
+                "chains": metadata.get("chains", []),
+            },
+        }
+    except HTTPException as exc:
+        raise exc
+    except Exception as e:
+        log_line("pdb_upload_failed", {"error": str(e), "trace": traceback.format_exc()})
+        raise HTTPException(status_code=500, detail="Failed to upload PDB file")
+
+
+@app.get("/api/upload/pdb/{file_id}")
+@limiter.limit("30/minute")
+async def download_uploaded_pdb(request: Request, file_id: str):
+    _ = request
+    metadata = get_uploaded_pdb(file_id)
+    if not metadata:
+        raise HTTPException(status_code=404, detail="Uploaded file not found")
+    return FileResponse(
+        metadata["absolute_path"],
+        media_type="chemical/x-pdb",
+        filename=metadata.get("filename") or f"{file_id}.pdb",
+    )
+
+
+# ProteinMPNN endpoints ---------------------------------------------------
+
+
+@app.get("/api/proteinmpnn/sources")
+@limiter.limit("30/minute")
+async def proteinmpnn_sources(request: Request):
+    _ = request
+    try:
+        sources = proteinmpnn_handler.list_available_sources()
+        return {"status": "success", "sources": sources}
+    except Exception as e:
+        log_line("proteinmpnn_sources_failed", {"error": str(e), "trace": traceback.format_exc()})
+        content = {"error": "proteinmpnn_sources_failed"}
+        if DEBUG_API:
+            content["detail"] = str(e)
+        return JSONResponse(status_code=500, content=content)
+
+
+@app.post("/api/proteinmpnn/design")
+@limiter.limit("5/minute")
+async def proteinmpnn_design(request: Request):
+    body = await request.json()
+    job_id = body.get("jobId")
+
+    if not job_id:
+        return JSONResponse(
+            status_code=400,
+            content={
+                "status": "error",
+                "error": "Missing jobId",
+                "errorCode": "MISSING_PARAMETERS",
+                "userMessage": "Required parameters are missing",
+            },
+        )
+
+    job_payload = {
+        "jobId": job_id,
+        "parameters": body.get("parameters", {}),
+        "pdbSource": body.get("pdbSource"),
+        "sourceJobId": body.get("sourceJobId"),
+        "uploadId": body.get("uploadId"),
+        "pdbPath": body.get("pdbPath"),
+        "pdbContent": body.get("pdbContent"),
+        "source": body.get("source"),
+    }
+
+    try:
+        proteinmpnn_handler.validate_job(job_payload)
+    except Exception as e:
+        log_line(
+            "proteinmpnn_validation_failed",
+            {"error": str(e), "jobId": job_id},
+        )
+        return JSONResponse(
+            status_code=400,
+            content={
+                "status": "error",
+                "error": str(e),
+                "errorCode": "INVALID_INPUT",
+                "userMessage": "ProteinMPNN request is invalid",
+            },
+        )
+
+    try:
+        proteinmpnn_handler.active_jobs[job_id] = "queued"
+    except Exception:
+        pass
+
+    log_line(
+        "proteinmpnn_request",
+        {
+            "jobId": job_id,
+            "pdbSource": job_payload.get("pdbSource"),
+            "sourceJobId": job_payload.get("sourceJobId"),
+            "uploadId": job_payload.get("uploadId"),
+        },
+    )
+
+    asyncio.create_task(proteinmpnn_handler.submit_design_job(job_payload))
+
+    return JSONResponse(
+        status_code=202,
+        content={
+            "status": "accepted",
+            "jobId": job_id,
+            "message": "ProteinMPNN job accepted. Poll /api/proteinmpnn/status/{job_id} for updates.",
+        },
+    )
+
+
+@app.get("/api/proteinmpnn/status/{job_id}")
+@limiter.limit("30/minute")
+async def proteinmpnn_status(request: Request, job_id: str):
+    try:
+        status = proteinmpnn_handler.get_job_status(job_id)
+        return status
+    except Exception as e:
+        log_line("proteinmpnn_status_failed", {"error": str(e), "trace": traceback.format_exc()})
+        content = {"error": "proteinmpnn_status_failed"}
+        if DEBUG_API:
+            content["detail"] = str(e)
+        return JSONResponse(status_code=500, content=content)
+
+
+@app.get("/api/proteinmpnn/result/{job_id}")
+@limiter.limit("30/minute")
+async def proteinmpnn_result(request: Request, job_id: str, fmt: str = "json"):
+    try:
+        result = proteinmpnn_handler.get_job_result(job_id)
+        if not result:
+            raise HTTPException(status_code=404, detail="ProteinMPNN result not found")
+
+        if fmt == "json":
+            return result
+        if fmt == "fasta":
+            fasta_path = proteinmpnn_handler.results_dir / job_id / "designed_sequences.fasta"
+            if not fasta_path.exists():
+                raise HTTPException(status_code=404, detail="FASTA output not available")
+            return FileResponse(
+                fasta_path,
+                media_type="text/plain",
+                filename=f"proteinmpnn_{job_id}.fasta",
+            )
+        if fmt == "raw":
+            raw_path = proteinmpnn_handler.results_dir / job_id / "raw_data.json"
+            if raw_path.exists():
+                return FileResponse(
+                    raw_path,
+                    media_type="application/json",
+                    filename=f"proteinmpnn_{job_id}_raw.json",
+                )
+            raise HTTPException(status_code=404, detail="Raw output not available")
+
+        raise HTTPException(status_code=400, detail="Unsupported format requested")
+    except HTTPException as exc:
+        raise exc
+    except Exception as e:
+        log_line("proteinmpnn_result_failed", {"error": str(e), "trace": traceback.format_exc()})
+        content = {"error": "proteinmpnn_result_failed"}
         if DEBUG_API:
             content["detail"] = str(e)
         return JSONResponse(status_code=500, content=content)
@@ -457,6 +734,8 @@ async def chat(request: Request):
         )
         return res
     except Exception as e:
+        if "Anthropic API key is missing" in str(e):
+            return JSONResponse(status_code=503, content={"error": "api_key_missing", "message": str(e)})
         log_line("chat_failed", {"error": str(e), "trace": traceback.format_exc()})
         content = {"error": "chat_failed"}
         if DEBUG_API:

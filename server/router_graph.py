@@ -69,7 +69,35 @@ class SimpleRouterGraph:
         )
         if any(k in low for k in alphafold_keywords) or predicts_structure_signal:
             return {"routedAgentId": "alphafold-agent", "reason": "rule:alphafold-folding"}
-        
+
+        proteinmpnn_keywords = [
+            "proteinmpnn",
+            "protein mpnn",
+            "inverse folding",
+            "inverse-folding",
+            "sequence design",
+            "design sequence",
+            "redesign sequence",
+            "sequence redesign",
+            "fix backbone",
+            "stabilize sequence",
+        ]
+        structure_keywords = [
+            "pdb",
+            "structure",
+            "backbone",
+            "scaffold",
+            "rf_",
+            "rf-",
+            "fold",
+        ]
+        has_sequence_design = ("design" in low or "redesign" in low or "optimize" in low) and (
+            "sequence" in low or "seq" in low or "inverse" in low
+        )
+        has_structure_context = any(k in low for k in structure_keywords)
+        if any(k in low for k in proteinmpnn_keywords) or (has_sequence_design and has_structure_context):
+            return {"routedAgentId": "proteinmpnn-agent", "reason": "rule:proteinmpnn"}
+
         # RFdiffusion protein design rule
         rfdiffusion_keywords = ["design", "create", "generate", "build", "rfdiffusion", "rf-diffusion", "protein design", "design protein", "create protein", "generate protein", "scaffold", "motif scaffolding", "hotspot design", "de novo", "new protein"]
         if any(k in low for k in rfdiffusion_keywords):
@@ -111,10 +139,17 @@ class SimpleRouterGraph:
             code_keywords = [
                 "show ", "display ", "visualize", "render", "color", "colour", "cartoon", "surface", "ball-and-stick", "water", "ligand", "focus", "zoom", "load", "pdb", "highlight", "chain", "view", "representation",
             ]
-            
+            proteinmpnn_keywords = ["proteinmpnn", "inverse folding", "sequence design", "design sequence", "fix backbone"]
+            structure_keywords = ["pdb", "structure", "rf_", "backbone", "fold"]
+
             has_mvs = any(k in low for k in mvs_keywords)
             has_code = any(k in low for k in code_keywords)
-            
+            has_proteinmpnn = any(k in low for k in proteinmpnn_keywords) or (
+                "design" in low and "sequence" in low and any(s in low for s in structure_keywords)
+            )
+
+            if has_proteinmpnn:
+                return {"routedAgentId": "proteinmpnn-agent", "reason": "default:heuristic-proteinmpnn"}
             if has_mvs:
                 chosen = "mvs-builder"
             elif has_code:
@@ -153,11 +188,18 @@ class SimpleRouterGraph:
             code_keywords = [
                 "show ", "display ", "visualize", "render", "color", "colour", "cartoon", "surface", "ball-and-stick", "water", "ligand", "focus", "zoom", "load", "pdb", "highlight", "chain", "view", "representation",
             ]
-            
+            proteinmpnn_keywords = ["proteinmpnn", "inverse folding", "sequence design", "design sequence", "fix backbone"]
+            structure_keywords = ["pdb", "structure", "rf_", "backbone", "fold"]
+
             has_mvs = any(k in low for k in mvs_keywords)
             has_code = any(k in low for k in code_keywords)
-            
-            if has_mvs:
+            has_proteinmpnn = any(k in low for k in proteinmpnn_keywords) or (
+                "design" in low and "sequence" in low and any(s in low for s in structure_keywords)
+            )
+
+            if has_proteinmpnn:
+                chosen = "proteinmpnn-agent"
+            elif has_mvs:
                 chosen = "mvs-builder"
             elif has_code:
                 chosen = "code-builder"
@@ -177,4 +219,3 @@ routerGraph = SimpleRouterGraph()
 
 async def init_router(agents: List[Dict[str, Any]]):
     await routerGraph.ainit(agents)
-

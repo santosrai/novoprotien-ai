@@ -14,6 +14,11 @@ import aiohttp
 import ssl
 import logging
 
+try:
+    import certifi
+except ImportError:  # pragma: no cover
+    certifi = None
+
 # Set up file logging for NIMS API calls
 def setup_nims_logging():
     """Set up file logging for NIMS API calls"""
@@ -189,6 +194,12 @@ class NIMSClient:
             ssl_context.verify_mode = ssl.CERT_NONE
             
             # Create connector with SSL context
+            if certifi is not None:
+                try:
+                    ssl_context.load_verify_locations(certifi.where())
+                except Exception as exc:  # pragma: no cover
+                    api_logger.warning("Failed to load certifi bundle: %s", exc)
+
             connector = aiohttp.TCPConnector(ssl=ssl_context)
             timeout = aiohttp.ClientTimeout(total=self.request_timeout)
             async with aiohttp.ClientSession(connector=connector, timeout=timeout) as session:

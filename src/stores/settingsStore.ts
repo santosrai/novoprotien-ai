@@ -12,21 +12,29 @@ export interface AppSettings {
     messageHistoryLimit: number; // Chat history limit
     showQuickPrompts: boolean;   // Show/hide quick start buttons
   };
+  api: {
+    key: string;                // API Key (Anthropic or OpenRouter)
+  };
   performance: {
     debugMode: boolean;         // Enhanced logging
     enableAnalytics: boolean;   // Usage tracking (for future use)
+  };
+  agent: {
+    selectedAgentId: string | null;  // null = auto-route
+    selectedModel: string | null;     // null = use agent default
   };
 }
 
 interface SettingsState {
   settings: AppSettings;
   isSettingsDialogOpen: boolean;
-  
+
   // Actions
   updateSettings: (updates: Partial<AppSettings>) => void;
   updateCodeEditorSettings: (updates: Partial<AppSettings['codeEditor']>) => void;
   updateUISettings: (updates: Partial<AppSettings['ui']>) => void;
   updatePerformanceSettings: (updates: Partial<AppSettings['performance']>) => void;
+  updateAgentSettings: (updates: Partial<AppSettings['agent']>) => void;
   resetSettings: () => void;
   setSettingsDialogOpen: (open: boolean) => void;
 }
@@ -55,6 +63,10 @@ try {
     debugMode: false,         // Disable debug logging by default
     enableAnalytics: false,   // Privacy-first approach
   },
+  agent: {
+    selectedAgentId: null,    // Auto-route by default
+    selectedModel: null,      // Use agent default by default
+  },
 };
 
 export const useSettingsStore = create<SettingsState>()(
@@ -62,7 +74,7 @@ export const useSettingsStore = create<SettingsState>()(
     (set) => ({
       settings: defaultSettings,
       isSettingsDialogOpen: false,
-      
+
       updateSettings: (updates) => set((state) => ({
         settings: {
           ...state.settings,
@@ -71,34 +83,42 @@ export const useSettingsStore = create<SettingsState>()(
           codeEditor: { ...state.settings.codeEditor, ...updates.codeEditor },
           ui: { ...state.settings.ui, ...updates.ui },
           performance: { ...state.settings.performance, ...updates.performance },
+          agent: { ...state.settings.agent, ...updates.agent },
         }
       })),
-      
+
       updateCodeEditorSettings: (updates) => set((state) => ({
         settings: {
           ...state.settings,
           codeEditor: { ...state.settings.codeEditor, ...updates }
         }
       })),
-      
+
       updateUISettings: (updates) => set((state) => ({
         settings: {
           ...state.settings,
           ui: { ...state.settings.ui, ...updates }
         }
       })),
-      
+
       updatePerformanceSettings: (updates) => set((state) => ({
         settings: {
           ...state.settings,
           performance: { ...state.settings.performance, ...updates }
         }
       })),
-      
+
+      updateAgentSettings: (updates) => set((state) => ({
+        settings: {
+          ...state.settings,
+          agent: { ...state.settings.agent, ...updates }
+        }
+      })),
+
       resetSettings: () => set({
         settings: defaultSettings
       }),
-      
+
       setSettingsDialogOpen: (open) => set({
         isSettingsDialogOpen: open
       }),
@@ -131,5 +151,11 @@ export const useUISettings = () => {
 export const usePerformanceSettings = () => {
   const settings = useSettingsStore((state) => state.settings.performance);
   const updateSettings = useSettingsStore((state) => state.updatePerformanceSettings);
+  return { settings, updateSettings };
+};
+
+export const useAgentSettings = () => {
+  const settings = useSettingsStore((state) => state.settings.agent);
+  const updateSettings = useSettingsStore((state) => state.updateAgentSettings);
   return { settings, updateSettings };
 };

@@ -12,13 +12,17 @@ interface ProgressTrackerProps {
   initialMessage?: string;
   onCancel?: () => void;
   className?: string;
+  title?: string;
+  eventName?: string;
 }
 
 export const ProgressTracker: React.FC<ProgressTrackerProps> = ({
   isVisible,
   initialMessage = 'Initializing...',
   onCancel,
-  className = ''
+  className = '',
+  title = 'AlphaFold2 Structure Prediction',
+  eventName = 'alphafold-progress'
 }) => {
   const [progress, setProgress] = useState<ProgressUpdate>({
     message: initialMessage,
@@ -37,12 +41,12 @@ export const ProgressTracker: React.FC<ProgressTrackerProps> = ({
       setProgressHistory(prev => [...prev, newUpdate]);
     };
 
-    window.addEventListener('alphafold-progress', handleProgressUpdate as EventListener);
-    
+    window.addEventListener(eventName, handleProgressUpdate as EventListener);
+
     return () => {
-      window.removeEventListener('alphafold-progress', handleProgressUpdate as EventListener);
+      window.removeEventListener(eventName, handleProgressUpdate as EventListener);
     };
-  }, []);
+  }, [eventName]);
 
   // Auto-hide after completion
   useEffect(() => {
@@ -123,7 +127,7 @@ export const ProgressTracker: React.FC<ProgressTrackerProps> = ({
         <div className="flex-1 min-w-0">
           <div className="flex items-center justify-between mb-2">
             <h4 className="text-sm font-medium text-gray-900">
-              AlphaFold2 Structure Prediction
+              {title}
             </h4>
             
             <div className="flex items-center space-x-2">
@@ -193,8 +197,11 @@ export const ProgressTracker: React.FC<ProgressTrackerProps> = ({
 };
 
 // Utility function to send progress updates
-export const sendProgressUpdate = (update: Partial<ProgressUpdate>) => {
-  const event = new CustomEvent('alphafold-progress', {
+export const sendProgressUpdate = (
+  update: Partial<ProgressUpdate>,
+  eventName: string = 'alphafold-progress'
+) => {
+  const event = new CustomEvent<ProgressUpdate>(eventName, {
     detail: {
       message: 'Processing...',
       progress: 0,
@@ -205,8 +212,23 @@ export const sendProgressUpdate = (update: Partial<ProgressUpdate>) => {
   window.dispatchEvent(event);
 };
 
-// Hook for managing AlphaFold progress
-export const useAlphaFoldProgress = () => {
+interface ProgressHookConfig {
+  eventName: string;
+  title: string;
+  startMessage: string;
+  successMessage: string;
+  errorMessage: string;
+  cancelMessage?: string;
+}
+
+const createProgressHook = ({
+  eventName,
+  title,
+  startMessage,
+  successMessage,
+  errorMessage,
+  cancelMessage = 'Job cancelled'
+}: ProgressHookConfig) => () => {
   const [isVisible, setIsVisible] = useState(false);
   const [currentJobId, setCurrentJobId] = useState<string | null>(null);
 
@@ -214,24 +236,24 @@ export const useAlphaFoldProgress = () => {
     setCurrentJobId(jobId);
     setIsVisible(true);
     sendProgressUpdate({
-      message: initialMessage || 'Starting protein folding...',
+      message: initialMessage || startMessage,
       progress: 0,
       status: 'running'
-    });
+    }, eventName);
   };
 
   const updateProgress = (message: string, progress: number) => {
-    sendProgressUpdate({ message, progress, status: 'running' });
+    sendProgressUpdate({ message, progress, status: 'running' }, eventName);
   };
 
-  const completeProgress = (message: string = 'Folding completed successfully!') => {
-    sendProgressUpdate({ message, progress: 100, status: 'completed' });
+  const completeProgress = (message: string = successMessage) => {
+    sendProgressUpdate({ message, progress: 100, status: 'completed' }, eventName);
     setTimeout(() => setIsVisible(false), 3000);
     setCurrentJobId(null);
   };
 
-  const errorProgress = (message: string = 'Folding failed') => {
-    sendProgressUpdate({ message, progress: 0, status: 'error' });
+  const errorProgress = (message: string = errorMessage) => {
+    sendProgressUpdate({ message, progress: 0, status: 'error' }, eventName);
     setTimeout(() => setIsVisible(false), 5000);
     setCurrentJobId(null);
   };
@@ -239,10 +261,10 @@ export const useAlphaFoldProgress = () => {
   const cancelProgress = () => {
     if (currentJobId) {
       sendProgressUpdate({ 
-        message: 'Folding cancelled', 
+        message: cancelMessage, 
         progress: 0, 
         status: 'cancelled' 
-      });
+      }, eventName);
       setCurrentJobId(null);
       setTimeout(() => setIsVisible(false), 2000);
     }
@@ -255,6 +277,27 @@ export const useAlphaFoldProgress = () => {
     updateProgress,
     completeProgress,
     errorProgress,
-    cancelProgress
+    cancelProgress,
+    eventName,
+    title
   };
 };
+
+// Hook for managing AlphaFold progress
+export const useAlphaFoldProgress = createProgressHook({
+  eventName: 'alphafold-progress',
+  title: 'AlphaFold2 Structure Prediction',
+  startMessage: 'Starting protein folding...',
+  successMessage: 'Folding completed successfully!',
+  errorMessage: 'Folding failed',
+  cancelMessage: 'Folding cancelled'
+});
+
+export const useProteinMPNNProgress = createProgressHook({
+  eventName: 'proteinmpnn-progress',
+  title: 'ProteinMPNN Sequence Design',
+  startMessage: 'Preparing sequence design...',
+  successMessage: 'Sequence design completed successfully!',
+  errorMessage: 'Sequence design failed',
+  cancelMessage: 'Sequence design cancelled'
+});
