@@ -734,7 +734,7 @@ async def chat(request: Request):
         )
         return res
     except Exception as e:
-        if "Anthropic API key is missing" in str(e):
+        if "OpenRouter API key is missing" in str(e):
             return JSONResponse(status_code=503, content={"error": "api_key_missing", "message": str(e)})
         log_line("chat_failed", {"error": str(e), "trace": traceback.format_exc()})
         content = {"error": "chat_failed"}
