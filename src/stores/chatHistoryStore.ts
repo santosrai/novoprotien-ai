@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 import { persist, createJSONStorage } from 'zustand/middleware';
 import { v4 as uuidv4 } from 'uuid';
+import { api } from '../utils/api';
 
 export interface Message {
   id: string;
@@ -16,6 +17,7 @@ export interface ChatSession {
   lastModified: Date;
   messages: Message[];
   visualizationCode?: string; // Code for this session's 3D visualization
+  isViewerVisible?: boolean; // Whether 3D viewer is visible for this session
   metadata: {
     messageCount: number;
     lastActivity: Date;
@@ -60,6 +62,10 @@ interface ChatHistoryState {
   saveVisualizationCode: (sessionId: string, code: string) => void;
   getVisualizationCode: (sessionId: string) => string | undefined;
   
+  // Viewer Visibility Management
+  saveViewerVisibility: (sessionId: string, visible: boolean) => void;
+  getViewerVisibility: (sessionId: string) => boolean | undefined;
+  
   // Utility Actions
   getActiveSession: () => ChatSession | null;
   getFilteredSessions: () => ChatSession[];
@@ -82,6 +88,27 @@ const generateSessionTitle = (messages: Message[]): string => {
   // Extract meaningful keywords for title
   const words = content.split(' ').slice(0, 8);
   return words.join(' ') + (content.length > words.join(' ').length ? '...' : '');
+};
+
+// Generate AI-powered title from messages
+const generateAITitle = async (messages: Message[]): Promise<string> => {
+  try {
+    console.log('[Title Generation] Calling API with messages:', messages.length);
+    const response = await api.post('/chat/generate-title', {
+      messages: messages.map(m => ({
+        type: m.type,
+        content: m.content,
+      })),
+    });
+    console.log('[Title Generation] API response:', response.data);
+    return response.data.title || 'New Chat';
+  } catch (error: any) {
+    console.error('[Title Generation] Failed to generate AI title:', error);
+    if (error.response) {
+      console.error('[Title Generation] API error response:', error.response.data);
+    }
+    return 'New Chat';
+  }
 };
 
 // Calculate estimated storage size
@@ -118,17 +145,10 @@ export const useChatHistoryStore = create<ChatHistoryState>()(
         const sessionId = uuidv4();
         const now = new Date();
         
-        // Create welcome message if no messages provided
-        const initialMessages = messages.length > 0 ? messages : [
-          {
-            id: uuidv4(),
-            content: 'Welcome to NovoProtein AI! Ask me to "show insulin" or "display hemoglobin".',
-            type: 'ai' as const,
-            timestamp: now
-          }
-        ];
+        // Don't create welcome message - start with empty messages
+        const initialMessages = messages.length > 0 ? messages : [];
         
-        const sessionTitle = title || generateSessionTitle(initialMessages);
+        const sessionTitle = title || generateSessionTitle(initialMessages) || 'New Chat';
         
         const newSession: ChatSession = {
           id: sessionId,
@@ -187,6 +207,22 @@ export const useChatHistoryStore = create<ChatHistoryState>()(
         return session?.visualizationCode;
       },
       
+      saveViewerVisibility: (sessionId, visible) => {
+        set((state) => ({
+          sessions: state.sessions.map(session =>
+            session.id === sessionId
+              ? { ...session, isViewerVisible: visible, lastModified: new Date() }
+              : session
+          )
+        }));
+      },
+      
+      getViewerVisibility: (sessionId) => {
+        const { sessions } = get();
+        const session = sessions.find(s => s.id === sessionId);
+        return session?.isViewerVisible;
+      },
+      
       deleteSession: (sessionId) => {
         set((state) => {
           const updatedSessions = state.sessions.filter(s => s.id !== sessionId);
@@ -222,6 +258,57 @@ export const useChatHistoryStore = create<ChatHistoryState>()(
           const updatedSessions = state.sessions.map(session => {
             if (session.id === sessionId) {
               const updatedMessages = [...session.messages, message];
+              
+              // Auto-generate title after first AI response
+              if (message.type === 'ai') {
+                const userMessages = updatedMessages.filter(m => m.type === 'user');
+                const aiMessages = updatedMessages.filter(m => m.type === 'ai');
+                
+                // Only generate title if this is the first AI response and we have at least one user message
+                if (aiMessages.length === 1 && userMessages.length >= 1) {
+                  const firstUserMsg = userMessages[0];
+                  const currentTitle = session.title;
+                  
+                  // Check if title is default (either "New Chat" or auto-generated from first message)
+                  const userContentTrimmed = firstUserMsg.content.trim();
+                  const isDefaultTitle = 
+                    currentTitle === 'New Chat' || 
+                    currentTitle === userContentTrimmed ||
+                    (userContentTrimmed.length > 50 && currentTitle.startsWith(userContentTrimmed.slice(0, 8))) ||
+                    currentTitle.endsWith('...'); // Auto-generated titles often end with ...
+                  
+                  console.log('[Title Generation] Checking title generation:', {
+                    sessionId,
+                    messageCount: updatedMessages.length,
+                    userCount: userMessages.length,
+                    aiCount: aiMessages.length,
+                    currentTitle,
+                    isDefaultTitle,
+                    firstUserMsgPreview: firstUserMsg.content.slice(0, 50),
+                    aiMsgPreview: message.content.slice(0, 50)
+                  });
+                  
+                  // Always generate title for first AI response if it's a default title
+                  // This ensures we get a meaningful title even if the auto-generated one is close
+                  if (isDefaultTitle) {
+                    console.log('[Title Generation] Generating AI title...');
+                    // Generate AI title asynchronously
+                    generateAITitle(updatedMessages).then(title => {
+                      console.log('[Title Generation] Generated title:', title);
+                      if (title && title !== 'New Chat') {
+                        get().updateSessionTitle(sessionId, title);
+                      } else {
+                        console.warn('[Title Generation] Received invalid title, keeping current:', currentTitle);
+                      }
+                    }).catch(err => {
+                      console.error('[Title Generation] Error generating AI title:', err);
+                    });
+                  } else {
+                    console.log('[Title Generation] Skipping - title already customized:', currentTitle);
+                  }
+                }
+              }
+              
               return {
                 ...session,
                 messages: updatedMessages,

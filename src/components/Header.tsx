@@ -1,9 +1,13 @@
 import React, { useEffect } from 'react';
-import { Atom, Settings, HelpCircle } from 'lucide-react';
+import { Atom, Settings, HelpCircle, Box } from 'lucide-react';
 import { useSettingsStore } from '../stores/settingsStore';
+import { useAppStore } from '../stores/appStore';
+import { useChatHistoryStore } from '../stores/chatHistoryStore';
 
 export const Header: React.FC = () => {
   const { setSettingsDialogOpen } = useSettingsStore();
+  const { isViewerVisible, setViewerVisible } = useAppStore();
+  const { activeSessionId, saveViewerVisibility } = useChatHistoryStore();
   
   // Keyboard shortcuts
   useEffect(() => {
@@ -18,6 +22,15 @@ export const Header: React.FC = () => {
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [setSettingsDialogOpen]);
   
+  const handleToggleViewer = () => {
+    const newVisibility = !isViewerVisible;
+    setViewerVisible(newVisibility);
+    // Save to active session
+    if (activeSessionId) {
+      saveViewerVisibility(activeSessionId, newVisibility);
+    }
+  };
+  
   return (
     <header className="bg-white border-b border-gray-200 px-4 py-3 flex items-center justify-between">
       <div className="flex items-center space-x-2">
@@ -27,6 +40,29 @@ export const Header: React.FC = () => {
       </div>
       
       <div className="flex items-center space-x-4">
+        {/* Toggle Switch */}
+        <div className="flex items-center space-x-2">
+          <label className="relative inline-flex items-center cursor-pointer">
+            <input
+              type="checkbox"
+              checked={isViewerVisible}
+              onChange={handleToggleViewer}
+              className="sr-only peer"
+            />
+            <div className="w-11 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-2 peer-focus:ring-blue-300 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-blue-600"></div>
+          </label>
+        </div>
+        
+        {/* 3D Visual Editor Button */}
+        <button
+          onClick={handleToggleViewer}
+          className="flex items-center space-x-1 px-3 py-1 text-sm text-gray-600 hover:text-gray-900 transition-colors"
+          title="Toggle 3D Visual Editor"
+        >
+          <Box className="w-4 h-4" />
+          <span>3D Visual Editor</span>
+        </button>
+        
         <button className="flex items-center space-x-1 px-3 py-1 text-sm text-gray-600 hover:text-gray-900">
           <HelpCircle className="w-4 h-4" />
           <span>Help</span>

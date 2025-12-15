@@ -59,6 +59,9 @@ try {
     messageHistoryLimit: 50,  // Keep last 50 messages
     showQuickPrompts: true,   // Show quick start buttons
   },
+  api: {
+    key: '',                  // API key (stored separately, empty by default)
+  },
   performance: {
     debugMode: false,         // Disable debug logging by default
     enableAnalytics: false,   // Privacy-first approach
@@ -82,6 +85,7 @@ export const useSettingsStore = create<SettingsState>()(
           // Deep merge nested objects
           codeEditor: { ...state.settings.codeEditor, ...updates.codeEditor },
           ui: { ...state.settings.ui, ...updates.ui },
+          api: { ...state.settings.api, ...updates.api },
           performance: { ...state.settings.performance, ...updates.performance },
           agent: { ...state.settings.agent, ...updates.agent },
         }

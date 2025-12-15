@@ -23,6 +23,7 @@ interface AppState {
   pendingCodeToRun: string | null;
   selections: SelectionContext[];
   chatPanelWidth: number;
+  isViewerVisible: boolean;
   
   setActivePane: (pane: 'viewer' | 'editor') => void;
   setPlugin: (plugin: PluginUIContext | null) => void;
@@ -35,6 +36,7 @@ interface AppState {
   clearSelections: () => void;
   setSelections: (selections: SelectionContext[]) => void;
   setChatPanelWidth: (width: number) => void;
+  setViewerVisible: (visible: boolean) => void;
   // Backward compatibility
   setSelection: (selection: SelectionContext | null) => void;
   selection: SelectionContext | null;
@@ -51,6 +53,7 @@ export const useAppStore = create<AppState>()(
       pendingCodeToRun: null,
       selections: [],
       chatPanelWidth: 400, // Default chat panel width
+      isViewerVisible: false, // Hidden by default for new chats
       
       setActivePane: (pane) => set({ activePane: pane }),
       setPlugin: (plugin) => set({ plugin }),
@@ -59,6 +62,7 @@ export const useAppStore = create<AppState>()(
       setLastLoadedPdb: (pdb) => set({ lastLoadedPdb: pdb }),
       setPendingCodeToRun: (code) => set({ pendingCodeToRun: code }),
       setChatPanelWidth: (width) => set({ chatPanelWidth: width }),
+      setViewerVisible: (visible) => set({ isViewerVisible: visible }),
       
       addSelection: (selection) => set((state) => {
         // Check for duplicates based on key identifying properties
@@ -103,6 +107,7 @@ export const useAppStore = create<AppState>()(
         currentCode: state.currentCode,
         lastLoadedPdb: state.lastLoadedPdb,
         chatPanelWidth: state.chatPanelWidth,
+        // isViewerVisible is now per-session, stored in chatHistoryStore
         // selection is session state; do not persist to avoid stale highlights
         // Do not persist transient execution code
       }),

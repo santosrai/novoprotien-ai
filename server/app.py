@@ -741,3 +741,86 @@ async def chat(request: Request):
         if DEBUG_API:
             content["detail"] = str(e)
         return JSONResponse(status_code=500, content=content)
+
+
+@app.post("/api/chat/generate-title")
+@limiter.limit("30/minute")
+async def generate_chat_title(request: Request):
+    """Generate an AI-powered title for a chat session based on messages."""
+    try:
+        body = await request.json()
+        messages = body.get("messages", [])
+        
+        log_line("title_generation_request", {
+            "message_count": len(messages) if messages else 0,
+            "has_messages": bool(messages)
+        })
+        
+        if not messages or len(messages) < 2:
+            log_line("title_generation_skipped", {"reason": "insufficient_messages"})
+            return {"title": "New Chat"}
+        
+        # Get first user message and first AI response
+        user_msg = next((m for m in messages if m.get("type") == "user"), None)
+        ai_msg = next((m for m in messages if m.get("type") == "ai"), None)
+        
+        if not user_msg or not ai_msg:
+            log_line("title_generation_skipped", {"reason": "missing_user_or_ai_message"})
+            return {"title": "New Chat"}
+        
+        # Create prompt for title generation
+        user_content = user_msg.get("content", "")[:200]
+        ai_content = ai_msg.get("content", "")[:200]
+        
+        title_prompt = f"""Generate a concise, descriptive title (max 60 characters) for this chat conversation.
+
+User: {user_content}
+AI: {ai_content}
+
+Return ONLY the title text, no quotes, no explanation. Make it specific and meaningful."""
+
+        # Use a lightweight model for title generation (Haiku is fast and cheap)
+        from .runner import _get_openrouter_api_key, _load_model_map
+        
+        model_map = _load_model_map()
+        model_id = model_map.get("anthropic/claude-3-haiku", "anthropic/claude-3-haiku")
+        api_key = _get_openrouter_api_key()
+        
+        if not api_key:
+            log_line("title_generation_failed", {"error": "API key missing"})
+            return {"title": "New Chat"}
+        
+        # Call OpenRouter API using httpx for async
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            response = await client.post(
+                "https://openrouter.ai/api/v1/chat/completions",
+                headers={
+                    "Authorization": f"Bearer {api_key}",
+                    "HTTP-Referer": os.getenv("APP_ORIGIN", "http://localhost:5173"),
+                    "X-Title": "NovoProtein AI",
+                    "Content-Type": "application/json",
+                },
+                json={
+                    "model": model_id,
+                    "messages": [
+                        {"role": "user", "content": title_prompt}
+                    ],
+                    "max_tokens": 30,
+                    "temperature": 0.3,
+                }
+            )
+            response.raise_for_status()
+            result = response.json()
+            title = result["choices"][0]["message"]["content"].strip()
+            
+            # Clean up title (remove quotes, limit length)
+            title = title.strip('"\'')
+            if len(title) > 60:
+                title = title[:57] + "..."
+            
+            log_line("title_generated", {"title": title, "model": model_id})
+            return {"title": title or "New Chat"}
+            
+    except Exception as e:
+        log_line("title_generation_failed", {"error": str(e), "trace": traceback.format_exc()})
+        return {"title": "New Chat"}
