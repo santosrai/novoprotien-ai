@@ -69,12 +69,14 @@ NovoProtein AI is a web-based molecular visualization and protein design platfor
 #### 1. **ChatPanel** (`src/components/ChatPanel.tsx`)
 - **Purpose**: Main chat interface for user interaction
 - **Key Features**:
-  - Sends user messages to backend `/api/agents/route`
+  - Sends user messages to backend `/api/agents/route` or `/api/agents/route-stream` (for streaming)
   - Receives agent responses (code, text, or structured data)
+  - Supports streaming responses with thinking process display
   - Handles AlphaFold, RFdiffusion, and ProteinMPNN workflows
   - Manages chat history via `chatHistoryStore`
   - Displays progress tracking for long-running jobs
   - Error handling and display
+  - Agent and model selection via `AgentSelector` and `ModelSelector`
 
 #### 2. **MolstarViewer** (`src/components/MolstarViewer.tsx`)
 - **Purpose**: 3D molecular structure visualization
@@ -94,6 +96,15 @@ NovoProtein AI is a web-based molecular visualization and protein design platfor
 - **RFdiffusionDialog**: Design request confirmation and parameters
 - **ProteinMPNNDialog**: Sequence design configuration
 - **ProgressTracker**: Job status polling and display
+- **SettingsDialog**: Application settings and configuration
+
+#### 5. **UI Control Components**
+- **AgentSelector**: Dropdown for manually selecting which agent to use
+- **ModelSelector**: Dropdown for selecting AI model (Claude variants, etc.)
+- **ThinkingProcessDisplay**: Visualizes thinking steps for thinking models (streaming)
+- **JobLoadingPill**: Compact loading indicator for background jobs
+- **ErrorDisplay**: Rich error presentation with expandable details
+- **ErrorDashboard**: Comprehensive error monitoring dashboard (Ctrl+Shift+E)
 
 ### State Management (Zustand Stores)
 
@@ -145,19 +156,38 @@ NovoProtein AI is a web-based molecular visualization and protein design platfor
 - Standardized error handling for AlphaFold, RFdiffusion, and ProteinMPNN
 - Error categorization, severity levels, user-friendly messages
 
+#### **errorLogger.ts** (`src/utils/errorLogger.ts`)
+- Advanced error logging and metrics collection
+- Error analytics and monitoring
+- Export functionality for error logs
+- Real-time error rate tracking
+
+#### **alphafoldUtils.ts** (`src/utils/alphafoldUtils.ts`)
+- Sequence validation utilities
+- AlphaFold result processing helpers
+
+#### **pdbUtils.ts** (`src/utils/pdbUtils.ts`)
+- PDB file parsing and manipulation utilities
+
 ### Data Flow: User Interaction → Visualization
 
 1. **User types message** in ChatPanel
-2. **ChatPanel** calls `api.post('/api/agents/route')` with:
+2. **ChatPanel** calls `api.post('/api/agents/route')` or `streamAgentRoute('/api/agents/route-stream')` with:
    - `input`: user message
    - `currentCode`: existing code (if any)
    - `history`: chat history
-   - `selection`: selected residue(s)
-3. **Backend routes** to appropriate agent via router graph
+   - `selection`: selected residue (singular)
+   - `selections`: array of selected residues (plural)
+   - `agentId`: optional manual agent override
+   - `model`: optional model override
+3. **Backend routes** to appropriate agent via router graph (or uses manual override)
 4. **Agent returns** response:
+   - **Streaming mode**: Yields incremental updates with thinking process steps
+   - **Standard mode**: Returns complete response
    - `type: "code"` → code string executed in viewer
    - `type: "text"` → displayed as chat message
    - JSON with `action` field → triggers specialized dialog
+   - `thinkingProcess` → displayed in ThinkingProcessDisplay component
 5. **CodeExecutor** executes code in Molstar viewer
 6. **Viewer updates** with new visualization
 
@@ -168,9 +198,10 @@ NovoProtein AI is a web-based molecular visualization and protein design platfor
 ### Technology Stack
 - **Framework**: FastAPI (Python)
 - **Server**: Uvicorn (ASGI server)
-- **AI Models**: Anthropic Claude (via SDK or OpenRouter)
+- **AI Models**: Anthropic Claude (via SDK or OpenRouter), configurable via `models_config.json`
 - **Embeddings**: OpenAI embeddings (for semantic routing)
 - **External APIs**: NVIDIA NIMS (AlphaFold, RFdiffusion, ProteinMPNN)
+- **Model Configuration**: JSON-based model registry with provider, name, and capabilities
 
 ### Entry Point
 **`server/app.py`**: FastAPI application with all HTTP endpoints
@@ -203,7 +234,9 @@ NovoProtein AI is a web-based molecular visualization and protein design platfor
   2. Special handling for deterministic agents (alphafold, uniprot)
   3. For code agents: Calls Claude with system prompt + context
   4. For text agents: Includes selection context and code context
-  5. Returns structured response: `{type: "code"|"text", code/text: ...}`
+  5. Supports streaming mode via `run_agent_stream()` for thinking models
+  6. Returns structured response: `{type: "code"|"text", code/text: ..., thinkingProcess?: ...}`
+- **Streaming Support**: Yields incremental updates for thinking models with step-by-step reasoning
 
 #### 4. **Specialized Handlers**
 
@@ -246,9 +279,11 @@ NovoProtein AI is a web-based molecular visualization and protein design platfor
 ### API Endpoints
 
 #### Agent Endpoints
-- `POST /api/agents/route`: Routes user input and executes agent
+- `POST /api/agents/route`: Routes user input and executes agent (standard response)
+- `POST /api/agents/route-stream`: Routes user input and streams agent response (for thinking models)
 - `POST /api/agents/invoke`: Directly invoke specific agent
 - `GET /api/agents`: List available agents
+- `GET /api/models`: Get available AI models from configuration
 
 #### AlphaFold Endpoints
 - `POST /api/alphafold/fold`: Submit folding job (returns 202 Accepted)
@@ -273,15 +308,21 @@ NovoProtein AI is a web-based molecular visualization and protein design platfor
 #### Utility
 - `GET /api/health`: Health check
 - `POST /api/logs/error`: Frontend error logging
+- `POST /api/chat/generate-title`: Generate AI-powered title for chat session based on messages
+- `POST /api/generate`: Backward compatibility endpoint for code generation
+- `POST /api/chat`: Backward compatibility endpoint for chat
 
 ### Data Flow: Request → Response
 
-1. **User sends message** → Frontend `POST /api/agents/route`
-2. **Router Graph** analyzes input → selects agent
+1. **User sends message** → Frontend `POST /api/agents/route` or `/api/agents/route-stream`
+2. **Router Graph** analyzes input → selects agent (or uses manual override)
 3. **Runner** executes agent:
+   - **Streaming mode**: Yields incremental updates with thinking steps
+   - **Standard mode**: Returns complete response
    - For code agents: Calls Claude → generates code
    - For specialized agents: Handler processes request
 4. **Response** returned to frontend:
+   - **Streaming**: Incremental updates with `thinkingProcess` steps
    - Code → executed in viewer
    - Text → displayed in chat
    - Structured JSON → triggers dialog
@@ -319,6 +360,11 @@ NovoProtein AI is a web-based molecular visualization and protein design platfor
 - RAG (Retrieval-Augmented Generation) for MVS agent
 - Enhances system prompt with Pinecone examples
 
+#### **models_config.json**
+- JSON configuration file for available AI models
+- Defines model providers, names, capabilities, and default selections
+- Used by `/api/models` endpoint to serve model list to frontend
+
 ---
 
 ## Key Design Patterns
@@ -347,8 +393,20 @@ NovoProtein AI is a web-based molecular visualization and protein design platfor
 - Agents receive:
   - Current code context
   - Chat history
-  - Selected residues (if any)
+  - Selected residues (singular `selection` or plural `selections`)
   - PDB ID from loaded structure
+
+### 6. **Streaming & Thinking Process**
+- Support for streaming responses via `/api/agents/route-stream`
+- Thinking models yield incremental reasoning steps
+- Frontend displays thinking process in real-time via `ThinkingProcessDisplay`
+- Enables transparency in AI decision-making
+
+### 7. **Model Configuration System**
+- Centralized model registry in `models_config.json`
+- Frontend can query available models via `/api/models`
+- Supports model override per request
+- Enables switching between different Claude variants and providers
 
 ---
 
@@ -363,6 +421,8 @@ NovoProtein AI is a web-based molecular visualization and protein design platfor
 - `OPENROUTER_API_KEY`: Alternative to Anthropic
 - `OPENAI_API_KEY`: For semantic routing embeddings
 - `NVCF_RUN_KEY`: NVIDIA NIMS API key (shared by AlphaFold, RFdiffusion, ProteinMPNN)
+- `CLAUDE_CODE_MODEL`: Model for code generation agents (default: "claude-3-5-sonnet-20241022")
+- `CLAUDE_CHAT_MODEL`: Model for chat/text agents (default: "claude-3-5-sonnet-20241022")
 - `PROTEINMPNN_URL`: Override ProteinMPNN endpoint
 - `PROTEINMPNN_POLL_INTERVAL`: Polling interval (default: 10s)
 - `PROTEINMPNN_MAX_WAIT_SECONDS`: Timeout (default: 1800s)
