@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Send, Sparkles, Download, Play, X, Copy } from 'lucide-react';
+import { Send, Sparkles, Download, Play, X, Copy, Plus } from 'lucide-react';
 import { useAppStore } from '../stores/appStore';
 import { useChatHistoryStore, useActiveSession, Message } from '../stores/chatHistoryStore';
 import { CodeExecutor } from '../utils/codeExecutor';
@@ -192,13 +192,22 @@ const createProteinMPNNError = (
 });
 
 export const ChatPanel: React.FC = () => {
-  const { plugin, currentCode, setCurrentCode, setIsExecuting, setActivePane, setPendingCodeToRun } = useAppStore();
+  const { plugin, currentCode, setCurrentCode, setIsExecuting, setActivePane, setPendingCodeToRun, setViewerVisible } = useAppStore();
   const selections = useAppStore(state => state.selections);
   const removeSelection = useAppStore(state => state.removeSelection);
   const clearSelections = useAppStore(state => state.clearSelections);
 
   // Chat history store
-  const { createSession, activeSessionId, saveVisualizationCode, getVisualizationCode } = useChatHistoryStore();
+  const { createSession, activeSessionId, saveVisualizationCode, getVisualizationCode, saveViewerVisibility, getViewerVisibility } = useChatHistoryStore();
+  const isViewerVisible = useAppStore(state => state.isViewerVisible);
+  
+  // Helper function to set viewer visibility and save to session
+  const setViewerVisibleAndSave = (visible: boolean) => {
+    setViewerVisible(visible);
+    if (activeSessionId) {
+      saveViewerVisibility(activeSessionId, visible);
+    }
+  };
   const { activeSession, addMessage } = useActiveSession();
 
   // Agent and model settings
@@ -222,20 +231,28 @@ export const ChatPanel: React.FC = () => {
   useEffect(() => {
     if (activeSessionId && !previousSessionIdRef.current) {
       previousSessionIdRef.current = activeSessionId;
+      // Restore viewer visibility for initial session on mount
+      const savedVisibility = getViewerVisibility(activeSessionId);
+      if (savedVisibility !== undefined) {
+        setViewerVisible(savedVisibility);
+      }
     }
-  }, [activeSessionId]);
+  }, [activeSessionId, getViewerVisibility, setViewerVisible]);
 
-  // Restore visualization code when switching sessions
+  // Restore visualization code and viewer visibility when switching sessions
   useEffect(() => {
     if (!activeSessionId) return;
     
-    // Save current code to previous session before switching
+    // Save current state to previous session before switching
     if (previousSessionIdRef.current && previousSessionIdRef.current !== activeSessionId) {
       const codeToSave = currentCode?.trim() || '';
       if (codeToSave) {
         saveVisualizationCode(previousSessionIdRef.current, codeToSave);
         console.log('[ChatPanel] Saved code to previous session:', previousSessionIdRef.current);
       }
+      // Save viewer visibility to previous session
+      saveViewerVisibility(previousSessionIdRef.current, isViewerVisible);
+      console.log('[ChatPanel] Saved viewer visibility to previous session:', previousSessionIdRef.current, isViewerVisible);
     }
     
     // Restore code for new session
@@ -251,10 +268,20 @@ export const ChatPanel: React.FC = () => {
       }
     }
     
+    // Restore viewer visibility for new session
+    const savedVisibility = getViewerVisibility(activeSessionId);
+    if (savedVisibility !== undefined) {
+      console.log('[ChatPanel] Restoring viewer visibility for session:', activeSessionId, savedVisibility);
+      setViewerVisible(savedVisibility);
+    } else {
+      // Default to hidden for new sessions
+      setViewerVisible(false);
+    }
+    
     // Update previous session ID
     previousSessionIdRef.current = activeSessionId;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeSessionId, getVisualizationCode, saveVisualizationCode]);
+  }, [activeSessionId, getVisualizationCode, saveVisualizationCode, getViewerVisibility, saveViewerVisibility]);
 
   // Fetch agents and models on mount
   useEffect(() => {
@@ -416,6 +443,7 @@ try {
 }`;
         
         await executor.executeCode(code);
+        setViewerVisibleAndSave(true);
         setActivePane('viewer');
         
         URL.revokeObjectURL(pdbUrl);
@@ -1256,6 +1284,7 @@ try {
         try {
           const exec = new CodeExecutor(plugin);
           await exec.executeCode(code);
+          setViewerVisibleAndSave(true);
           setActivePane('viewer');
         } finally {
           setIsExecuting(false);
@@ -1263,6 +1292,7 @@ try {
       } else {
         // If no plugin yet, queue code to run once viewer initializes
         setPendingCodeToRun(code);
+        setViewerVisibleAndSave(true);
         setActivePane('viewer');
       }
     } catch (err) {
@@ -1286,24 +1316,36 @@ try {
     'Show antibody structure'
   ];
 
+  // Check if we have real user messages (not just the welcome message)
+  const hasUserMessages = messages.some(m => m.type === 'user');
+  // Check if we only have the initial welcome message
+  const isOnlyWelcomeMessage = messages.length === 1 && 
+    messages[0].type === 'ai' && 
+    messages[0].content.includes('Welcome to NovoProtein AI');
+  // Show centered layout when no user messages or only welcome message
+  const showCenteredLayout = !hasUserMessages && (messages.length === 0 || isOnlyWelcomeMessage);
+
   return (
     <div className="h-full flex flex-col">
-      <div className="p-4 border-b border-gray-200">
-        <div className="flex items-center space-x-2">
-          <Sparkles className="w-5 h-5 text-blue-600" />
-          <div>
-            <h2 className="text-lg font-semibold text-gray-900">AI Assistant</h2>
-            {activeSession && (
-              <p className="text-xs text-gray-500 truncate max-w-[200px]">
-                {activeSession.title}
-              </p>
-            )}
+      {!showCenteredLayout && (
+        <div className="p-4 border-b border-gray-200">
+          <div className="flex items-center space-x-2">
+            <Sparkles className="w-5 h-5 text-blue-600" />
+            <div>
+              <h2 className="text-lg font-semibold text-gray-900">AI Assistant</h2>
+              {activeSession && (
+                <p className="text-xs text-gray-500 truncate max-w-[200px]">
+                  {activeSession.title}
+                </p>
+              )}
+            </div>
           </div>
         </div>
-      </div>
+      )}
 
-      <div className="flex-1 overflow-y-auto p-4 space-y-4">
-        {messages.map((message) => (
+      {!showCenteredLayout ? (
+        <div className="flex-1 overflow-y-auto p-4 space-y-4">
+          {messages.map((message) => (
           <div
             key={message.id}
             className={`flex ${message.type === 'user' ? 'justify-end' : 'justify-start'}`}
@@ -1357,10 +1399,18 @@ try {
             </div>
           </div>
         )}
-        <div ref={messagesEndRef} />
-      </div>
+          <div ref={messagesEndRef} />
+        </div>
+      ) : (
+        // Centered welcome screen when no messages
+        <div className="flex-1 flex flex-col items-center justify-center px-4">
+          <h1 className="text-3xl font-bold text-gray-900 mb-8 text-center">
+            What can I do for you?
+          </h1>
+        </div>
+      )}
 
-      <div className="p-4 border-t border-gray-200">
+      <div className={`p-4 ${!showCenteredLayout ? 'border-t border-gray-200' : ''}`}>
         {/* Multiple selection chips */}
         {selections.length > 0 && (
           <div className="mb-3">
@@ -1411,31 +1461,35 @@ try {
           eventName={proteinmpnnProgress.eventName}
         />
 
-        <div className="mb-3">
-          <div className="text-xs text-gray-500 mb-2">Quick start:</div>
-          <div className="flex flex-wrap gap-2">
-            {quickPrompts.map((prompt, index) => (
-              <button
-                key={index}
-                onClick={() => setInput(prompt)}
-                className="text-xs bg-gray-100 hover:bg-gray-200 text-gray-700 px-2 py-1 rounded"
-              >
-                {prompt}
-              </button>
-            ))}
+        {!showCenteredLayout && (
+          <div className="mb-3">
+            <div className="text-xs text-gray-500 mb-2">Quick start:</div>
+            <div className="flex flex-wrap gap-2">
+              {quickPrompts.map((prompt, index) => (
+                <button
+                  key={index}
+                  onClick={() => setInput(prompt)}
+                  className="text-xs bg-gray-100 hover:bg-gray-200 text-gray-700 px-2 py-1 rounded"
+                >
+                  {prompt}
+                </button>
+              ))}
+            </div>
           </div>
-        </div>
+        )}
 
-        <form onSubmit={handleSubmit} className="flex flex-col gap-2">
+        <form onSubmit={handleSubmit} className={`flex flex-col gap-2 ${showCenteredLayout ? 'max-w-2xl w-full mx-auto' : ''}`}>
           {/* Large text input area */}
-          <div className="flex-1">
+          <div className="relative">
             <textarea
               ref={textareaRef}
               value={input}
               onChange={(e) => setInput(e.target.value)}
-              placeholder="Chat, visualize, or build..."
-              className="w-full px-3 py-2 bg-white text-gray-900 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent text-sm placeholder-gray-400 resize-none min-h-[100px]"
-              rows={3}
+              placeholder={"Chat, visualize, or build..."}
+              className={`w-full px-4 py-3 bg-white text-gray-900 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent text-sm placeholder-gray-400 resize-none ${
+                showCenteredLayout ? 'min-h-[120px] text-base' : 'min-h-[100px]'
+              }`}
+              rows={showCenteredLayout ? 4 : 3}
               disabled={isLoading}
               onKeyDown={(e) => {
                 if (e.key === 'Enter' && !e.shiftKey) {
@@ -1444,9 +1498,10 @@ try {
                 }
               }}
             />
+          
           </div>
           
-          {/* Bottom row: Agent, Model selectors, and Send button */}
+          {/* Bottom row: Agent, Model selectors, Microphone, and Send button */}
           <div className="flex items-center gap-2">
             {/* Agent Selector */}
             {agents.length > 0 && (
@@ -1460,19 +1515,58 @@ try {
               models={models}
             />
             
-            {/* Spacer to push send button to the right */}
+            {/* Spacer */}
             <div className="flex-1" />
+            
+            {/* Microphone button */}
+            <button
+              type="button"
+              className="p-2 text-gray-400 hover:text-gray-600 transition-colors"
+              title="Voice input"
+            >
+              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z" />
+              </svg>
+            </button>
             
             {/* Send button */}
             <button
               type="submit"
               disabled={!input.trim() || isLoading}
-              className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center"
+              className={`flex items-center justify-center transition-colors disabled:opacity-50 disabled:cursor-not-allowed ${
+                showCenteredLayout 
+                  ? 'p-2 text-gray-400 hover:text-gray-600' 
+                  : 'px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700'
+              }`}
+              title="Send"
             >
-              <Send className="w-4 h-4" />
+              <Send className="w-5 h-5" />
             </button>
           </div>
         </form>
+
+        {/* Quick prompts below input when centered layout */}
+        {showCenteredLayout && (
+          <div className="mt-4 max-w-2xl w-full mx-auto">
+            <div className="flex flex-wrap gap-2 justify-center">
+              {quickPrompts.map((prompt, index) => (
+                <button
+                  key={index}
+                  onClick={() => setInput(prompt)}
+                  className="px-4 py-2 bg-white hover:bg-gray-50 text-gray-700 rounded-lg border border-gray-200 text-sm font-medium transition-colors flex items-center space-x-2"
+                >
+                  <span>{prompt}</span>
+                </button>
+              ))}
+              <button
+                onClick={() => {}}
+                className="px-4 py-2 bg-white hover:bg-gray-50 text-gray-700 rounded-lg border border-gray-200 text-sm font-medium transition-colors"
+              >
+                More
+              </button>
+            </div>
+          </div>
+        )}
       </div>
 
       {/* AlphaFold Dialog */}

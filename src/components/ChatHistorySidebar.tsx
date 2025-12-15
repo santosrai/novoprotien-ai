@@ -12,6 +12,7 @@ import {
 } from 'lucide-react';
 import { useChatHistoryStore, useSessionManagement } from '../stores/chatHistoryStore';
 import { ChatHistoryItem } from './ChatHistoryItem';
+import { useAppStore } from '../stores/appStore';
 
 export const ChatHistorySidebar: React.FC = () => {
   const {
@@ -26,9 +27,11 @@ export const ChatHistorySidebar: React.FC = () => {
     exportSessions,
     deleteSessions,
     getStorageStats,
+    saveViewerVisibility,
   } = useChatHistoryStore();
 
   const { createSession } = useSessionManagement();
+  const { setViewerVisible } = useAppStore();
   const [showBulkActions, setShowBulkActions] = useState(false);
   const searchInputRef = useRef<HTMLInputElement>(null);
 
@@ -84,8 +87,13 @@ export const ChatHistorySidebar: React.FC = () => {
   }, [toggleSidebar, isSidebarCollapsed, searchQuery, setSearchQuery]);
 
   const handleNewChat = () => {
-    createSession();
+    const newSessionId = createSession();
     setSearchQuery(''); // Clear search when creating new chat
+    setViewerVisible(false); // Hide 3D visual editor when starting new chat
+    // Save visibility state to new session
+    if (newSessionId) {
+      saveViewerVisibility(newSessionId, false);
+    }
   };
 
   const handleExportSelected = () => {

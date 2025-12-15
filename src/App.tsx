@@ -14,7 +14,7 @@ import { useChatHistoryStore } from './stores/chatHistoryStore';
 import { useEffect } from 'react';
 
 function App() {
-  const { activePane, setActivePane, chatPanelWidth, setChatPanelWidth } = useAppStore();
+  const { activePane, setActivePane, chatPanelWidth, setChatPanelWidth, isViewerVisible } = useAppStore();
   const { settings, isSettingsDialogOpen, setSettingsDialogOpen } = useSettingsStore();
   const { isHistoryPanelOpen, setHistoryPanelOpen } = useChatHistoryStore();
   const errorDashboard = useErrorDashboard();
@@ -34,63 +34,71 @@ function App() {
         {/* Chat History Sidebar */}
         <ChatHistorySidebar />
         
-        {/* Chat Panel - Resizable */}
-        <ResizablePanel
-          defaultWidth={chatPanelWidth}
-          minWidth={280}
-          maxWidth={800}
-          position="left"
-          onWidthChange={setChatPanelWidth}
-          className="bg-white"
-        >
-          <ChatPanel />
-        </ResizablePanel>
+        {/* Chat Panel - Resizable when viewer visible, full width when hidden */}
+        {isViewerVisible ? (
+          <ResizablePanel
+            defaultWidth={chatPanelWidth}
+            minWidth={280}
+            maxWidth={800}
+            position="left"
+            onWidthChange={setChatPanelWidth}
+            className="bg-white"
+          >
+            <ChatPanel />
+          </ResizablePanel>
+        ) : (
+          <div className="flex-1 bg-white">
+            <ChatPanel />
+          </div>
+        )}
         
-        {/* Right Panel - Toolbar + Pane */}
-        <div className="flex-1 flex flex-col">
-          {/* Toolbar */}
-          <div className="h-10 flex items-center justify-between px-3 border-b border-gray-200 bg-white">
-            {/* Editor disabled message */}
-            {!settings.codeEditor.enabled && (
-              <div className="text-xs text-gray-500 flex items-center space-x-2">
-                <Settings className="w-3 h-3" />
-                <span>Code editor hidden - enable in Settings</span>
-              </div>
-            )}
-            
-            <div className="inline-flex rounded-full overflow-hidden ml-auto border border-gray-300">
-              <button
-                onClick={() => setActivePane('viewer')}
-                className={`px-3 h-8 flex items-center gap-1 text-xs ${activePane === 'viewer' ? 'bg-blue-600 text-white' : 'bg-white text-gray-700 hover:bg-gray-50'}`}
-                title="Show viewer"
-              >
-                <Eye className="w-4 h-4" />
-              </button>
-              {settings.codeEditor.enabled && (
+        {/* Right Panel - Toolbar + Pane (only shown when viewer is visible) */}
+        {isViewerVisible && (
+          <div className="flex-1 flex flex-col">
+            {/* Toolbar */}
+            <div className="h-10 flex items-center justify-between px-3 border-b border-gray-200 bg-white">
+              {/* Editor disabled message */}
+              {!settings.codeEditor.enabled && (
+                <div className="text-xs text-gray-500 flex items-center space-x-2">
+                  <Settings className="w-3 h-3" />
+                  <span>Code editor hidden - enable in Settings</span>
+                </div>
+              )}
+              
+              <div className="inline-flex rounded-full overflow-hidden ml-auto border border-gray-300">
                 <button
-                  onClick={() => setActivePane('editor')}
-                  className={`px-3 h-8 flex items-center gap-1 text-xs ${activePane === 'editor' ? 'bg-blue-600 text-white' : 'bg-white text-gray-700 hover:bg-gray-50'}`}
-                  title="Show editor"
+                  onClick={() => setActivePane('viewer')}
+                  className={`px-3 h-8 flex items-center gap-1 text-xs ${activePane === 'viewer' ? 'bg-blue-600 text-white' : 'bg-white text-gray-700 hover:bg-gray-50'}`}
+                  title="Show viewer"
                 >
-                  <Code2 className="w-4 h-4" />
+                  <Eye className="w-4 h-4" />
                 </button>
+                {settings.codeEditor.enabled && (
+                  <button
+                    onClick={() => setActivePane('editor')}
+                    className={`px-3 h-8 flex items-center gap-1 text-xs ${activePane === 'editor' ? 'bg-blue-600 text-white' : 'bg-white text-gray-700 hover:bg-gray-50'}`}
+                    title="Show editor"
+                  >
+                    <Code2 className="w-4 h-4" />
+                  </button>
+                )}
+              </div>
+            </div>
+
+            {/* Content Pane with fixed, responsive height */}
+            <div className="flex-1 min-h-0">
+              {activePane === 'editor' && settings.codeEditor.enabled ? (
+                <div className="h-full">
+                  <CodeEditor />
+                </div>
+              ) : (
+                <div className="h-full bg-gray-900">
+                  <MolstarViewer />
+                </div>
               )}
             </div>
           </div>
-
-          {/* Content Pane with fixed, responsive height */}
-          <div className="flex-1 min-h-0">
-            {activePane === 'editor' && settings.codeEditor.enabled ? (
-              <div className="h-full">
-                <CodeEditor />
-              </div>
-            ) : (
-              <div className="h-full bg-gray-900">
-                <MolstarViewer />
-              </div>
-            )}
-          </div>
-        </div>
+        )}
       </div>
       
       {/* Settings Dialog */}
