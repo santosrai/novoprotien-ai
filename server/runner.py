@@ -752,6 +752,7 @@ async def run_agent(
     selection: Optional[Dict[str, Any]],
     selections: Optional[List[Dict[str, Any]]] = None,
     current_structure_origin: Optional[Dict[str, Any]] = None,
+    uploaded_file_context: Optional[Dict[str, Any]] = None,
     model_override: Optional[str] = None,
 ) -> Dict[str, Any]:
     # Use model_override if provided, otherwise fall back to agent's default
@@ -879,11 +880,22 @@ async def run_agent(
         return {"type": "text", "text": text}
 
     if agent.get("kind") == "code":
+        # Include uploaded file context if available
+        uploaded_file_info = ""
+        if uploaded_file_context:
+            file_url = uploaded_file_context.get("file_url", "")
+            filename = uploaded_file_context.get("filename", "uploaded file")
+            atoms = uploaded_file_context.get("atoms", 0)
+            chains = uploaded_file_context.get("chains", [])
+            uploaded_file_info = f"\n\nIMPORTANT: User has uploaded a PDB file ({filename}, {atoms} atoms, chains: {', '.join(chains) if chains else 'N/A'}). "
+            uploaded_file_info += f"To load this file, use: await builder.loadStructure('{file_url}');\n"
+            uploaded_file_info += "The file is available at the API endpoint shown above. Use this URL instead of a PDB ID.\n"
+        
         context_prefix = (
             f"You may MODIFY the existing Molstar builder code below to satisfy the new request. Prefer editing in-place if it does not change the loaded PDB. Always return the full updated code.\n\n"
-            f"Existing code:\n\n```js\n{str(current_code)}\n```\n\nRequest: {user_text}"
+            f"Existing code:\n\n```js\n{str(current_code)}\n```\n\nRequest: {user_text}{uploaded_file_info}"
             if current_code and str(current_code).strip()
-            else f"Generate Molstar builder code for: {user_text}"
+            else f"Generate Molstar builder code for: {user_text}{uploaded_file_info}"
         )
 
         prior_dialogue = (
@@ -962,6 +974,20 @@ async def run_agent(
     selection_lines = []
     code_pdb_id = None
     structure_origin_context = None
+    
+    # Add uploaded file context if available
+    uploaded_file_info = ""
+    if uploaded_file_context:
+        filename = uploaded_file_context.get("filename", "uploaded file")
+        atoms = uploaded_file_context.get("atoms", 0)
+        chains = uploaded_file_context.get("chains", [])
+        file_url = uploaded_file_context.get("file_url", "")
+        uploaded_file_info = (
+            f"UploadedFileContext: User has uploaded a PDB file named '{filename}' "
+            f"({atoms} atoms, {len(chains)} chain{'s' if len(chains) != 1 else ''}: {', '.join(chains) if chains else 'N/A'}). "
+            f"The file is available at: {file_url}. "
+            f"When answering questions about this structure, refer to it as the uploaded file '{filename}'.\n\n"
+        )
     
     if current_code and str(current_code).strip():
         import re
@@ -1102,6 +1128,8 @@ async def run_agent(
 
     messages: List[Dict[str, Any]] = []
     context_parts = []
+    if uploaded_file_info:
+        context_parts.append(uploaded_file_info)
     if history_context_lines:
         context_parts.append("Recent Structure Generation History:\n" + "\n".join(history_context_lines))
     if selection_context:
@@ -1192,6 +1220,7 @@ async def run_agent_stream(
     selection: Optional[Dict[str, Any]],
     selections: Optional[List[Dict[str, Any]]] = None,
     current_structure_origin: Optional[Dict[str, Any]] = None,
+    uploaded_file_context: Optional[Dict[str, Any]] = None,
     model_override: Optional[str] = None,
 ) -> AsyncGenerator[Dict[str, Any], None]:
     """Stream agent execution with incremental thinking step updates.
@@ -1235,12 +1264,23 @@ async def run_agent_stream(
     # Handle code agents
     if agent_kind == "code":
         try:
+            # Include uploaded file context if available
+            uploaded_file_info = ""
+            if uploaded_file_context:
+                file_url = uploaded_file_context.get("file_url", "")
+                filename = uploaded_file_context.get("filename", "uploaded file")
+                atoms = uploaded_file_context.get("atoms", 0)
+                chains = uploaded_file_context.get("chains", [])
+                uploaded_file_info = f"\n\nIMPORTANT: User has uploaded a PDB file ({filename}, {atoms} atoms, chains: {', '.join(chains) if chains else 'N/A'}). "
+                uploaded_file_info += f"To load this file, use: await builder.loadStructure('{file_url}');\n"
+                uploaded_file_info += "The file is available at the API endpoint shown above. Use this URL instead of a PDB ID.\n"
+            
             # Build context similar to run_agent for code agents
             context_prefix = (
                 f"You may MODIFY the existing Molstar builder code below to satisfy the new request. Prefer editing in-place if it does not change the loaded PDB. Always return the full updated code.\n\n"
-                f"Existing code:\n\n```js\n{str(current_code)}\n```\n\nRequest: {user_text}"
+                f"Existing code:\n\n```js\n{str(current_code)}\n```\n\nRequest: {user_text}{uploaded_file_info}"
                 if current_code and str(current_code).strip()
-                else f"Generate Molstar builder code for: {user_text}"
+                else f"Generate Molstar builder code for: {user_text}{uploaded_file_info}"
             )
 
             prior_dialogue = (
@@ -1386,6 +1426,20 @@ async def run_agent_stream(
         code_pdb_id = None
         structure_origin_context = None
         
+        # Add uploaded file context if available
+        uploaded_file_info = ""
+        if uploaded_file_context:
+            filename = uploaded_file_context.get("filename", "uploaded file")
+            atoms = uploaded_file_context.get("atoms", 0)
+            chains = uploaded_file_context.get("chains", [])
+            file_url = uploaded_file_context.get("file_url", "")
+            uploaded_file_info = (
+                f"UploadedFileContext: User has uploaded a PDB file named '{filename}' "
+                f"({atoms} atoms, {len(chains)} chain{'s' if len(chains) != 1 else ''}: {', '.join(chains) if chains else 'N/A'}). "
+                f"The file is available at: {file_url}. "
+                f"When answering questions about this structure, refer to it as the uploaded file '{filename}'.\n\n"
+            )
+        
         if current_code and str(current_code).strip():
             import re
             # Check for blob URL (RF diffusion/AlphaFold result)
@@ -1518,6 +1572,8 @@ async def run_agent_stream(
         
         messages: List[Dict[str, Any]] = []
         context_parts = []
+        if uploaded_file_info:
+            context_parts.append(uploaded_file_info)
         if history_context_lines:
             context_parts.append("Recent Structure Generation History:\n" + "\n".join(history_context_lines))
         if selection_context:

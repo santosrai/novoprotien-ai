@@ -41,11 +41,19 @@ class SimpleRouterGraph:
         selections = state.get("selections", [])
         # Use selections array if available, otherwise fall back to single selection
         has_selection = (selections and len(selections) > 0) or selection
+        uploaded_file_id = state.get("uploadedFileId")
+        has_uploaded_file = bool(uploaded_file_id)
         
         interrogatives = [
             "what is this", "what's this", "what am i looking at", "this residue", "selected", "identify", "which residue", "these residues", "what are these",
         ]
         low = input_text.lower()
+        
+        # Visualization keywords when uploaded file is present
+        visualization_keywords = [
+            "visualize", "show", "display", "render", "view", "load", "open", "see", "3d", "three dimensional"
+        ]
+        has_visualization_request = any(kw in low for kw in visualization_keywords)
         
         # Check for explicit visualization commands that should override bio-chat
         visualization_commands = [
@@ -106,6 +114,18 @@ class SimpleRouterGraph:
         # Bio-chat for selection questions, BUT NOT if explicit visualization command
         if has_selection and any(k in low for k in interrogatives) and not has_viz_command:
             return {"routedAgentId": "bio-chat", "reason": "rule:selection+question"}
+        
+        # Uploaded file + visualization request → code-builder or mvs-builder
+        if has_uploaded_file and has_visualization_request:
+            # Check if it's a complex visualization (labels, annotations) → mvs-builder
+            if mvs_signals:
+                return {"routedAgentId": "mvs-builder", "reason": "rule:uploaded-file+visualization+mvs"}
+            # Otherwise → code-builder
+            return {"routedAgentId": "code-builder", "reason": "rule:uploaded-file+visualization"}
+        
+        # Uploaded file + informational question → bio-chat
+        if has_uploaded_file and any(k in low for k in interrogatives) and not has_viz_command:
+            return {"routedAgentId": "bio-chat", "reason": "rule:uploaded-file+question"}
         
         # MVS vs Simple Code routing rules
         mvs_keywords = [

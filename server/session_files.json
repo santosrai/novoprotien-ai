@@ -41,6 +41,241 @@
         },
         "design_mode": "motif_scaffolding"
       }
+    },
+    {
+      "file_id": "e1490c2f45e841a9a7312b6ee5eae6b8",
+      "type": "upload",
+      "file_path": "uploads/pdb/e1490c2f45e841a9a7312b6ee5eae6b8.pdb",
+      "filename": "1R42.pdb",
+      "size": 504711,
+      "job_id": null,
+      "metadata": {
+        "atoms": 5511,
+        "chains": [
+          "A",
+          "B",
+          "C",
+          "D",
+          "E"
+        ]
+      }
+    },
+    {
+      "file_id": "551e7d1144d24e78951077181960b289",
+      "type": "upload",
+      "file_path": "uploads/pdb/551e7d1144d24e78951077181960b289.pdb",
+      "filename": "1R42.pdb",
+      "size": 504711,
+      "job_id": null,
+      "metadata": {
+        "atoms": 5511,
+        "chains": [
+          "A",
+          "B",
+          "C",
+          "D",
+          "E"
+        ]
+      }
+    },
+    {
+      "file_id": "579c6509bf9c42119c510e3a3689f8fc",
+      "type": "upload",
+      "file_path": "uploads/pdb/579c6509bf9c42119c510e3a3689f8fc.pdb",
+      "filename": "1R42.pdb",
+      "size": 504711,
+      "job_id": null,
+      "metadata": {
+        "atoms": 5511,
+        "chains": [
+          "A",
+          "B",
+          "C",
+          "D",
+          "E"
+        ]
+      }
+    },
+    {
+      "file_id": "7c8a5e8932ae4b029935edce39f209cb",
+      "type": "upload",
+      "file_path": "uploads/pdb/7c8a5e8932ae4b029935edce39f209cb.pdb",
+      "filename": "1R42.pdb",
+      "size": 504711,
+      "job_id": null,
+      "metadata": {
+        "atoms": 5511,
+        "chains": [
+          "A",
+          "B",
+          "C",
+          "D",
+          "E"
+        ]
+      }
+    },
+    {
+      "file_id": "80d43c3b1b1e474490cfca2ee3ebe13c",
+      "type": "upload",
+      "file_path": "uploads/pdb/80d43c3b1b1e474490cfca2ee3ebe13c.pdb",
+      "filename": "1R42.pdb",
+      "size": 504711,
+      "job_id": null,
+      "metadata": {
+        "atoms": 5511,
+        "chains": [
+          "A",
+          "B",
+          "C",
+          "D",
+          "E"
+        ]
+      }
+    },
+    {
+      "file_id": "8cf6bb47c9994970ac6e97151be44594",
+      "type": "upload",
+      "file_path": "uploads/pdb/8cf6bb47c9994970ac6e97151be44594.pdb",
+      "filename": "1R42.pdb",
+      "size": 504711,
+      "job_id": null,
+      "metadata": {
+        "atoms": 5511,
+        "chains": [
+          "A",
+          "B",
+          "C",
+          "D",
+          "E"
+        ]
+      }
+    },
+    {
+      "file_id": "98a03013a58243718409a84f7557e9b3",
+      "type": "upload",
+      "file_path": "uploads/pdb/98a03013a58243718409a84f7557e9b3.pdb",
+      "filename": "1R42.pdb",
+      "size": 504711,
+      "job_id": null,
+      "metadata": {
+        "atoms": 5511,
+        "chains": [
+          "A",
+          "B",
+          "C",
+          "D",
+          "E"
+        ]
+      }
+    },
+    {
+      "file_id": "40ceeb64f1744a879ba1f2e9fb7cbd0d",
+      "type": "upload",
+      "file_path": "uploads/pdb/40ceeb64f1744a879ba1f2e9fb7cbd0d.pdb",
+      "filename": "1R42.pdb",
+      "size": 504711,
+      "job_id": null,
+      "metadata": {
+        "atoms": 5511,
+        "chains": [
+          "A",
+          "B",
+          "C",
+          "D",
+          "E"
+        ]
+      }
+    },
+    {
+      "file_id": "5f749f7d2f994bc5ab48fde19fbe29bc",
+      "type": "upload",
+      "file_path": "uploads/pdb/5f749f7d2f994bc5ab48fde19fbe29bc.pdb",
+      "filename": "1R42.pdb",
+      "size": 504711,
+      "job_id": null,
+      "metadata": {
+        "atoms": 5511,
+        "chains": [
+          "A",
+          "B",
+          "C",
+          "D",
+          "E"
+        ]
+      }
+    },
+    {
+      "file_id": "07bead1aca4e49648671755a8973ced1",
+      "type": "upload",
+      "file_path": "uploads/pdb/07bead1aca4e49648671755a8973ced1.pdb",
+      "filename": "1R42.pdb",
+      "size": 504711,
+      "job_id": null,
+      "metadata": {
+        "atoms": 5511,
+        "chains": [
+          "A",
+          "B",
+          "C",
+          "D",
+          "E"
+        ]
+      }
+    },
+    {
+      "file_id": "952c322ad87a47c7b0b4a452f52e7309",
+      "type": "upload",
+      "file_path": "uploads/pdb/952c322ad87a47c7b0b4a452f52e7309.pdb",
+      "filename": "rfdiffusion_rf_1765934546153.pdb",
+      "size": 37252,
+      "job_id": null,
+      "metadata": {
+        "atoms": 556,
+        "chains": [
+          "A",
+          "B"
+        ]
+      }
+    }
+  ],
+  "22725c74-739b-45f8-af4d-ab6232985f99": [
+    {
+      "file_id": "8a0ed5fa46844df8ae9be5484902284f",
+      "type": "upload",
+      "file_path": "uploads/pdb/8a0ed5fa46844df8ae9be5484902284f.pdb",
+      "filename": "1R42.pdb",
+      "size": 504711,
+      "job_id": null,
+      "metadata": {
+        "atoms": 5511,
+        "chains": [
+          "A",
+          "B",
+          "C",
+          "D",
+          "E"
+        ]
+      }
+    }
+  ],
+  "79896558-d767-4c57-960e-8eba79cc18de": [
+    {
+      "file_id": "8164e3ef243c45f2a4f0e8d0e6dda785",
+      "type": "upload",
+      "file_path": "uploads/pdb/8164e3ef243c45f2a4f0e8d0e6dda785.pdb",
+      "filename": "1R42.pdb",
+      "size": 504711,
+      "job_id": null,
+      "metadata": {
+        "atoms": 5511,
+        "chains": [
+          "A",
+          "B",
+          "C",
+          "D",
+          "E"
+        ]
+      }
     }
   ]
 }

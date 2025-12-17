@@ -237,6 +237,7 @@ async def route(request: Request):
                     "selections": body.get("selections"),
                     "currentCode": body.get("currentCode"),
                     "history": body.get("history"),
+                    "uploadedFileId": body.get("uploadedFileId"),
                 }
             )
             agent_id = routed.get("routedAgentId")
@@ -260,6 +261,28 @@ async def route(request: Request):
             "model_override": model_override
         })
         
+        # Load uploaded file metadata if uploadedFileId is provided
+        uploaded_file_context = None
+        uploaded_file_id = body.get("uploadedFileId")
+        if uploaded_file_id:
+            try:
+                file_metadata = get_uploaded_pdb(uploaded_file_id)
+                if file_metadata:
+                    uploaded_file_context = {
+                        "file_id": uploaded_file_id,
+                        "filename": file_metadata.get("filename"),
+                        "atoms": file_metadata.get("atoms"),
+                        "chains": file_metadata.get("chains", []),
+                        "file_url": f"/api/upload/pdb/{uploaded_file_id}",
+                    }
+                    log_line("agent_route:uploaded_file", {
+                        "file_id": uploaded_file_id,
+                        "filename": file_metadata.get("filename"),
+                        "atoms": file_metadata.get("atoms"),
+                    })
+            except Exception as e:
+                log_line("agent_route:uploaded_file_error", {"error": str(e), "file_id": uploaded_file_id})
+        
         res = await run_agent(
             agent=agents[agent_id],
             user_text=input_text,
@@ -268,6 +291,7 @@ async def route(request: Request):
             selection=body.get("selection"),
             selections=body.get("selections"),
             current_structure_origin=body.get("currentStructureOrigin"),
+            uploaded_file_context=uploaded_file_context,
             model_override=model_override,
         )
         
@@ -328,6 +352,7 @@ async def route_stream(request: Request):
                     "selections": body.get("selections"),
                     "currentCode": body.get("currentCode"),
                     "history": body.get("history"),
+                    "uploadedFileId": body.get("uploadedFileId"),
                 }
             )
             agent_id = routed.get("routedAgentId")
@@ -350,6 +375,28 @@ async def route_stream(request: Request):
             "model_override": model_override
         })
         
+        # Load uploaded file metadata if uploadedFileId is provided
+        uploaded_file_context = None
+        uploaded_file_id = body.get("uploadedFileId")
+        if uploaded_file_id:
+            try:
+                file_metadata = get_uploaded_pdb(uploaded_file_id)
+                if file_metadata:
+                    uploaded_file_context = {
+                        "file_id": uploaded_file_id,
+                        "filename": file_metadata.get("filename"),
+                        "atoms": file_metadata.get("atoms"),
+                        "chains": file_metadata.get("chains", []),
+                        "file_url": f"/api/upload/pdb/{uploaded_file_id}",
+                    }
+                    log_line("agent_route_stream:uploaded_file", {
+                        "file_id": uploaded_file_id,
+                        "filename": file_metadata.get("filename"),
+                        "atoms": file_metadata.get("atoms"),
+                    })
+            except Exception as e:
+                log_line("agent_route_stream:uploaded_file_error", {"error": str(e), "file_id": uploaded_file_id})
+        
         async def generate_stream():
             try:
                 async for chunk in run_agent_stream(
@@ -360,6 +407,7 @@ async def route_stream(request: Request):
                     selection=body.get("selection"),
                     selections=body.get("selections"),
                     current_structure_origin=body.get("currentStructureOrigin"),
+                    uploaded_file_context=uploaded_file_context,
                     model_override=model_override,
                 ):
                     # Format chunk as JSON line

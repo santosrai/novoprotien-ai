@@ -47,6 +47,14 @@ export interface Message {
     };
     metadata?: Record<string, any>;
   };
+  // File attachment for user messages
+  uploadedFile?: {
+    file_id: string;
+    filename: string;
+    file_url: string;
+    atoms: number;
+    chains: string[];
+  };
   error?: ErrorDetails;
 }
 

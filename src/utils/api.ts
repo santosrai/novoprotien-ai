@@ -97,6 +97,7 @@ export async function* streamAgentRoute(payload: {
   selections?: any[];
   agentId?: string;
   model?: string;
+  uploadedFileId?: string;
 }): AsyncGenerator<StreamChunk, void, unknown> {
   // Get API key from localStorage
   let apiKey: string | undefined;
