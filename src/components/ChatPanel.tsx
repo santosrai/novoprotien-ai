@@ -17,6 +17,7 @@ import { ModelSelector } from './ModelSelector';
 import { useAgentSettings } from '../stores/settingsStore';
 import { ThinkingProcessDisplay } from './ThinkingProcessDisplay';
 import { PDBFileUpload } from './PDBFileUpload';
+import ReactMarkdown from 'react-markdown';
 
 // Extended message metadata for structured agent results
 // Note: Message interface now includes thinkingProcess and uploadedFile, so ExtendedMessage is mainly for type compatibility
@@ -547,7 +548,56 @@ export const ChatPanel: React.FC = () => {
       );
     }
 
-    return <p className="text-sm">{content}</p>;
+    // Render markdown content
+    return (
+      <div className="prose prose-sm max-w-none">
+        <ReactMarkdown
+          components={{
+            // Style code blocks
+            code: ({ node, inline, className, children, ...props }: any) => {
+              return !inline ? (
+                <pre className="bg-gray-100 rounded p-2 overflow-x-auto text-xs my-2">
+                  <code className={className} {...props}>
+                    {children}
+                  </code>
+                </pre>
+              ) : (
+                <code className="bg-gray-100 px-1 py-0.5 rounded text-xs" {...props}>
+                  {children}
+                </code>
+              );
+            },
+            // Style paragraphs
+            p: ({ children }: any) => <p className="mb-2 last:mb-0 text-sm">{children}</p>,
+            // Style lists
+            ul: ({ children }: any) => <ul className="list-disc list-inside mb-2 space-y-1">{children}</ul>,
+            ol: ({ children }: any) => <ol className="list-decimal list-inside mb-2 space-y-1">{children}</ol>,
+            li: ({ children }: any) => <li className="ml-4">{children}</li>,
+            // Style headings
+            h1: ({ children }: any) => <h1 className="text-lg font-bold mb-2 mt-4 first:mt-0">{children}</h1>,
+            h2: ({ children }: any) => <h2 className="text-base font-bold mb-2 mt-3 first:mt-0">{children}</h2>,
+            h3: ({ children }: any) => <h3 className="text-sm font-bold mb-1 mt-2 first:mt-0">{children}</h3>,
+            // Style strong and emphasis
+            strong: ({ children }: any) => <strong className="font-semibold">{children}</strong>,
+            em: ({ children }: any) => <em className="italic">{children}</em>,
+            // Style blockquotes
+            blockquote: ({ children }: any) => (
+              <blockquote className="border-l-4 border-gray-300 pl-4 italic my-2">
+                {children}
+              </blockquote>
+            ),
+            // Style links
+            a: ({ children, href }: any) => (
+              <a href={href} className="text-blue-600 hover:text-blue-800 underline" target="_blank" rel="noopener noreferrer">
+                {children}
+              </a>
+            ),
+          }}
+        >
+          {content}
+        </ReactMarkdown>
+      </div>
+    );
   };
 
   const loadUploadedFileInViewer = async (fileInfo: { file_id: string; filename: string; file_url: string }) => {
