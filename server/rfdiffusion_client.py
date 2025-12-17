@@ -120,19 +120,41 @@ class RFdiffusionClient:
         if not is_valid:
             raise ValueError(f"Invalid parameters: {'; '.join(errors)}")
         
-        # Handle input PDB
-        input_pdb = params.get("input_pdb", "")
-        pdb_id = params.get("pdb_id", "")
+        # Get design mode to determine if PDB is required
+        design_mode = params.get("design_mode", "motif_scaffolding")
+        logger.debug(f"create_request_payload: design_mode={design_mode}, params keys={list(params.keys())}")
         
-        if pdb_id and not input_pdb:
+        # Handle input PDB - get values and check if they're actually present (not empty strings)
+        input_pdb = params.get("input_pdb")
+        pdb_id = params.get("pdb_id")
+        
+        # Check if we have actual PDB content (not None, not empty string)
+        has_input_pdb = bool(input_pdb and isinstance(input_pdb, str) and input_pdb.strip())
+        has_pdb_id = bool(pdb_id and isinstance(pdb_id, str) and pdb_id.strip())
+        has_pdb = has_input_pdb or has_pdb_id
+        
+        logger.debug(f"create_request_payload: has_input_pdb={has_input_pdb}, has_pdb_id={has_pdb_id}, has_pdb={has_pdb}")
+        
+        # For unconditional design, PDB is optional
+        if design_mode == "unconditional" and not has_pdb:
+            # Unconditional design without template - create payload without input_pdb
+            logger.info("Creating unconditional design payload without PDB template")
+            return {
+                "contigs": default_params["contigs"],
+                "hotspot_res": default_params["hotspot_res"],
+                "diffusion_steps": default_params["diffusion_steps"],
+            }
+        
+        # For other modes, PDB is required
+        if has_pdb_id and not has_input_pdb:
             # Fetch PDB from ID
             raw_pdb = self.fetch_pdb_from_id(pdb_id)
             input_pdb = self.process_input_pdb(raw_pdb)
-        elif input_pdb:
+        elif has_input_pdb:
             # Process provided PDB content
             input_pdb = self.process_input_pdb(input_pdb)
         else:
-            raise ValueError("Either input_pdb content or pdb_id must be provided")
+            raise ValueError(f"Either input_pdb content or pdb_id must be provided (or use unconditional design_mode). Current design_mode: {design_mode}, has_pdb: {has_pdb}")
         
         return {
             "input_pdb": input_pdb,
@@ -158,7 +180,9 @@ class RFdiffusionClient:
         """
         
         try:
+            logger.debug(f"submit_design_request called with params: {list(params.keys())}")
             payload = self.create_request_payload(**params)
+            logger.debug(f"Created payload with keys: {list(payload.keys())}")
             
             if progress_callback:
                 progress_callback("Submitting protein design request...", 0)
@@ -183,10 +207,23 @@ class RFdiffusionClient:
                         return {"status": "completed", "data": result_data}
                     
                     else:
-                        # Error response
+                        # Error response - try to parse JSON error details
                         error_text = await response.text()
+                        error_msg = f"HTTP {response.status}: {error_text}"
+                        
+                        # Try to extract detailed error message from JSON response
+                        try:
+                            error_json = await response.json()
+                            if isinstance(error_json, dict):
+                                detail = error_json.get("detail", error_text)
+                                error_msg = f"HTTP {response.status}: {detail}"
+                        except:
+                            # If not JSON, use the text as-is
+                            pass
+                        
+                        logger.error(f"RFdiffusion API error response: {error_msg}")
                         return {
-                            "error": f"HTTP {response.status}: {error_text}",
+                            "error": error_msg,
                             "status": "request_failed"
                         }
         
@@ -219,15 +256,17 @@ class RFdiffusionClient:
     def save_pdb_file(self, pdb_content: str, filename: str) -> str:
         """Save designed PDB content to file"""
         try:
-            # Create results directory if it doesn't exist
-            results_dir = Path("rfdiffusion_results")
+            # Create results directory if it doesn't exist (in server directory, like proteinmpnn_results)
+            base_dir = Path(__file__).parent
+            results_dir = base_dir / "rfdiffusion_results"
             results_dir.mkdir(exist_ok=True)
             
             filepath = results_dir / filename
             with open(filepath, 'w') as f:
                 f.write(pdb_content)
             
-            return str(filepath)
+            # Return relative path from server directory for consistency with proteinmpnn
+            return str(filepath.relative_to(base_dir))
             
         except Exception as e:
             logger.error(f"Error saving PDB file: {e}")

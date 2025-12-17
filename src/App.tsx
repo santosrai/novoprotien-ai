@@ -7,14 +7,16 @@ import { ChatHistoryPanel } from './components/ChatHistoryPanel';
 import { ChatHistorySidebar } from './components/ChatHistorySidebar';
 import { ResizablePanel } from './components/ResizablePanel';
 import { ErrorDashboard, useErrorDashboard } from './components/ErrorDashboard';
-import { Eye, Code2, Settings } from 'lucide-react';
+import { FileBrowser } from './components/FileBrowser';
+import { FileEditor } from './components/FileEditor';
+import { Eye, Code2, Settings, FolderOpen } from 'lucide-react';
 import { useAppStore } from './stores/appStore';
 import { useSettingsStore } from './stores/settingsStore';
 import { useChatHistoryStore } from './stores/chatHistoryStore';
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
 
 function App() {
-  const { activePane, setActivePane, chatPanelWidth, setChatPanelWidth, isViewerVisible } = useAppStore();
+  const { activePane, setActivePane, chatPanelWidth, setChatPanelWidth, isViewerVisible, selectedFile, setSelectedFile } = useAppStore();
   const { settings, isSettingsDialogOpen, setSettingsDialogOpen } = useSettingsStore();
   const { isHistoryPanelOpen, setHistoryPanelOpen } = useChatHistoryStore();
   const errorDashboard = useErrorDashboard();
@@ -25,6 +27,34 @@ function App() {
       setActivePane('viewer');
     }
   }, [settings.codeEditor.enabled, activePane, setActivePane]);
+
+  const handleFileSelect = async (file: any) => {
+    // Load file content and show in editor
+    try {
+      const { activeSessionId } = useChatHistoryStore.getState();
+      if (!activeSessionId) return;
+
+      const response = await fetch(`/api/sessions/${activeSessionId}/files/${file.file_id}`);
+      const data = await response.json();
+      
+      if (data.status === 'success') {
+        setSelectedFile({
+          id: file.file_id,
+          type: file.type,
+          content: data.content,
+          filename: file.filename || data.filename || `file_${file.file_id}.pdb`,
+        });
+        setActivePane('files');
+      }
+    } catch (error) {
+      console.error('Failed to load file:', error);
+    }
+  };
+
+  const handleCloseFile = () => {
+    setSelectedFile(null);
+    setActivePane('viewer');
+  };
 
   return (
     <div className="h-screen flex flex-col bg-gray-50">
@@ -67,7 +97,10 @@ function App() {
               
               <div className="inline-flex rounded-full overflow-hidden ml-auto border border-gray-300">
                 <button
-                  onClick={() => setActivePane('viewer')}
+                  onClick={() => {
+                    setSelectedFile(null);
+                    setActivePane('viewer');
+                  }}
                   className={`px-3 h-8 flex items-center gap-1 text-xs ${activePane === 'viewer' ? 'bg-blue-600 text-white' : 'bg-white text-gray-700 hover:bg-gray-50'}`}
                   title="Show viewer"
                 >
@@ -75,19 +108,49 @@ function App() {
                 </button>
                 {settings.codeEditor.enabled && (
                   <button
-                    onClick={() => setActivePane('editor')}
+                    onClick={() => {
+                      setSelectedFile(null);
+                      setActivePane('editor');
+                    }}
                     className={`px-3 h-8 flex items-center gap-1 text-xs ${activePane === 'editor' ? 'bg-blue-600 text-white' : 'bg-white text-gray-700 hover:bg-gray-50'}`}
                     title="Show editor"
                   >
                     <Code2 className="w-4 h-4" />
                   </button>
                 )}
+                <button
+                  onClick={() => {
+                    if (activePane === 'files' && !selectedFile) {
+                      setActivePane('viewer');
+                    } else {
+                      setSelectedFile(null);
+                      setActivePane('files');
+                    }
+                  }}
+                  className={`px-3 h-8 flex items-center gap-1 text-xs ${activePane === 'files' ? 'bg-blue-600 text-white' : 'bg-white text-gray-700 hover:bg-gray-50'}`}
+                  title="Show file browser"
+                >
+                  <FolderOpen className="w-4 h-4" />
+                </button>
               </div>
             </div>
 
             {/* Content Pane with fixed, responsive height */}
             <div className="flex-1 min-h-0">
-              {activePane === 'editor' && settings.codeEditor.enabled ? (
+              {activePane === 'files' ? (
+                <div className="h-full">
+                  {selectedFile ? (
+                    <FileEditor
+                      fileId={selectedFile.id}
+                      filename={selectedFile.filename || `file_${selectedFile.id}.pdb`}
+                      fileType={selectedFile.type}
+                      onClose={handleCloseFile}
+                    />
+                  ) : (
+                    <FileBrowser onFileSelect={handleFileSelect} />
+                  )}
+                </div>
+              ) : activePane === 'editor' && settings.codeEditor.enabled ? (
                 <div className="h-full">
                   <CodeEditor />
                 </div>

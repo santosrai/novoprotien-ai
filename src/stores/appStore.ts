@@ -14,8 +14,29 @@ export interface SelectionContext {
   labelSeqId?: number | string | null; // preferred residue index for display
 }
 
+export interface StructureOrigin {
+  type: 'pdb' | 'rfdiffusion' | 'alphafold' | 'upload';
+  pdbId?: string;
+  jobId?: string;
+  parameters?: any;
+  metadata?: any;
+  filename?: string;
+}
+
+export interface FileMetadata {
+  id: string;
+  name: string;
+  type: 'upload' | 'rfdiffusion' | 'alphafold';
+  size: number;
+  timestamp: Date;
+  sessionId: string;
+  jobId?: string;
+  filePath: string;
+  downloadUrl: string;
+}
+
 interface AppState {
-  activePane: 'viewer' | 'editor';
+  activePane: 'viewer' | 'editor' | 'files';
   plugin: PluginUIContext | null;
   currentCode: string;
   isExecuting: boolean;
@@ -24,8 +45,10 @@ interface AppState {
   selections: SelectionContext[];
   chatPanelWidth: number;
   isViewerVisible: boolean;
+  currentStructureOrigin: StructureOrigin | null;
+  selectedFile: { id: string; type: string; content: string; filename?: string } | null;
   
-  setActivePane: (pane: 'viewer' | 'editor') => void;
+  setActivePane: (pane: 'viewer' | 'editor' | 'files') => void;
   setPlugin: (plugin: PluginUIContext | null) => void;
   setCurrentCode: (code: string) => void;
   setIsExecuting: (executing: boolean) => void;
@@ -37,6 +60,8 @@ interface AppState {
   setSelections: (selections: SelectionContext[]) => void;
   setChatPanelWidth: (width: number) => void;
   setViewerVisible: (visible: boolean) => void;
+  setCurrentStructureOrigin: (origin: StructureOrigin | null) => void;
+  setSelectedFile: (file: { id: string; type: string; content: string } | null) => void;
   // Backward compatibility
   setSelection: (selection: SelectionContext | null) => void;
   selection: SelectionContext | null;
@@ -54,6 +79,8 @@ export const useAppStore = create<AppState>()(
       selections: [],
       chatPanelWidth: 400, // Default chat panel width
       isViewerVisible: false, // Hidden by default for new chats
+      currentStructureOrigin: null,
+      selectedFile: null,
       
       setActivePane: (pane) => set({ activePane: pane }),
       setPlugin: (plugin) => set({ plugin }),
@@ -63,6 +90,8 @@ export const useAppStore = create<AppState>()(
       setPendingCodeToRun: (code) => set({ pendingCodeToRun: code }),
       setChatPanelWidth: (width) => set({ chatPanelWidth: width }),
       setViewerVisible: (visible) => set({ isViewerVisible: visible }),
+      setCurrentStructureOrigin: (origin) => set({ currentStructureOrigin: origin }),
+      setSelectedFile: (file) => set({ selectedFile: file }),
       
       addSelection: (selection) => set((state) => {
         // Check for duplicates based on key identifying properties

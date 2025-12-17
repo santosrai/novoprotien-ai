@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Send, Sparkles, Download, Play, X, Copy } from 'lucide-react';
+import { Send, Sparkles, Download, Play, X, Copy, Paperclip } from 'lucide-react';
 import { useAppStore } from '../stores/appStore';
 import { useChatHistoryStore, useActiveSession, Message } from '../stores/chatHistoryStore';
 import { CodeExecutor } from '../utils/codeExecutor';
@@ -8,7 +8,7 @@ import { v4 as uuidv4 } from 'uuid';
 import { AlphaFoldDialog } from './AlphaFoldDialog';
 import { RFdiffusionDialog } from './RFdiffusionDialog';
 import { ProteinMPNNDialog } from './ProteinMPNNDialog';
-import { ProgressTracker, useAlphaFoldProgress, useProteinMPNNProgress } from './ProgressTracker';
+import { ProgressTracker, useAlphaFoldProgress, useProteinMPNNProgress, useRFdiffusionProgress } from './ProgressTracker';
 import { ErrorDisplay } from './ErrorDisplay';
 import { ErrorDetails, AlphaFoldErrorHandler, RFdiffusionErrorHandler, ErrorCategory, ErrorSeverity } from '../utils/errorHandler';
 import { logAlphaFoldError } from '../utils/errorLogger';
@@ -16,15 +16,19 @@ import { AgentSelector } from './AgentSelector';
 import { ModelSelector } from './ModelSelector';
 import { useAgentSettings } from '../stores/settingsStore';
 import { ThinkingProcessDisplay } from './ThinkingProcessDisplay';
+import { PDBFileUpload } from './PDBFileUpload';
 
 // Extended message metadata for structured agent results
+// Note: Message interface now includes thinkingProcess and uploadedFile, so ExtendedMessage is mainly for type compatibility
 interface ExtendedMessage extends Message {
+  // These fields are now part of Message interface, but keeping for backward compatibility
   alphafoldResult?: {
     pdbContent?: string;
     filename?: string;
     sequence?: string;
     parameters?: any;
     metadata?: any;
+    jobType?: 'alphafold' | 'rfdiffusion';
   };
   proteinmpnnResult?: {
     jobId: string;
@@ -41,17 +45,8 @@ interface ExtendedMessage extends Message {
     };
     metadata?: Record<string, any>;
   };
-  thinkingProcess?: {
-    steps: Array<{
-      id: string;
-      title: string;
-      content: string;
-      status: 'pending' | 'processing' | 'completed';
-      timestamp?: Date;
-    }>;
-    isComplete: boolean;
-    totalSteps: number;
-  };
+  // uploadedFile is now in Message interface, but keeping here for backward compatibility
+  // thinkingProcess is now in Message interface, but keeping here for type compatibility
   error?: ErrorDetails;
 }
 
@@ -237,13 +232,14 @@ const createProteinMPNNError = (
 });
 
 export const ChatPanel: React.FC = () => {
-  const { plugin, currentCode, setCurrentCode, setIsExecuting, setActivePane, setPendingCodeToRun, setViewerVisible } = useAppStore();
+  const { plugin, currentCode, setCurrentCode, setIsExecuting, setActivePane, setPendingCodeToRun, setViewerVisible, setCurrentStructureOrigin, currentStructureOrigin } = useAppStore();
+  const lastLoadedPdb = useAppStore(state => state.lastLoadedPdb);
   const selections = useAppStore(state => state.selections);
   const removeSelection = useAppStore(state => state.removeSelection);
   const clearSelections = useAppStore(state => state.clearSelections);
 
   // Chat history store
-  const { createSession, activeSessionId, saveVisualizationCode, getVisualizationCode, saveViewerVisibility, getViewerVisibility, getActiveSession } = useChatHistoryStore();
+  const { createSession, activeSessionId, saveVisualizationCode, getVisualizationCode, saveViewerVisibility, getViewerVisibility, getActiveSession, saveModelSettings, getModelSettings } = useChatHistoryStore();
   const isViewerVisible = useAppStore(state => state.isViewerVisible);
   
   // Helper function to set viewer visibility and save to session
@@ -256,7 +252,7 @@ export const ChatPanel: React.FC = () => {
   const { activeSession, addMessage, updateMessages } = useActiveSession();
 
   // Agent and model settings
-  const { settings: agentSettings } = useAgentSettings();
+  const { settings: agentSettings, updateSettings: updateAgentSettings } = useAgentSettings();
   
   const [input, setInput] = useState('');
   const [isLoading, setIsLoading] = useState(false);
@@ -267,6 +263,8 @@ export const ChatPanel: React.FC = () => {
   // Refs to track latest values for session switching (avoid stale closures)
   const currentCodeRef = useRef<string | null>(currentCode);
   const isViewerVisibleRef = useRef<boolean>(isViewerVisible);
+  // Ref to prevent saving during restoration
+  const isRestoringRef = useRef(false);
 
   // Initialize session if none exists
   useEffect(() => {
@@ -300,9 +298,12 @@ export const ChatPanel: React.FC = () => {
   useEffect(() => {
     if (!activeSessionId) return;
     
+    // Only restore when session actually changes (not when settings change)
+    const sessionChanged = previousSessionIdRef.current !== activeSessionId;
+    
     // Save current state to previous session before switching
     // Use refs to ensure we have the latest values even if they changed after effect was scheduled
-    if (previousSessionIdRef.current && previousSessionIdRef.current !== activeSessionId) {
+    if (previousSessionIdRef.current && sessionChanged) {
       const codeToSave = currentCodeRef.current?.trim() || '';
       if (codeToSave) {
         saveVisualizationCode(previousSessionIdRef.current, codeToSave);
@@ -311,35 +312,98 @@ export const ChatPanel: React.FC = () => {
       // Save viewer visibility to previous session
       saveViewerVisibility(previousSessionIdRef.current, isViewerVisibleRef.current);
       console.log('[ChatPanel] Saved viewer visibility to previous session:', previousSessionIdRef.current, isViewerVisibleRef.current);
+      // Save model settings to previous session
+      saveModelSettings(
+        previousSessionIdRef.current,
+        agentSettings.selectedAgentId,
+        agentSettings.selectedModel
+      );
+      console.log('[ChatPanel] Saved model settings to previous session:', previousSessionIdRef.current, {
+        selectedAgentId: agentSettings.selectedAgentId,
+        selectedModel: agentSettings.selectedModel,
+      });
     }
     
-    // Restore code for new session
-    const savedCode = getVisualizationCode(activeSessionId);
-    if (savedCode && savedCode.trim()) {
-      console.log('[ChatPanel] Restoring visualization code for session:', activeSessionId);
-      setCurrentCode(savedCode);
-    } else {
-      // Clear code if session has no saved visualization
-      // Use ref to check current state
-      if (currentCodeRef.current && currentCodeRef.current.trim()) {
-        console.log('[ChatPanel] Clearing code for session without visualization:', activeSessionId);
-        setCurrentCode('');
+    // Only restore when session changes
+    if (sessionChanged) {
+      // Restore code for new session
+      const savedCode = getVisualizationCode(activeSessionId);
+      if (savedCode && savedCode.trim()) {
+        console.log('[ChatPanel] Restoring visualization code for session:', activeSessionId);
+        setCurrentCode(savedCode);
+      } else {
+        // Clear code if session has no saved visualization
+        // Use ref to check current state
+        if (currentCodeRef.current && currentCodeRef.current.trim()) {
+          console.log('[ChatPanel] Clearing code for session without visualization:', activeSessionId);
+          setCurrentCode('');
+        }
       }
+      
+      // Restore viewer visibility for new session
+      const savedVisibility = getViewerVisibility(activeSessionId);
+      if (savedVisibility !== undefined) {
+        console.log('[ChatPanel] Restoring viewer visibility for session:', activeSessionId, savedVisibility);
+        setViewerVisible(savedVisibility);
+      } else {
+        // Default to hidden for new sessions
+        setViewerVisible(false);
+      }
+      
+      // Restore model settings for new session
+      const savedModelSettings = getModelSettings(activeSessionId);
+      if (savedModelSettings) {
+        console.log('[ChatPanel] Restoring model settings for session:', activeSessionId, savedModelSettings);
+        isRestoringRef.current = true;
+        updateAgentSettings({
+          selectedAgentId: savedModelSettings.selectedAgentId,
+          selectedModel: savedModelSettings.selectedModel,
+        });
+        // Reset flag in next tick to allow the update to complete
+        Promise.resolve().then(() => {
+          setTimeout(() => {
+            isRestoringRef.current = false;
+          }, 50);
+        });
+      } else {
+        // For new sessions, keep current global settings (or use defaults)
+        console.log('[ChatPanel] No saved model settings for session, using current settings:', activeSessionId);
+        // Don't set restoring flag here - we want to save the current settings
+        saveModelSettings(
+          activeSessionId,
+          agentSettings.selectedAgentId,
+          agentSettings.selectedModel
+        );
+      }
+      
+      // Update previous session ID
+      previousSessionIdRef.current = activeSessionId;
     }
-    
-    // Restore viewer visibility for new session
-    const savedVisibility = getViewerVisibility(activeSessionId);
-    if (savedVisibility !== undefined) {
-      console.log('[ChatPanel] Restoring viewer visibility for session:', activeSessionId, savedVisibility);
-      setViewerVisible(savedVisibility);
-    } else {
-      // Default to hidden for new sessions
-      setViewerVisible(false);
+  }, [activeSessionId, getVisualizationCode, saveVisualizationCode, getViewerVisibility, saveViewerVisibility, setCurrentCode, setViewerVisible, saveModelSettings, getModelSettings, updateAgentSettings]);
+
+  // Save model settings when they change (for current session)
+  // Skip saving during initial session switch to avoid overwriting restored settings
+  useEffect(() => {
+    // Only save if we have an active session and not currently restoring
+    if (activeSessionId && !isRestoringRef.current) {
+      // Use requestAnimationFrame to ensure this runs after any restoration updates
+      const rafId = requestAnimationFrame(() => {
+        if (!isRestoringRef.current && activeSessionId) {
+          saveModelSettings(
+            activeSessionId,
+            agentSettings.selectedAgentId,
+            agentSettings.selectedModel
+          );
+          console.log('[ChatPanel] Saved model settings for current session:', activeSessionId, {
+            selectedAgentId: agentSettings.selectedAgentId,
+            selectedModel: agentSettings.selectedModel,
+          });
+        }
+      });
+      
+      return () => cancelAnimationFrame(rafId);
     }
-    
-    // Update previous session ID
-    previousSessionIdRef.current = activeSessionId;
-  }, [activeSessionId, getVisualizationCode, saveVisualizationCode, getViewerVisibility, saveViewerVisibility, setCurrentCode, setViewerVisible]);
+  }, [activeSessionId, agentSettings.selectedAgentId, agentSettings.selectedModel, saveModelSettings]);
 
   // Fetch agents and models on mount
   useEffect(() => {
@@ -381,10 +445,24 @@ export const ChatPanel: React.FC = () => {
   // RFdiffusion state
   const [showRFdiffusionDialog, setShowRFdiffusionDialog] = useState(false);
   const [rfdiffusionData, setRfdiffusionData] = useState<any>(null);
+  const rfdiffusionProgress = useRFdiffusionProgress();
 
   // Agent and model selection state
   const [agents, setAgents] = useState<Agent[]>([]);
   const [models, setModels] = useState<Model[]>([]);
+
+  // Pending file state (file selected but not uploaded yet)
+  const [pendingFile, setPendingFile] = useState<File | null>(null);
+  
+  // Uploaded file state (after upload completes)
+  const [uploadedFile, setUploadedFile] = useState<{
+    filename: string;
+    file_id: string;
+    file_url: string;
+    size: number;
+    atoms: number;
+    chains: string[];
+  } | null>(null);
 
   // Helper function to check if a model is a thinking model
   const isThinkingModel = (modelId: string | null): boolean => {
@@ -472,8 +550,138 @@ export const ChatPanel: React.FC = () => {
     return <p className="text-sm">{content}</p>;
   };
 
+  const loadUploadedFileInViewer = async (fileInfo: { file_id: string; filename: string; file_url: string }) => {
+    if (!plugin) return;
+    
+    try {
+      setIsExecuting(true);
+      const executor = new CodeExecutor(plugin);
+      
+      // Fetch file content and create blob URL (like AlphaFold does)
+      const fileResponse = await fetch(fileInfo.file_url);
+      if (!fileResponse.ok) {
+        throw new Error('Failed to fetch uploaded file');
+      }
+      const fileContent = await fileResponse.text();
+      
+      // Create blob URL
+      const pdbBlob = new Blob([fileContent], { type: 'text/plain' });
+      const blobUrl = URL.createObjectURL(pdbBlob);
+      
+      // Load structure in viewer using blob URL
+      const code = `
+try {
+  await builder.clearStructure();
+  await builder.loadStructure('${blobUrl}');
+  await builder.addCartoonRepresentation({ color: 'secondary-structure' });
+  builder.focusView();
+  console.log('Uploaded file loaded successfully');
+} catch (e) { 
+  console.error('Failed to load uploaded file:', e); 
+}`;
+      
+      // Save code to editor so user can see and modify it
+      setCurrentCode(code);
+      
+      // Set structure origin for LLM context
+      setCurrentStructureOrigin({
+        type: 'upload',
+        filename: fileInfo.filename,
+        metadata: {
+          file_id: fileInfo.file_id,
+          file_url: fileInfo.file_url,
+        },
+      });
+      
+      // Save code to active session for persistence
+      if (activeSessionId) {
+        saveVisualizationCode(activeSessionId, code);
+        console.log('[ChatPanel] Saved visualization code to session:', activeSessionId);
+      }
+      
+      await executor.executeCode(code);
+      setViewerVisibleAndSave(true);
+      setActivePane('viewer');
+      
+      // Keep blob URL alive for a bit longer to ensure structure loads
+      setTimeout(() => {
+        URL.revokeObjectURL(blobUrl);
+      }, 5000);
+    } catch (err) {
+      console.error('Failed to load uploaded file in viewer:', err);
+    } finally {
+      setIsExecuting(false);
+    }
+  };
+
+  // Helper function to validate uploaded file info (type guard)
+  const isValidUploadedFile = (
+    fileInfo: ExtendedMessage['uploadedFile']
+  ): fileInfo is NonNullable<ExtendedMessage['uploadedFile']> => {
+    return !!(
+      fileInfo &&
+      fileInfo.file_id &&
+      fileInfo.filename &&
+      fileInfo.file_url &&
+      typeof fileInfo.atoms === 'number' &&
+      Array.isArray(fileInfo.chains)
+    );
+  };
+
+  const renderFileAttachment = (fileInfo: ExtendedMessage['uploadedFile'], isUserMessage: boolean = false) => {
+    if (!isValidUploadedFile(fileInfo)) return null;
+
+    // Use different styling for user vs AI messages
+    const bgClass = isUserMessage 
+      ? 'bg-white bg-opacity-20 border-white border-opacity-30' 
+      : 'bg-gradient-to-r from-blue-50 to-indigo-50 border border-blue-200';
+    const textClass = isUserMessage ? 'text-white' : 'text-gray-900';
+    const textSecondaryClass = isUserMessage ? 'text-white text-opacity-80' : 'text-gray-600';
+    const buttonClass = isUserMessage
+      ? 'bg-white text-blue-600 hover:bg-gray-100'
+      : 'bg-blue-600 text-white hover:bg-blue-700';
+
+    return (
+      <div className={`mt-3 p-4 ${bgClass} rounded-lg`}>
+        <div className="flex items-center space-x-2 mb-3">
+          <div className={`w-8 h-8 ${isUserMessage ? 'bg-white bg-opacity-30' : 'bg-blue-600'} rounded-full flex items-center justify-center`}>
+            <span className={`${isUserMessage ? 'text-white' : 'text-white'} text-sm font-bold`}>PDB</span>
+          </div>
+          <div>
+            <h4 className={`font-medium ${textClass}`}>Uploaded PDB File</h4>
+            <p className={`text-xs ${textSecondaryClass}`}>
+              {fileInfo.filename} • {fileInfo.atoms} atoms • {fileInfo.chains.length} chain{fileInfo.chains.length !== 1 ? 's' : ''}
+            </p>
+          </div>
+        </div>
+        
+        {fileInfo.chains.length > 0 && (
+          <div className={`mb-3 text-xs ${textSecondaryClass}`}>
+            <span>Chains: {fileInfo.chains.join(', ')}</span>
+          </div>
+        )}
+        
+        <div className="flex space-x-2">
+          <button
+            onClick={() => loadUploadedFileInViewer(fileInfo)}
+            disabled={!plugin}
+            className={`flex items-center space-x-1 px-3 py-2 ${buttonClass} rounded-md disabled:opacity-50 disabled:cursor-not-allowed text-sm`}
+          >
+            <Play className="w-4 h-4" />
+            <span>View in 3D</span>
+          </button>
+        </div>
+      </div>
+    );
+  };
+
   const renderAlphaFoldResult = (result: ExtendedMessage['alphafoldResult']) => {
     if (!result) return null;
+
+    const isRFdiffusion = result.jobType === 'rfdiffusion';
+    const title = isRFdiffusion ? 'RFdiffusion Protein Design' : 'AlphaFold2 Structure Prediction';
+    const iconText = isRFdiffusion ? 'RF' : 'AF';
+    const defaultFilename = isRFdiffusion ? 'rfdiffusion_result.pdb' : 'alphafold_result.pdb';
 
     const downloadPDB = () => {
       if (result.pdbContent) {
@@ -481,7 +689,7 @@ export const ChatPanel: React.FC = () => {
         const url = URL.createObjectURL(blob);
         const a = document.createElement('a');
         a.href = url;
-        a.download = result.filename || 'alphafold_result.pdb';
+        a.download = result.filename || defaultFilename;
         document.body.appendChild(a);
         a.click();
         document.body.removeChild(a);
@@ -496,28 +704,51 @@ export const ChatPanel: React.FC = () => {
         setIsExecuting(true);
         const executor = new CodeExecutor(plugin);
         
-        // Create temporary PDB data URL
+        // Create temporary PDB blob URL
         const pdbBlob = new Blob([result.pdbContent], { type: 'text/plain' });
-        const pdbUrl = URL.createObjectURL(pdbBlob);
+        const blobUrl = URL.createObjectURL(pdbBlob);
         
-        // Load structure in viewer
+        // Load structure in viewer using blob URL
         const code = `
 try {
   await builder.clearStructure();
-  // Note: This would need to be adapted to load from blob URL
-  // For now, we'll show the sequence info and guide user to download
-  console.log('AlphaFold result ready for visualization');
+  await builder.loadStructure('${blobUrl}');
+  await builder.addCartoonRepresentation({ color: 'secondary-structure' });
+  builder.focusView();
+  console.log('Structure loaded successfully');
 } catch (e) { 
-  console.error('Failed to load AlphaFold result:', e); 
+  console.error('Failed to load structure:', e); 
 }`;
+        
+        // Save code to editor so user can see and modify it
+        setCurrentCode(code);
+        
+        // Set structure origin for LLM context
+        const isRFdiffusion = result.jobType === 'rfdiffusion';
+        setCurrentStructureOrigin({
+          type: isRFdiffusion ? 'rfdiffusion' : 'alphafold',
+          jobId: result.parameters?.jobId,
+          parameters: result.parameters,
+          metadata: result.metadata,
+          filename: result.filename
+        });
+        
+        // Save code to active session for persistence
+        if (activeSessionId) {
+          saveVisualizationCode(activeSessionId, code);
+          console.log('[ChatPanel] Saved visualization code to session:', activeSessionId);
+        }
         
         await executor.executeCode(code);
         setViewerVisibleAndSave(true);
         setActivePane('viewer');
         
-        URL.revokeObjectURL(pdbUrl);
+        // Keep blob URL alive for a bit longer to ensure structure loads
+        setTimeout(() => {
+          URL.revokeObjectURL(blobUrl);
+        }, 5000);
       } catch (err) {
-        console.error('Failed to load AlphaFold result in viewer:', err);
+        console.error('Failed to load structure in viewer:', err);
       } finally {
         setIsExecuting(false);
       }
@@ -527,10 +758,10 @@ try {
       <div className="mt-3 p-4 bg-gradient-to-r from-purple-50 to-blue-50 border border-purple-200 rounded-lg">
         <div className="flex items-center space-x-2 mb-3">
           <div className="w-8 h-8 bg-purple-600 rounded-full flex items-center justify-center">
-            <span className="text-white text-sm font-bold">AF</span>
+            <span className="text-white text-sm font-bold">{iconText}</span>
           </div>
           <div>
-            <h4 className="font-medium text-gray-900">AlphaFold2 Structure Prediction</h4>
+            <h4 className="font-medium text-gray-900">{title}</h4>
             <p className="text-xs text-gray-600">
               {result.sequence ? `${result.sequence.length} residues` : 'Structure predicted'}
             </p>
@@ -619,7 +850,8 @@ try {
       const response = await api.post('/alphafold/fold', {
         sequence,
         parameters,
-        jobId
+        jobId,
+        sessionId: activeSessionId || undefined, // Associate with current session
       });
       
       console.log('📨 [AlphaFold] API response received:', response.status, response.data);
@@ -644,12 +876,17 @@ try {
                   filename: result.filename || `folded_${Date.now()}.pdb`,
                   sequence,
                   parameters,
-                  metadata: result.metadata
+                  metadata: result.metadata,
+                  jobType: 'alphafold'
                 }
               };
-              addMessage(aiMessage);
-              alphafoldProgress.completeProgress();
-              return true;
+        addMessage(aiMessage);
+        alphafoldProgress.completeProgress();
+        
+        // Notify FileBrowser to refresh
+        window.dispatchEvent(new CustomEvent('session-file-added'));
+        
+        return true;
             } else if (st === 'error') {
               const apiError = AlphaFoldErrorHandler.createError(
                 'FOLDING_FAILED',
@@ -730,7 +967,8 @@ try {
             filename: result.filename || `folded_${Date.now()}.pdb`,
             sequence,
             parameters,
-            metadata: result.metadata
+            metadata: result.metadata,
+            jobType: 'alphafold'
           }
         };
         
@@ -989,15 +1227,142 @@ try {
     setShowRFdiffusionDialog(false);
     
     const jobId = `rf_${Date.now()}`;
+    console.log('🚀 [RFdiffusion] User confirmed design request');
+    console.log('⚙️ [RFdiffusion] Parameters:', parameters);
+    console.log('🆔 [RFdiffusion] Generated job ID:', jobId);
+    
+    rfdiffusionProgress.startProgress(jobId, 'Submitting RFdiffusion design request...');
+    console.log('📡 [RFdiffusion] Starting progress tracking for job:', jobId);
     
     try {
+      console.log('🌐 [RFdiffusion] Making API call to /api/rfdiffusion/design');
       const response = await api.post('/rfdiffusion/design', {
         parameters,
-        jobId
+        jobId,
+        sessionId: activeSessionId || undefined, // Associate with current session
       });
+      
+      console.log('📨 [RFdiffusion] API response received:', response.status, response.data);
 
+      // Async flow: 202 Accepted → poll status endpoint until completion
+      if (response.status === 202 || response.data.status === 'accepted' || response.data.status === 'queued' || response.data.status === 'running') {
+        console.log('🕒 [RFdiffusion] Job accepted, starting polling for status...', { jobId });
+        const start = Date.now();
+        const poll = async () => {
+          try {
+            const statusResp = await api.get(`/rfdiffusion/status/${jobId}`);
+            const st = statusResp.data?.status;
+            if (st === 'completed') {
+              const result = statusResp.data?.data || {};
+              
+              // Auto-download PDB file
+              if (result.pdbContent) {
+                const blob = new Blob([result.pdbContent], { type: 'text/plain' });
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = result.filename || `rfdiffusion_${Date.now()}.pdb`;
+                document.body.appendChild(a);
+                a.click();
+                document.body.removeChild(a);
+                URL.revokeObjectURL(url);
+              }
+              
+              const aiMessage: ExtendedMessage = {
+                id: (Date.now() + 1).toString(),
+                content: `RFdiffusion protein design completed successfully! The designed structure is ready for download and visualization.`,
+                type: 'ai',
+                timestamp: new Date(),
+                alphafoldResult: {
+                  pdbContent: result.pdbContent,
+                  filename: result.filename || `designed_${Date.now()}.pdb`,
+                  parameters,
+                  metadata: result.metadata,
+                  jobType: 'rfdiffusion'
+                }
+              };
+              addMessage(aiMessage);
+              rfdiffusionProgress.completeProgress();
+              
+              // Notify FileBrowser to refresh
+              window.dispatchEvent(new CustomEvent('session-file-added'));
+              
+              return true;
+            } else if (st === 'error') {
+              const apiError = RFdiffusionErrorHandler.handleError(statusResp.data, {
+                jobId,
+                parameters,
+                feature: 'RFdiffusion'
+              });
+              const errorMessage: ExtendedMessage = {
+                id: (Date.now() + 1).toString(),
+                content: apiError.userMessage,
+                type: 'ai',
+                timestamp: new Date(),
+                error: apiError
+              };
+              addMessage(errorMessage);
+              rfdiffusionProgress.errorProgress(apiError.userMessage);
+              return true;
+            } else {
+              // Update progress heuristically up to 90%
+              const elapsed = (Date.now() - start) / 1000;
+              const estDuration = 480; // 8 minutes heuristic for RFdiffusion
+              const pct = Math.min(90, Math.round((elapsed / estDuration) * 90));
+              rfdiffusionProgress.updateProgress(`Processing... (${Math.round(elapsed)}s)`, pct);
+              return false;
+            }
+          } catch (e) {
+            console.warn('⚠️ [RFdiffusion] Polling failed, will retry...', e);
+            return false;
+          }
+        };
+
+        // Poll every 3s until done or timeout (~20 minutes for RFdiffusion)
+        const timeoutSec = 20 * 60;
+        let finished = false;
+        while (!finished && (Date.now() - start) / 1000 < timeoutSec) {
+          // eslint-disable-next-line no-await-in-loop
+          finished = await poll();
+          if (finished) break;
+          // eslint-disable-next-line no-await-in-loop
+          await new Promise(res => setTimeout(res, 3000));
+        }
+
+        if (!finished) {
+          const apiError = RFdiffusionErrorHandler.handleError(
+            { userMessage: 'RFdiffusion design timed out', technicalMessage: 'Job exceeded maximum wait time' },
+            { jobId, parameters, feature: 'RFdiffusion' }
+          );
+          const errorMessage: ExtendedMessage = {
+            id: (Date.now() + 1).toString(),
+            content: apiError.userMessage,
+            type: 'ai',
+            timestamp: new Date(),
+            error: apiError
+          };
+          addMessage(errorMessage);
+          rfdiffusionProgress.errorProgress(apiError.userMessage);
+        }
+        return; // Exit after async flow
+      }
+
+      // Synchronous success flow
       if (response.data.status === 'success') {
         const result = response.data.data;
+        
+        // Auto-download PDB file
+        if (result.pdbContent) {
+          const blob = new Blob([result.pdbContent], { type: 'text/plain' });
+          const url = URL.createObjectURL(blob);
+          const a = document.createElement('a');
+          a.href = url;
+          a.download = result.filename || `rfdiffusion_${Date.now()}.pdb`;
+          document.body.appendChild(a);
+          a.click();
+          document.body.removeChild(a);
+          URL.revokeObjectURL(url);
+        }
         
         // Add result message to chat
         const aiMessage: ExtendedMessage = {
@@ -1005,17 +1370,22 @@ try {
           content: `RFdiffusion protein design completed successfully! The designed structure is ready for download and visualization.`,
           type: 'ai',
           timestamp: new Date(),
-          alphafoldResult: { // Reuse the same result format for display
+          alphafoldResult: {
             pdbContent: result.pdbContent,
             filename: result.filename || `designed_${Date.now()}.pdb`,
             parameters,
-            metadata: result.metadata
+            metadata: result.metadata,
+            jobType: 'rfdiffusion'
           }
         };
         
         addMessage(aiMessage);
-      } else {
-        // Handle API error response
+        rfdiffusionProgress.completeProgress();
+        
+        // Notify FileBrowser to refresh
+        window.dispatchEvent(new CustomEvent('session-file-added'));
+      } else if (response.data.status === 'error') {
+        // Handle API error response - use the response.data directly
         const apiError = RFdiffusionErrorHandler.handleError(response.data, {
           jobId,
           parameters,
@@ -1031,12 +1401,33 @@ try {
         };
         
         addMessage(errorMessage);
+        rfdiffusionProgress.errorProgress(apiError.userMessage);
+      } else {
+        // Unexpected response format
+        const apiError = RFdiffusionErrorHandler.handleError(
+          { userMessage: 'Unexpected response from server', technicalMessage: JSON.stringify(response.data) },
+          { jobId, parameters, feature: 'RFdiffusion' }
+        );
+        
+        const errorMessage: ExtendedMessage = {
+          id: (Date.now() + 1).toString(),
+          content: apiError.userMessage,
+          type: 'ai',
+          timestamp: new Date(),
+          error: apiError
+        };
+        
+        addMessage(errorMessage);
+        rfdiffusionProgress.errorProgress(apiError.userMessage);
       }
     } catch (error: any) {
       console.error('RFdiffusion request failed:', error);
       
+      // Extract error data from axios response if available
+      const errorData = error?.response?.data || error?.data || error;
+      
       // Handle different types of errors
-      const structuredError = RFdiffusionErrorHandler.handleError(error, {
+      const structuredError = RFdiffusionErrorHandler.handleError(errorData, {
         jobId,
         parameters,
         feature: 'RFdiffusion'
@@ -1051,6 +1442,7 @@ try {
       };
       
       addMessage(errorMessage);
+      rfdiffusionProgress.errorProgress(structuredError.userMessage);
     }
   };
 
@@ -1112,11 +1504,140 @@ try {
     e.preventDefault();
     if (!input.trim() || isLoading) return;
 
+    // Upload pending file if one exists
+    let fileUploadResult: { file_id: string } | null = null;
+    let uploadedFileInfo: {
+      file_id: string;
+      filename: string;
+      file_url: string;
+      atoms: number;
+      chains: string[];
+    } | null = null;
+    if (pendingFile) {
+      try {
+        setIsLoading(true);
+        const formData = new FormData();
+        formData.append('file', pendingFile);
+        if (activeSessionId) {
+          formData.append('session_id', activeSessionId);
+        }
+
+        const response = await fetch('/api/upload/pdb', {
+          method: 'POST',
+          body: formData,
+        });
+
+        if (!response.ok) {
+          const errorData = await response.json();
+          throw new Error(errorData.detail || 'Upload failed');
+        }
+
+        const result = await response.json();
+        fileUploadResult = { file_id: result.file_info.file_id };
+        uploadedFileInfo = {
+          file_id: result.file_info.file_id,
+          filename: result.file_info.filename,
+          file_url: result.file_info.file_url,
+          atoms: result.file_info.atoms,
+          chains: result.file_info.chains,
+        };
+        setUploadedFile({
+          ...uploadedFileInfo,
+          size: result.file_info.size || 0,
+        });
+        
+        // Clear pending file after successful upload
+        setPendingFile(null);
+        
+        // Clear previous PDB context when new file is uploaded
+        setCurrentCode('');
+        setCurrentStructureOrigin(null);
+        
+        // Clear and load new uploaded file in viewer
+        if (plugin) {
+          try {
+            setIsExecuting(true);
+            const executor = new CodeExecutor(plugin);
+            // Clear previous structure
+            await executor.executeCode('try { await builder.clearStructure(); } catch(e) { console.warn("Clear failed:", e); }');
+            console.log('[ChatPanel] Cleared previous structure for new file upload');
+            
+            // Fetch file content and create blob URL (like AlphaFold does)
+            const fileUrl = result.file_info.file_url || `/api/upload/pdb/${result.file_info.file_id}`;
+            const fileResponse = await fetch(fileUrl);
+            if (!fileResponse.ok) {
+              throw new Error('Failed to fetch uploaded file');
+            }
+            const fileContent = await fileResponse.text();
+            
+            // Create blob URL
+            const pdbBlob = new Blob([fileContent], { type: 'text/plain' });
+            const blobUrl = URL.createObjectURL(pdbBlob);
+            
+            // Load structure in viewer using blob URL
+            const loadCode = `
+try {
+  await builder.loadStructure('${blobUrl}');
+  await builder.addCartoonRepresentation({ color: 'secondary-structure' });
+  builder.focusView();
+  console.log('Uploaded file loaded successfully');
+} catch (e) { 
+  console.error('Failed to load uploaded file:', e); 
+}`;
+            
+            setCurrentCode(loadCode);
+            setCurrentStructureOrigin({
+              type: 'upload',
+              filename: result.file_info.filename,
+              metadata: {
+                file_id: result.file_info.file_id,
+                file_url: fileUrl,
+              },
+            });
+            
+            // Save code to active session
+            if (activeSessionId) {
+              saveVisualizationCode(activeSessionId, loadCode);
+            }
+            
+            await executor.executeCode(loadCode);
+            setViewerVisibleAndSave(true);
+            setActivePane('viewer');
+            console.log('[ChatPanel] Auto-loaded uploaded file in viewer');
+            
+            // Keep blob URL alive for a bit longer to ensure structure loads
+            setTimeout(() => {
+              URL.revokeObjectURL(blobUrl);
+            }, 5000);
+          } catch (e) {
+            console.warn('[ChatPanel] Failed to load uploaded file in viewer:', e);
+          } finally {
+            setIsExecuting(false);
+          }
+        }
+      } catch (error: any) {
+        console.error('File upload failed:', error);
+        // Show error but continue with message
+        const errorMsg: Message = {
+          id: uuidv4(),
+          content: `Failed to upload file: ${error.message}`,
+          type: 'ai',
+          timestamp: new Date()
+        };
+        addMessage(errorMsg);
+        setPendingFile(null); // Clear pending file even on error
+        setIsLoading(false);
+        return;
+      }
+    }
+
     const userMessage: Message = {
       id: uuidv4(),
       content: input.trim(),
       type: 'user',
-      timestamp: new Date()
+      timestamp: new Date(),
+      // Attach file info if file was uploaded
+      uploadedFile: uploadedFileInfo || undefined,
     };
 
     addMessage(userMessage);
@@ -1150,11 +1671,36 @@ try {
       const payload = {
         input: text,
         currentCode,
-        history: messages.slice(-6).map(m => ({ type: m.type, content: m.content })),
+        currentStructureOrigin: currentStructureOrigin || undefined, // Include structure origin context
+        history: messages.slice(-6).map(m => {
+          const base: any = { type: m.type, content: m.content };
+          
+          // Include RF diffusion/AlphaFold result metadata
+          if (m.alphafoldResult) {
+            base.alphafoldResult = {
+              jobType: m.alphafoldResult.jobType,
+              parameters: m.alphafoldResult.parameters,
+              filename: m.alphafoldResult.filename,
+              // Don't include pdbContent (too large), but include metadata
+              metadata: m.alphafoldResult.metadata
+            };
+          }
+          
+          // Include ProteinMPNN result metadata if present
+          if (m.proteinmpnnResult) {
+            base.proteinmpnnResult = {
+              jobId: m.proteinmpnnResult.jobId,
+              metadata: m.proteinmpnnResult.metadata
+            };
+          }
+          
+          return base;
+        }),
         selection: selections.length > 0 ? selections[0] : null, // First selection for backward compatibility
         selections: selections, // Full selections array for new multi-selection support
         agentId: agentSettings.selectedAgentId || undefined, // Only send if manually selected
         model: agentSettings.selectedModel || undefined, // Only send if manually selected
+        uploadedFileId: fileUploadResult?.file_id || uploadedFile?.file_id || undefined, // Include uploaded file ID if available
       };
       console.log('[AI] route:request', payload);
       console.log('[DEBUG] currentCode length:', currentCode?.length || 0);
@@ -1642,6 +2188,10 @@ try {
     } finally {
       // Always clear loading state, even if streaming or regular API call fails
       setIsLoading(false);
+      // Clear uploaded file state after message is sent
+      if (uploadedFileInfo) {
+        setUploadedFile(null);
+      }
     }
   };
 
@@ -1703,6 +2253,24 @@ try {
                     />
                   )}
                   {renderMessageContent(message.content)}
+                  {/* Show uploaded file attachment if the most recent user message before this AI message had one */}
+                  {(() => {
+                    const messageIndex = messages.findIndex(m => m.id === message.id);
+                    if (messageIndex < 0) return null;
+                    
+                    // Find the most recent user message before this AI message
+                    for (let i = messageIndex - 1; i >= 0; i--) {
+                      const prevMsg = messages[i];
+                      if (prevMsg.type === 'user' && prevMsg.uploadedFile && isValidUploadedFile(prevMsg.uploadedFile)) {
+                        return (
+                          <div className="mt-3">
+                            {renderFileAttachment(prevMsg.uploadedFile, false)}
+                          </div>
+                        );
+                      }
+                    }
+                    return null;
+                  })()}
                   {renderAlphaFoldResult(message.alphafoldResult)}
                   {renderProteinMPNNResult(message.proteinmpnnResult)}
                   {message.error && (
@@ -1723,7 +2291,14 @@ try {
                   )}
                 </>
               ) : (
-                <p className="text-sm">{message.content}</p>
+                <>
+                  <p className="text-sm">{message.content}</p>
+                  {message.uploadedFile && (
+                    <div className="mt-2">
+                      {renderFileAttachment(message.uploadedFile, true)}
+                    </div>
+                  )}
+                </>
               )}
               <div className="text-xs mt-1 opacity-70">
                 {new Date(message.timestamp).toLocaleTimeString()}
@@ -1803,6 +2378,13 @@ try {
           title={proteinmpnnProgress.title}
           eventName={proteinmpnnProgress.eventName}
         />
+        <ProgressTracker
+          isVisible={rfdiffusionProgress.isVisible}
+          onCancel={rfdiffusionProgress.cancelProgress}
+          className="mb-3"
+          title={rfdiffusionProgress.title}
+          eventName={rfdiffusionProgress.eventName}
+        />
 
         {!showCenteredLayout && (
           <div className="mb-3">
@@ -1822,6 +2404,28 @@ try {
         )}
 
         <form onSubmit={handleSubmit} className={`flex flex-col gap-2 ${showCenteredLayout ? 'max-w-2xl w-full mx-auto' : ''}`}>
+          {/* Show uploaded file capsule at top of input area */}
+          {pendingFile && (
+            <div className="flex items-center space-x-2 px-3 py-2 bg-blue-50 border border-blue-200 rounded-lg">
+              <Paperclip className="w-4 h-4 text-blue-600" />
+              <span className="text-sm text-blue-700 font-medium flex-1 truncate" title={pendingFile.name}>
+                {pendingFile.name}
+              </span>
+              <span className="text-xs text-blue-600">
+                ({(pendingFile.size / 1024).toFixed(1)} KB)
+              </span>
+              <button
+                type="button"
+                onClick={() => setPendingFile(null)}
+                disabled={isLoading}
+                className="p-1 hover:bg-blue-100 rounded disabled:opacity-50"
+                title="Remove file"
+              >
+                <X className="w-4 h-4 text-blue-600" />
+              </button>
+            </div>
+          )}
+          
           {/* Large text input area */}
           <div className="relative">
             <textarea
@@ -1860,6 +2464,25 @@ try {
             
             {/* Spacer */}
             <div className="flex-1" />
+            
+            {/* Upload PDB file button */}
+            <PDBFileUpload
+              onFileSelected={(file) => {
+                // Store file locally, don't upload yet
+                setPendingFile(file);
+              }}
+              onFileCleared={() => {
+                // Clear pending file
+                setPendingFile(null);
+              }}
+              onError={(error) => {
+                console.error('File selection error:', error);
+                // Could show a toast notification here
+              }}
+              disabled={isLoading}
+              pendingFile={pendingFile}
+              sessionId={activeSessionId}
+            />
             
             {/* Microphone button */}
             <button
@@ -1926,6 +2549,23 @@ try {
         onClose={() => setShowRFdiffusionDialog(false)}
         onConfirm={handleRFdiffusionConfirm}
         initialData={rfdiffusionData}
+        contextPdb={(() => {
+          // Extract PDB context from viewer
+          // Priority 1: lastLoadedPdb from store
+          if (lastLoadedPdb) {
+            return { type: 'pdb_id' as const, value: lastLoadedPdb };
+          }
+          // Priority 2: Extract from currentCode
+          if (currentCode) {
+            const match = currentCode.match(/loadStructure\s*\(\s*['"]([0-9A-Za-z]{4})['"]/);
+            if (match) {
+              return { type: 'pdb_id' as const, value: match[1].toUpperCase() };
+            }
+          }
+          // Priority 3: Check chat history for uploaded files (could be enhanced)
+          // For now, return undefined if no PDB detected
+          return undefined;
+        })()}
       />
 
       <ProteinMPNNDialog

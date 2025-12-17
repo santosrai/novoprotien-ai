@@ -2,6 +2,7 @@ import React, { useState, useEffect, useMemo } from 'react';
 import { Loader2, AlertCircle, UploadCloud, FileText } from 'lucide-react';
 import { api } from '../utils/api';
 import { PDBFileUpload } from './PDBFileUpload';
+import { useChatHistoryStore } from '../stores/chatHistoryStore';
 
 interface ProteinMPNNParameters {
   numDesigns: number;
@@ -55,6 +56,7 @@ export const ProteinMPNNDialog: React.FC<ProteinMPNNDialogProps> = ({
   onConfirm,
   initialData
 }) => {
+  const { activeSessionId } = useChatHistoryStore();
   const [sources, setSources] = useState<ProteinMPNNSources>({ rfdiffusion: [], uploads: [] });
   const [loadingSources, setLoadingSources] = useState(false);
   const [sourcesError, setSourcesError] = useState<string | null>(null);
@@ -303,6 +305,7 @@ export const ProteinMPNNDialog: React.FC<ProteinMPNNDialogProps> = ({
                         file_id: selectedUpload.file_id,
                         file_path: selectedUpload.stored_path
                       } : null}
+                      sessionId={activeSessionId}
                     />
                     <div className="text-xs text-gray-600">
                       <p>Upload a PDB file (max 10 MB). Designed sequences will respect this backbone.</p>

@@ -116,7 +116,7 @@ class ErrorLogger {
 
   private consoleLog(logEntry: ErrorLogEntry): void {
     const { error } = logEntry;
-    const prefix = `[AlphaFold Error ${error.code}]`;
+    const prefix = `[Error ${error.code}]`;
     
     switch (error.severity) {
       case ErrorSeverity.LOW:

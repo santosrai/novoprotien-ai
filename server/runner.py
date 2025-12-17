@@ -751,6 +751,8 @@ async def run_agent(
     history: Optional[List[Dict[str, Any]]],
     selection: Optional[Dict[str, Any]],
     selections: Optional[List[Dict[str, Any]]] = None,
+    current_structure_origin: Optional[Dict[str, Any]] = None,
+    uploaded_file_context: Optional[Dict[str, Any]] = None,
     model_override: Optional[str] = None,
 ) -> Dict[str, Any]:
     # Use model_override if provided, otherwise fall back to agent's default
@@ -878,11 +880,22 @@ async def run_agent(
         return {"type": "text", "text": text}
 
     if agent.get("kind") == "code":
+        # Include uploaded file context if available
+        uploaded_file_info = ""
+        if uploaded_file_context:
+            file_url = uploaded_file_context.get("file_url", "")
+            filename = uploaded_file_context.get("filename", "uploaded file")
+            atoms = uploaded_file_context.get("atoms", 0)
+            chains = uploaded_file_context.get("chains", [])
+            uploaded_file_info = f"\n\nIMPORTANT: User has uploaded a PDB file ({filename}, {atoms} atoms, chains: {', '.join(chains) if chains else 'N/A'}). "
+            uploaded_file_info += f"To load this file, use: await builder.loadStructure('{file_url}');\n"
+            uploaded_file_info += "The file is available at the API endpoint shown above. Use this URL instead of a PDB ID.\n"
+        
         context_prefix = (
             f"You may MODIFY the existing Molstar builder code below to satisfy the new request. Prefer editing in-place if it does not change the loaded PDB. Always return the full updated code.\n\n"
-            f"Existing code:\n\n```js\n{str(current_code)}\n```\n\nRequest: {user_text}"
+            f"Existing code:\n\n```js\n{str(current_code)}\n```\n\nRequest: {user_text}{uploaded_file_info}"
             if current_code and str(current_code).strip()
-            else f"Generate Molstar builder code for: {user_text}"
+            else f"Generate Molstar builder code for: {user_text}{uploaded_file_info}"
         )
 
         prior_dialogue = (
@@ -959,15 +972,97 @@ async def run_agent(
 
     # Text agent
     selection_lines = []
-    
-    # Extract PDB ID from current code if available
     code_pdb_id = None
+    structure_origin_context = None
+    
+    # Add uploaded file context if available
+    uploaded_file_info = ""
+    if uploaded_file_context:
+        filename = uploaded_file_context.get("filename", "uploaded file")
+        atoms = uploaded_file_context.get("atoms", 0)
+        chains = uploaded_file_context.get("chains", [])
+        file_url = uploaded_file_context.get("file_url", "")
+        uploaded_file_info = (
+            f"UploadedFileContext: User has uploaded a PDB file named '{filename}' "
+            f"({atoms} atoms, {len(chains)} chain{'s' if len(chains) != 1 else ''}: {', '.join(chains) if chains else 'N/A'}). "
+            f"The file is available at: {file_url}. "
+            f"When answering questions about this structure, refer to it as the uploaded file '{filename}'.\n\n"
+        )
+    
     if current_code and str(current_code).strip():
         import re
-        # Look for loadStructure calls with PDB ID
+        # Check for blob URL (RF diffusion/AlphaFold result)
+        blob_match = re.search(r"loadStructure\s*\(\s*['\"](blob:[^'\"]+)['\"]", str(current_code))
+        if blob_match:
+            # This is a generated structure, check current_structure_origin or history for origin
+            if current_structure_origin:
+                origin_type = current_structure_origin.get("type", "unknown")
+                if origin_type == "rfdiffusion":
+                    params = current_structure_origin.get("parameters", {})
+                    structure_origin_context = (
+                        f"Current Structure: This is a protein structure generated using RFdiffusion protein design. "
+                        f"Design mode: {params.get('design_mode', 'unknown')}. "
+                    )
+                    if params.get("contigs"):
+                        structure_origin_context += f"Contigs: {params.get('contigs')}. "
+                    if params.get("diffusion_steps"):
+                        structure_origin_context += f"Diffusion steps: {params.get('diffusion_steps')}. "
+                    if current_structure_origin.get("filename"):
+                        structure_origin_context += f"Filename: {current_structure_origin.get('filename')}. "
+                    structure_origin_context += (
+                        "This structure does not have a PDB ID because it was computationally generated, "
+                        "not retrieved from the Protein Data Bank."
+                    )
+                elif origin_type == "alphafold":
+                    structure_origin_context = (
+                        f"Current Structure: This is a protein structure predicted using AlphaFold2. "
+                    )
+                    if current_structure_origin.get("filename"):
+                        structure_origin_context += f"Filename: {current_structure_origin.get('filename')}. "
+                    structure_origin_context += (
+                        "This structure does not have a PDB ID because it was computationally predicted, "
+                        "not retrieved from the Protein Data Bank."
+                    )
+                elif origin_type == "upload":
+                    structure_origin_context = (
+                        f"Current Structure: This is a protein structure loaded from an uploaded PDB file. "
+                    )
+                    if current_structure_origin.get("filename"):
+                        structure_origin_context += f"Filename: {current_structure_origin.get('filename')}. "
+            else:
+                # Fallback: check history for structure metadata
+                if history:
+                    import json
+                    for msg in reversed(history):  # Check most recent first
+                        if msg.get("type") == "ai" and msg.get("alphafoldResult"):
+                            result = msg["alphafoldResult"]
+                            job_type = result.get("jobType", "unknown")
+                            params = result.get("parameters", {})
+                            
+                            if job_type == "rfdiffusion":
+                                structure_origin_context = (
+                                    f"Current Structure: This structure was generated using RFdiffusion protein design. "
+                                    f"Design mode: {params.get('design_mode', 'unknown')}. "
+                                )
+                                if params.get("contigs"):
+                                    structure_origin_context += f"Contigs: {params.get('contigs')}. "
+                                structure_origin_context += (
+                                    "This structure does not have a PDB ID because it was computationally generated."
+                                )
+                                break
+                            elif job_type == "alphafold":
+                                structure_origin_context = (
+                                    "Current Structure: This structure was predicted using AlphaFold2. "
+                                    "This structure does not have a PDB ID because it was computationally predicted."
+                                )
+                                break
+        
+        # Check for PDB ID (traditional structure)
         pdb_match = re.search(r"loadStructure\s*\(\s*['\"]([0-9A-Za-z]{4})['\"]", str(current_code))
         if pdb_match:
             code_pdb_id = pdb_match.group(1).upper()
+            if not structure_origin_context:
+                structure_origin_context = f"Current Structure: PDB ID {code_pdb_id} (from Protein Data Bank)."
     
     # Handle multiple selections if provided, otherwise fall back to single selection
     active_selections = selections if selections and len(selections) > 0 else ([selection] if selection else [])
@@ -1004,10 +1099,46 @@ async def run_agent(
         if current_code and str(current_code).strip()
         else ""
     )
+    
+    # Add structure origin context to code_context
+    if structure_origin_context:
+        if code_context:
+            code_context = structure_origin_context + "\n\n" + code_context
+        else:
+            code_context = structure_origin_context
+    
+    # Also add recent history context about generated structures
+    history_context_lines = []
+    if history:
+        import json
+        for msg in history[-3:]:  # Last 3 messages
+            if msg.get("type") == "ai" and msg.get("alphafoldResult"):
+                result = msg["alphafoldResult"]
+                job_type = result.get("jobType", "unknown")
+                if job_type == "rfdiffusion":
+                    params = result.get("parameters", {})
+                    history_context_lines.append(
+                        f"Recent RFdiffusion result: {result.get('filename', 'unknown')} "
+                        f"(design mode: {params.get('design_mode', 'unknown')})"
+                    )
+                elif job_type == "alphafold":
+                    history_context_lines.append(
+                        f"Recent AlphaFold2 prediction: {result.get('filename', 'unknown')}"
+                    )
 
     messages: List[Dict[str, Any]] = []
-    if selection_context or code_context:
-        messages.append({"role": "user", "content": (selection_context + ("\n\n" if selection_context and code_context else "") + code_context)})
+    context_parts = []
+    if uploaded_file_info:
+        context_parts.append(uploaded_file_info)
+    if history_context_lines:
+        context_parts.append("Recent Structure Generation History:\n" + "\n".join(history_context_lines))
+    if selection_context:
+        context_parts.append(selection_context)
+    if code_context:
+        context_parts.append(code_context)
+    
+    if context_parts:
+        messages.append({"role": "user", "content": "\n\n".join(context_parts)})
     messages.append({"role": "user", "content": user_text})
 
     log_line("agent:text:req", {**base_log, "hasSelection": bool(selection), "userText": user_text})
@@ -1088,6 +1219,8 @@ async def run_agent_stream(
     history: Optional[List[Dict[str, Any]]],
     selection: Optional[Dict[str, Any]],
     selections: Optional[List[Dict[str, Any]]] = None,
+    current_structure_origin: Optional[Dict[str, Any]] = None,
+    uploaded_file_context: Optional[Dict[str, Any]] = None,
     model_override: Optional[str] = None,
 ) -> AsyncGenerator[Dict[str, Any], None]:
     """Stream agent execution with incremental thinking step updates.
@@ -1131,12 +1264,23 @@ async def run_agent_stream(
     # Handle code agents
     if agent_kind == "code":
         try:
+            # Include uploaded file context if available
+            uploaded_file_info = ""
+            if uploaded_file_context:
+                file_url = uploaded_file_context.get("file_url", "")
+                filename = uploaded_file_context.get("filename", "uploaded file")
+                atoms = uploaded_file_context.get("atoms", 0)
+                chains = uploaded_file_context.get("chains", [])
+                uploaded_file_info = f"\n\nIMPORTANT: User has uploaded a PDB file ({filename}, {atoms} atoms, chains: {', '.join(chains) if chains else 'N/A'}). "
+                uploaded_file_info += f"To load this file, use: await builder.loadStructure('{file_url}');\n"
+                uploaded_file_info += "The file is available at the API endpoint shown above. Use this URL instead of a PDB ID.\n"
+            
             # Build context similar to run_agent for code agents
             context_prefix = (
                 f"You may MODIFY the existing Molstar builder code below to satisfy the new request. Prefer editing in-place if it does not change the loaded PDB. Always return the full updated code.\n\n"
-                f"Existing code:\n\n```js\n{str(current_code)}\n```\n\nRequest: {user_text}"
+                f"Existing code:\n\n```js\n{str(current_code)}\n```\n\nRequest: {user_text}{uploaded_file_info}"
                 if current_code and str(current_code).strip()
-                else f"Generate Molstar builder code for: {user_text}"
+                else f"Generate Molstar builder code for: {user_text}{uploaded_file_info}"
             )
 
             prior_dialogue = (
@@ -1280,11 +1424,96 @@ async def run_agent_stream(
         # Build messages (same logic as run_agent for text agents)
         selection_lines = []
         code_pdb_id = None
+        structure_origin_context = None
+        
+        # Add uploaded file context if available
+        uploaded_file_info = ""
+        if uploaded_file_context:
+            filename = uploaded_file_context.get("filename", "uploaded file")
+            atoms = uploaded_file_context.get("atoms", 0)
+            chains = uploaded_file_context.get("chains", [])
+            file_url = uploaded_file_context.get("file_url", "")
+            uploaded_file_info = (
+                f"UploadedFileContext: User has uploaded a PDB file named '{filename}' "
+                f"({atoms} atoms, {len(chains)} chain{'s' if len(chains) != 1 else ''}: {', '.join(chains) if chains else 'N/A'}). "
+                f"The file is available at: {file_url}. "
+                f"When answering questions about this structure, refer to it as the uploaded file '{filename}'.\n\n"
+            )
+        
         if current_code and str(current_code).strip():
             import re
+            # Check for blob URL (RF diffusion/AlphaFold result)
+            blob_match = re.search(r"loadStructure\s*\(\s*['\"](blob:[^'\"]+)['\"]", str(current_code))
+            if blob_match:
+                # This is a generated structure, check current_structure_origin or history for origin
+                if current_structure_origin:
+                    origin_type = current_structure_origin.get("type", "unknown")
+                    if origin_type == "rfdiffusion":
+                        params = current_structure_origin.get("parameters", {})
+                        structure_origin_context = (
+                            f"Current Structure: This is a protein structure generated using RFdiffusion protein design. "
+                            f"Design mode: {params.get('design_mode', 'unknown')}. "
+                        )
+                        if params.get("contigs"):
+                            structure_origin_context += f"Contigs: {params.get('contigs')}. "
+                        if params.get("diffusion_steps"):
+                            structure_origin_context += f"Diffusion steps: {params.get('diffusion_steps')}. "
+                        if current_structure_origin.get("filename"):
+                            structure_origin_context += f"Filename: {current_structure_origin.get('filename')}. "
+                        structure_origin_context += (
+                            "This structure does not have a PDB ID because it was computationally generated, "
+                            "not retrieved from the Protein Data Bank."
+                        )
+                    elif origin_type == "alphafold":
+                        structure_origin_context = (
+                            f"Current Structure: This is a protein structure predicted using AlphaFold2. "
+                        )
+                        if current_structure_origin.get("filename"):
+                            structure_origin_context += f"Filename: {current_structure_origin.get('filename')}. "
+                        structure_origin_context += (
+                            "This structure does not have a PDB ID because it was computationally predicted, "
+                            "not retrieved from the Protein Data Bank."
+                        )
+                    elif origin_type == "upload":
+                        structure_origin_context = (
+                            f"Current Structure: This is a protein structure loaded from an uploaded PDB file. "
+                        )
+                        if current_structure_origin.get("filename"):
+                            structure_origin_context += f"Filename: {current_structure_origin.get('filename')}. "
+                else:
+                    # Fallback: check history for structure metadata
+                    if history:
+                        import json
+                        for msg in reversed(history):  # Check most recent first
+                            if msg.get("type") == "ai" and msg.get("alphafoldResult"):
+                                result = msg["alphafoldResult"]
+                                job_type = result.get("jobType", "unknown")
+                                params = result.get("parameters", {})
+                                
+                                if job_type == "rfdiffusion":
+                                    structure_origin_context = (
+                                        f"Current Structure: This structure was generated using RFdiffusion protein design. "
+                                        f"Design mode: {params.get('design_mode', 'unknown')}. "
+                                    )
+                                    if params.get("contigs"):
+                                        structure_origin_context += f"Contigs: {params.get('contigs')}. "
+                                    structure_origin_context += (
+                                        "This structure does not have a PDB ID because it was computationally generated."
+                                    )
+                                    break
+                                elif job_type == "alphafold":
+                                    structure_origin_context = (
+                                        "Current Structure: This structure was predicted using AlphaFold2. "
+                                        "This structure does not have a PDB ID because it was computationally predicted."
+                                    )
+                                    break
+            
+            # Check for PDB ID (traditional structure)
             pdb_match = re.search(r"loadStructure\s*\(\s*['\"]([0-9A-Za-z]{4})['\"]", str(current_code))
             if pdb_match:
                 code_pdb_id = pdb_match.group(1).upper()
+                if not structure_origin_context:
+                    structure_origin_context = f"Current Structure: PDB ID {code_pdb_id} (from Protein Data Bank)."
         
         active_selections = selections if selections and len(selections) > 0 else ([selection] if selection else [])
         
@@ -1315,9 +1544,45 @@ async def run_agent_stream(
             else ""
         )
         
+        # Add structure origin context to code_context
+        if structure_origin_context:
+            if code_context:
+                code_context = structure_origin_context + "\n\n" + code_context
+            else:
+                code_context = structure_origin_context
+        
+        # Also add recent history context about generated structures
+        history_context_lines = []
+        if history:
+            import json
+            for msg in history[-3:]:  # Last 3 messages
+                if msg.get("type") == "ai" and msg.get("alphafoldResult"):
+                    result = msg["alphafoldResult"]
+                    job_type = result.get("jobType", "unknown")
+                    if job_type == "rfdiffusion":
+                        params = result.get("parameters", {})
+                        history_context_lines.append(
+                            f"Recent RFdiffusion result: {result.get('filename', 'unknown')} "
+                            f"(design mode: {params.get('design_mode', 'unknown')})"
+                        )
+                    elif job_type == "alphafold":
+                        history_context_lines.append(
+                            f"Recent AlphaFold2 prediction: {result.get('filename', 'unknown')}"
+                        )
+        
         messages: List[Dict[str, Any]] = []
-        if selection_context or code_context:
-            messages.append({"role": "user", "content": (selection_context + ("\n\n" if selection_context and code_context else "") + code_context)})
+        context_parts = []
+        if uploaded_file_info:
+            context_parts.append(uploaded_file_info)
+        if history_context_lines:
+            context_parts.append("Recent Structure Generation History:\n" + "\n".join(history_context_lines))
+        if selection_context:
+            context_parts.append(selection_context)
+        if code_context:
+            context_parts.append(code_context)
+        
+        if context_parts:
+            messages.append({"role": "user", "content": "\n\n".join(context_parts)})
         messages.append({"role": "user", "content": user_text})
         
         # Prepare messages with system prompt

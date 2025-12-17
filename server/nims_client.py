@@ -438,15 +438,17 @@ class NIMSClient:
     def save_pdb_file(self, pdb_content: str, filename: str) -> str:
         """Save PDB content to file"""
         try:
-            # Create results directory if it doesn't exist
-            results_dir = Path("alphafold_results")
+            # Create results directory if it doesn't exist (in server directory, like proteinmpnn_results)
+            base_dir = Path(__file__).parent
+            results_dir = base_dir / "alphafold_results"
             results_dir.mkdir(exist_ok=True)
             
             filepath = results_dir / filename
             with open(filepath, 'w') as f:
                 f.write(pdb_content)
             
-            return str(filepath)
+            # Return relative path from server directory for consistency with proteinmpnn
+            return str(filepath.relative_to(base_dir))
             
         except Exception as e:
             logger.error(f"Error saving PDB file: {e}")
