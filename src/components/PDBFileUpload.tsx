@@ -24,13 +24,15 @@ interface PDBFileUploadProps {
     file_id: string;
     file_path: string;
   } | null;
+  sessionId?: string | null; // Optional session ID for file association
 }
 
 export const PDBFileUpload: React.FC<PDBFileUploadProps> = ({
   onFileUploaded,
   onError,
   disabled = false,
-  currentFile = null
+  currentFile = null,
+  sessionId = null,
 }) => {
   const [isUploading, setIsUploading] = useState(false);
   const [dragOver, setDragOver] = useState(false);
@@ -59,6 +61,9 @@ export const PDBFileUpload: React.FC<PDBFileUploadProps> = ({
     try {
       const formData = new FormData();
       formData.append('file', file);
+      if (sessionId) {
+        formData.append('session_id', sessionId);
+      }
 
       const response = await fetch('/api/upload/pdb', {
         method: 'POST',

@@ -8,7 +8,7 @@ import { v4 as uuidv4 } from 'uuid';
 import { AlphaFoldDialog } from './AlphaFoldDialog';
 import { RFdiffusionDialog } from './RFdiffusionDialog';
 import { ProteinMPNNDialog } from './ProteinMPNNDialog';
-import { ProgressTracker, useAlphaFoldProgress, useProteinMPNNProgress } from './ProgressTracker';
+import { ProgressTracker, useAlphaFoldProgress, useProteinMPNNProgress, useRFdiffusionProgress } from './ProgressTracker';
 import { ErrorDisplay } from './ErrorDisplay';
 import { ErrorDetails, AlphaFoldErrorHandler, RFdiffusionErrorHandler, ErrorCategory, ErrorSeverity } from '../utils/errorHandler';
 import { logAlphaFoldError } from '../utils/errorLogger';
@@ -27,6 +27,7 @@ interface ExtendedMessage extends Message {
     sequence?: string;
     parameters?: any;
     metadata?: any;
+    jobType?: 'alphafold' | 'rfdiffusion';
   };
   proteinmpnnResult?: {
     jobId: string;
@@ -229,7 +230,8 @@ const createProteinMPNNError = (
 });
 
 export const ChatPanel: React.FC = () => {
-  const { plugin, currentCode, setCurrentCode, setIsExecuting, setActivePane, setPendingCodeToRun, setViewerVisible } = useAppStore();
+  const { plugin, currentCode, setCurrentCode, setIsExecuting, setActivePane, setPendingCodeToRun, setViewerVisible, setCurrentStructureOrigin, currentStructureOrigin } = useAppStore();
+  const lastLoadedPdb = useAppStore(state => state.lastLoadedPdb);
   const selections = useAppStore(state => state.selections);
   const removeSelection = useAppStore(state => state.removeSelection);
   const clearSelections = useAppStore(state => state.clearSelections);
@@ -441,6 +443,7 @@ export const ChatPanel: React.FC = () => {
   // RFdiffusion state
   const [showRFdiffusionDialog, setShowRFdiffusionDialog] = useState(false);
   const [rfdiffusionData, setRfdiffusionData] = useState<any>(null);
+  const rfdiffusionProgress = useRFdiffusionProgress();
 
   // Agent and model selection state
   const [agents, setAgents] = useState<Agent[]>([]);
@@ -535,13 +538,18 @@ export const ChatPanel: React.FC = () => {
   const renderAlphaFoldResult = (result: ExtendedMessage['alphafoldResult']) => {
     if (!result) return null;
 
+    const isRFdiffusion = result.jobType === 'rfdiffusion';
+    const title = isRFdiffusion ? 'RFdiffusion Protein Design' : 'AlphaFold2 Structure Prediction';
+    const iconText = isRFdiffusion ? 'RF' : 'AF';
+    const defaultFilename = isRFdiffusion ? 'rfdiffusion_result.pdb' : 'alphafold_result.pdb';
+
     const downloadPDB = () => {
       if (result.pdbContent) {
         const blob = new Blob([result.pdbContent], { type: 'text/plain' });
         const url = URL.createObjectURL(blob);
         const a = document.createElement('a');
         a.href = url;
-        a.download = result.filename || 'alphafold_result.pdb';
+        a.download = result.filename || defaultFilename;
         document.body.appendChild(a);
         a.click();
         document.body.removeChild(a);
@@ -556,28 +564,51 @@ export const ChatPanel: React.FC = () => {
         setIsExecuting(true);
         const executor = new CodeExecutor(plugin);
         
-        // Create temporary PDB data URL
+        // Create temporary PDB blob URL
         const pdbBlob = new Blob([result.pdbContent], { type: 'text/plain' });
-        const pdbUrl = URL.createObjectURL(pdbBlob);
+        const blobUrl = URL.createObjectURL(pdbBlob);
         
-        // Load structure in viewer
+        // Load structure in viewer using blob URL
         const code = `
 try {
   await builder.clearStructure();
-  // Note: This would need to be adapted to load from blob URL
-  // For now, we'll show the sequence info and guide user to download
-  console.log('AlphaFold result ready for visualization');
+  await builder.loadStructure('${blobUrl}');
+  await builder.addCartoonRepresentation({ color: 'secondary-structure' });
+  builder.focusView();
+  console.log('Structure loaded successfully');
 } catch (e) { 
-  console.error('Failed to load AlphaFold result:', e); 
+  console.error('Failed to load structure:', e); 
 }`;
+        
+        // Save code to editor so user can see and modify it
+        setCurrentCode(code);
+        
+        // Set structure origin for LLM context
+        const isRFdiffusion = result.jobType === 'rfdiffusion';
+        setCurrentStructureOrigin({
+          type: isRFdiffusion ? 'rfdiffusion' : 'alphafold',
+          jobId: result.parameters?.jobId,
+          parameters: result.parameters,
+          metadata: result.metadata,
+          filename: result.filename
+        });
+        
+        // Save code to active session for persistence
+        if (activeSessionId) {
+          saveVisualizationCode(activeSessionId, code);
+          console.log('[ChatPanel] Saved visualization code to session:', activeSessionId);
+        }
         
         await executor.executeCode(code);
         setViewerVisibleAndSave(true);
         setActivePane('viewer');
         
-        URL.revokeObjectURL(pdbUrl);
+        // Keep blob URL alive for a bit longer to ensure structure loads
+        setTimeout(() => {
+          URL.revokeObjectURL(blobUrl);
+        }, 5000);
       } catch (err) {
-        console.error('Failed to load AlphaFold result in viewer:', err);
+        console.error('Failed to load structure in viewer:', err);
       } finally {
         setIsExecuting(false);
       }
@@ -587,10 +618,10 @@ try {
       <div className="mt-3 p-4 bg-gradient-to-r from-purple-50 to-blue-50 border border-purple-200 rounded-lg">
         <div className="flex items-center space-x-2 mb-3">
           <div className="w-8 h-8 bg-purple-600 rounded-full flex items-center justify-center">
-            <span className="text-white text-sm font-bold">AF</span>
+            <span className="text-white text-sm font-bold">{iconText}</span>
           </div>
           <div>
-            <h4 className="font-medium text-gray-900">AlphaFold2 Structure Prediction</h4>
+            <h4 className="font-medium text-gray-900">{title}</h4>
             <p className="text-xs text-gray-600">
               {result.sequence ? `${result.sequence.length} residues` : 'Structure predicted'}
             </p>
@@ -679,7 +710,8 @@ try {
       const response = await api.post('/alphafold/fold', {
         sequence,
         parameters,
-        jobId
+        jobId,
+        sessionId: activeSessionId || undefined, // Associate with current session
       });
       
       console.log('📨 [AlphaFold] API response received:', response.status, response.data);
@@ -704,12 +736,17 @@ try {
                   filename: result.filename || `folded_${Date.now()}.pdb`,
                   sequence,
                   parameters,
-                  metadata: result.metadata
+                  metadata: result.metadata,
+                  jobType: 'alphafold'
                 }
               };
-              addMessage(aiMessage);
-              alphafoldProgress.completeProgress();
-              return true;
+        addMessage(aiMessage);
+        alphafoldProgress.completeProgress();
+        
+        // Notify FileBrowser to refresh
+        window.dispatchEvent(new CustomEvent('session-file-added'));
+        
+        return true;
             } else if (st === 'error') {
               const apiError = AlphaFoldErrorHandler.createError(
                 'FOLDING_FAILED',
@@ -790,7 +827,8 @@ try {
             filename: result.filename || `folded_${Date.now()}.pdb`,
             sequence,
             parameters,
-            metadata: result.metadata
+            metadata: result.metadata,
+            jobType: 'alphafold'
           }
         };
         
@@ -1049,15 +1087,142 @@ try {
     setShowRFdiffusionDialog(false);
     
     const jobId = `rf_${Date.now()}`;
+    console.log('🚀 [RFdiffusion] User confirmed design request');
+    console.log('⚙️ [RFdiffusion] Parameters:', parameters);
+    console.log('🆔 [RFdiffusion] Generated job ID:', jobId);
+    
+    rfdiffusionProgress.startProgress(jobId, 'Submitting RFdiffusion design request...');
+    console.log('📡 [RFdiffusion] Starting progress tracking for job:', jobId);
     
     try {
+      console.log('🌐 [RFdiffusion] Making API call to /api/rfdiffusion/design');
       const response = await api.post('/rfdiffusion/design', {
         parameters,
-        jobId
+        jobId,
+        sessionId: activeSessionId || undefined, // Associate with current session
       });
+      
+      console.log('📨 [RFdiffusion] API response received:', response.status, response.data);
 
+      // Async flow: 202 Accepted → poll status endpoint until completion
+      if (response.status === 202 || response.data.status === 'accepted' || response.data.status === 'queued' || response.data.status === 'running') {
+        console.log('🕒 [RFdiffusion] Job accepted, starting polling for status...', { jobId });
+        const start = Date.now();
+        const poll = async () => {
+          try {
+            const statusResp = await api.get(`/rfdiffusion/status/${jobId}`);
+            const st = statusResp.data?.status;
+            if (st === 'completed') {
+              const result = statusResp.data?.data || {};
+              
+              // Auto-download PDB file
+              if (result.pdbContent) {
+                const blob = new Blob([result.pdbContent], { type: 'text/plain' });
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = result.filename || `rfdiffusion_${Date.now()}.pdb`;
+                document.body.appendChild(a);
+                a.click();
+                document.body.removeChild(a);
+                URL.revokeObjectURL(url);
+              }
+              
+              const aiMessage: ExtendedMessage = {
+                id: (Date.now() + 1).toString(),
+                content: `RFdiffusion protein design completed successfully! The designed structure is ready for download and visualization.`,
+                type: 'ai',
+                timestamp: new Date(),
+                alphafoldResult: {
+                  pdbContent: result.pdbContent,
+                  filename: result.filename || `designed_${Date.now()}.pdb`,
+                  parameters,
+                  metadata: result.metadata,
+                  jobType: 'rfdiffusion'
+                }
+              };
+              addMessage(aiMessage);
+              rfdiffusionProgress.completeProgress();
+              
+              // Notify FileBrowser to refresh
+              window.dispatchEvent(new CustomEvent('session-file-added'));
+              
+              return true;
+            } else if (st === 'error') {
+              const apiError = RFdiffusionErrorHandler.handleError(statusResp.data, {
+                jobId,
+                parameters,
+                feature: 'RFdiffusion'
+              });
+              const errorMessage: ExtendedMessage = {
+                id: (Date.now() + 1).toString(),
+                content: apiError.userMessage,
+                type: 'ai',
+                timestamp: new Date(),
+                error: apiError
+              };
+              addMessage(errorMessage);
+              rfdiffusionProgress.errorProgress(apiError.userMessage);
+              return true;
+            } else {
+              // Update progress heuristically up to 90%
+              const elapsed = (Date.now() - start) / 1000;
+              const estDuration = 480; // 8 minutes heuristic for RFdiffusion
+              const pct = Math.min(90, Math.round((elapsed / estDuration) * 90));
+              rfdiffusionProgress.updateProgress(`Processing... (${Math.round(elapsed)}s)`, pct);
+              return false;
+            }
+          } catch (e) {
+            console.warn('⚠️ [RFdiffusion] Polling failed, will retry...', e);
+            return false;
+          }
+        };
+
+        // Poll every 3s until done or timeout (~20 minutes for RFdiffusion)
+        const timeoutSec = 20 * 60;
+        let finished = false;
+        while (!finished && (Date.now() - start) / 1000 < timeoutSec) {
+          // eslint-disable-next-line no-await-in-loop
+          finished = await poll();
+          if (finished) break;
+          // eslint-disable-next-line no-await-in-loop
+          await new Promise(res => setTimeout(res, 3000));
+        }
+
+        if (!finished) {
+          const apiError = RFdiffusionErrorHandler.handleError(
+            { userMessage: 'RFdiffusion design timed out', technicalMessage: 'Job exceeded maximum wait time' },
+            { jobId, parameters, feature: 'RFdiffusion' }
+          );
+          const errorMessage: ExtendedMessage = {
+            id: (Date.now() + 1).toString(),
+            content: apiError.userMessage,
+            type: 'ai',
+            timestamp: new Date(),
+            error: apiError
+          };
+          addMessage(errorMessage);
+          rfdiffusionProgress.errorProgress(apiError.userMessage);
+        }
+        return; // Exit after async flow
+      }
+
+      // Synchronous success flow
       if (response.data.status === 'success') {
         const result = response.data.data;
+        
+        // Auto-download PDB file
+        if (result.pdbContent) {
+          const blob = new Blob([result.pdbContent], { type: 'text/plain' });
+          const url = URL.createObjectURL(blob);
+          const a = document.createElement('a');
+          a.href = url;
+          a.download = result.filename || `rfdiffusion_${Date.now()}.pdb`;
+          document.body.appendChild(a);
+          a.click();
+          document.body.removeChild(a);
+          URL.revokeObjectURL(url);
+        }
         
         // Add result message to chat
         const aiMessage: ExtendedMessage = {
@@ -1065,17 +1230,22 @@ try {
           content: `RFdiffusion protein design completed successfully! The designed structure is ready for download and visualization.`,
           type: 'ai',
           timestamp: new Date(),
-          alphafoldResult: { // Reuse the same result format for display
+          alphafoldResult: {
             pdbContent: result.pdbContent,
             filename: result.filename || `designed_${Date.now()}.pdb`,
             parameters,
-            metadata: result.metadata
+            metadata: result.metadata,
+            jobType: 'rfdiffusion'
           }
         };
         
         addMessage(aiMessage);
-      } else {
-        // Handle API error response
+        rfdiffusionProgress.completeProgress();
+        
+        // Notify FileBrowser to refresh
+        window.dispatchEvent(new CustomEvent('session-file-added'));
+      } else if (response.data.status === 'error') {
+        // Handle API error response - use the response.data directly
         const apiError = RFdiffusionErrorHandler.handleError(response.data, {
           jobId,
           parameters,
@@ -1091,12 +1261,33 @@ try {
         };
         
         addMessage(errorMessage);
+        rfdiffusionProgress.errorProgress(apiError.userMessage);
+      } else {
+        // Unexpected response format
+        const apiError = RFdiffusionErrorHandler.handleError(
+          { userMessage: 'Unexpected response from server', technicalMessage: JSON.stringify(response.data) },
+          { jobId, parameters, feature: 'RFdiffusion' }
+        );
+        
+        const errorMessage: ExtendedMessage = {
+          id: (Date.now() + 1).toString(),
+          content: apiError.userMessage,
+          type: 'ai',
+          timestamp: new Date(),
+          error: apiError
+        };
+        
+        addMessage(errorMessage);
+        rfdiffusionProgress.errorProgress(apiError.userMessage);
       }
     } catch (error: any) {
       console.error('RFdiffusion request failed:', error);
       
+      // Extract error data from axios response if available
+      const errorData = error?.response?.data || error?.data || error;
+      
       // Handle different types of errors
-      const structuredError = RFdiffusionErrorHandler.handleError(error, {
+      const structuredError = RFdiffusionErrorHandler.handleError(errorData, {
         jobId,
         parameters,
         feature: 'RFdiffusion'
@@ -1111,6 +1302,7 @@ try {
       };
       
       addMessage(errorMessage);
+      rfdiffusionProgress.errorProgress(structuredError.userMessage);
     }
   };
 
@@ -1210,7 +1402,31 @@ try {
       const payload = {
         input: text,
         currentCode,
-        history: messages.slice(-6).map(m => ({ type: m.type, content: m.content })),
+        currentStructureOrigin: currentStructureOrigin || undefined, // Include structure origin context
+        history: messages.slice(-6).map(m => {
+          const base: any = { type: m.type, content: m.content };
+          
+          // Include RF diffusion/AlphaFold result metadata
+          if (m.alphafoldResult) {
+            base.alphafoldResult = {
+              jobType: m.alphafoldResult.jobType,
+              parameters: m.alphafoldResult.parameters,
+              filename: m.alphafoldResult.filename,
+              // Don't include pdbContent (too large), but include metadata
+              metadata: m.alphafoldResult.metadata
+            };
+          }
+          
+          // Include ProteinMPNN result metadata if present
+          if (m.proteinmpnnResult) {
+            base.proteinmpnnResult = {
+              jobId: m.proteinmpnnResult.jobId,
+              metadata: m.proteinmpnnResult.metadata
+            };
+          }
+          
+          return base;
+        }),
         selection: selections.length > 0 ? selections[0] : null, // First selection for backward compatibility
         selections: selections, // Full selections array for new multi-selection support
         agentId: agentSettings.selectedAgentId || undefined, // Only send if manually selected
@@ -1863,6 +2079,13 @@ try {
           title={proteinmpnnProgress.title}
           eventName={proteinmpnnProgress.eventName}
         />
+        <ProgressTracker
+          isVisible={rfdiffusionProgress.isVisible}
+          onCancel={rfdiffusionProgress.cancelProgress}
+          className="mb-3"
+          title={rfdiffusionProgress.title}
+          eventName={rfdiffusionProgress.eventName}
+        />
 
         {!showCenteredLayout && (
           <div className="mb-3">
@@ -1986,6 +2209,23 @@ try {
         onClose={() => setShowRFdiffusionDialog(false)}
         onConfirm={handleRFdiffusionConfirm}
         initialData={rfdiffusionData}
+        contextPdb={(() => {
+          // Extract PDB context from viewer
+          // Priority 1: lastLoadedPdb from store
+          if (lastLoadedPdb) {
+            return { type: 'pdb_id' as const, value: lastLoadedPdb };
+          }
+          // Priority 2: Extract from currentCode
+          if (currentCode) {
+            const match = currentCode.match(/loadStructure\s*\(\s*['"]([0-9A-Za-z]{4})['"]/);
+            if (match) {
+              return { type: 'pdb_id' as const, value: match[1].toUpperCase() };
+            }
+          }
+          // Priority 3: Check chat history for uploaded files (could be enhanced)
+          // For now, return undefined if no PDB detected
+          return undefined;
+        })()}
       />
 
       <ProteinMPNNDialog

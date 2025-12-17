@@ -9,7 +9,7 @@ export interface ResidueSelector {
 }
 
 export interface MolstarBuilder {
-  loadStructure: (pdbId: string) => Promise<void>;
+  loadStructure: (pdbIdOrUrl: string) => Promise<void>;
   addCartoonRepresentation: (options?: any) => Promise<void>;
   addBallAndStickRepresentation: (options?: any) => Promise<void>;
   addSurfaceRepresentation: (options?: any) => Promise<void>;
@@ -30,9 +30,18 @@ export const createMolstarBuilder = (
   let currentStructure: any = null;
 
   return {
-    async loadStructure(pdbId: string) {
-      if (!validatePDBId(pdbId)) {
-        throw new Error(`Invalid PDB ID: ${pdbId}`);
+    async loadStructure(pdbIdOrUrl: string) {
+      let url: string;
+      
+      // Check if input is a URL (http, https, or blob)
+      if (pdbIdOrUrl.startsWith('http://') || pdbIdOrUrl.startsWith('https://') || pdbIdOrUrl.startsWith('blob:')) {
+        url = pdbIdOrUrl; // Use as-is for URLs
+      } else {
+        // Validate and convert PDB ID to URL
+        if (!validatePDBId(pdbIdOrUrl)) {
+          throw new Error(`Invalid PDB ID: ${pdbIdOrUrl}`);
+        }
+        url = getPDBUrl(pdbIdOrUrl);
       }
 
       try {
@@ -40,8 +49,6 @@ export const createMolstarBuilder = (
         // This avoids having multiple proteins displayed at once if a default or
         // previous structure was loaded outside of this builder's lifecycle.
         await this.clearStructure();
-        
-        const url = getPDBUrl(pdbId);
         
         const data = await plugin.builders.data.download({
           url,
@@ -51,11 +58,11 @@ export const createMolstarBuilder = (
         const trajectory = await plugin.builders.structure.parseTrajectory(data, 'pdb');
         const model = await plugin.builders.structure.createModel(trajectory);
         currentStructure = await plugin.builders.structure.createStructure(model);
-        if (onPdbLoaded) onPdbLoaded(pdbId);
+        if (onPdbLoaded) onPdbLoaded(pdbIdOrUrl);
 
         return currentStructure;
       } catch (error) {
-        throw new Error(`Failed to load structure ${pdbId}: ${error}`);
+        throw new Error(`Failed to load structure ${pdbIdOrUrl}: ${error}`);
       }
     },
 

@@ -1,10 +1,14 @@
 import React, { useState, useEffect } from 'react';
 import { ErrorDisplay, ErrorSummary } from './ErrorDisplay';
 import { RFdiffusionErrorHandler } from '../utils/errorHandler';
+import { PDBFileUpload } from './PDBFileUpload';
+import { useAppStore } from '../stores/appStore';
+import { useChatHistoryStore } from '../stores/chatHistoryStore';
 
 interface RFdiffusionParameters {
   pdb_id?: string;
   input_pdb?: string;
+  uploadId?: string;
   contigs: string;
   hotspot_res: string[];
   diffusion_steps: number;
@@ -27,14 +31,24 @@ interface RFdiffusionDialogProps {
     estimated_time: string;
     message: string;
   };
+  contextPdb?: {
+    type: 'pdb_id' | 'upload';
+    value: string;
+    filename?: string;
+  };
 }
 
 export const RFdiffusionDialog: React.FC<RFdiffusionDialogProps> = ({
   isOpen,
   onClose,
   onConfirm,
-  initialData
+  initialData,
+  contextPdb
 }) => {
+  const lastLoadedPdb = useAppStore(state => state.lastLoadedPdb);
+  const currentCode = useAppStore(state => state.currentCode);
+  const { activeSessionId } = useChatHistoryStore();
+  
   const [parameters, setParameters] = useState<RFdiffusionParameters>({
     contigs: 'A50-150',
     hotspot_res: [],
@@ -45,6 +59,17 @@ export const RFdiffusionDialog: React.FC<RFdiffusionDialogProps> = ({
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [hotspotsInput, setHotspotsInput] = useState('');
   const [validationError, setValidationError] = useState<any>(null);
+  const [uploadedFile, setUploadedFile] = useState<{
+    filename: string;
+    file_id: string;
+    file_path?: string;
+  } | null>(null);
+  const [uploadError, setUploadError] = useState<string | null>(null);
+  const [detectedPdb, setDetectedPdb] = useState<{
+    type: 'pdb_id' | 'upload';
+    value: string;
+    filename?: string;
+  } | null>(null);
 
   // Design mode options
   const designModeOptions = [
@@ -76,12 +101,78 @@ export const RFdiffusionDialog: React.FC<RFdiffusionDialogProps> = ({
     { value: 'custom', label: 'Custom', steps: parameters.diffusion_steps, description: 'Set your own steps' }
   ];
 
+  // Extract PDB ID from currentCode
+  const extractPdbFromCode = (code: string): string | null => {
+    if (!code) return null;
+    const match = code.match(/loadStructure\s*\(\s*['"]([0-9A-Za-z]{4})['"]/);
+    return match ? match[1].toUpperCase() : null;
+  };
+
+  // Auto-detect PDB context when dialog opens
+  useEffect(() => {
+    if (!isOpen) return;
+
+    let detected: { type: 'pdb_id' | 'upload'; value: string; filename?: string } | null = null;
+
+    // Priority 1: Use contextPdb prop if provided
+    if (contextPdb) {
+      detected = contextPdb;
+    }
+    // Priority 2: Check lastLoadedPdb from store
+    else if (lastLoadedPdb) {
+      detected = { type: 'pdb_id', value: lastLoadedPdb };
+    }
+    // Priority 3: Extract from currentCode
+    else {
+      const codePdb = extractPdbFromCode(currentCode || '');
+      if (codePdb) {
+        detected = { type: 'pdb_id', value: codePdb };
+      }
+    }
+
+    if (detected) {
+      setDetectedPdb(detected);
+      
+      // Pre-populate form based on detected PDB
+      if (detected.type === 'pdb_id') {
+        setParameters(prev => {
+          const updated = { ...prev, pdb_id: detected!.value };
+          // If PDB ID is detected, suggest motif_scaffolding mode
+          if (prev.design_mode === 'unconditional') {
+            updated.design_mode = 'motif_scaffolding';
+          }
+          return updated;
+        });
+      } else if (detected.type === 'upload') {
+        setParameters(prev => {
+          const updated = { ...prev, uploadId: detected!.value };
+          // If uploaded file is detected, suggest motif_scaffolding mode
+          if (prev.design_mode === 'unconditional') {
+            updated.design_mode = 'motif_scaffolding';
+          }
+          return updated;
+        });
+        setUploadedFile({
+          filename: detected.filename || 'uploaded.pdb',
+          file_id: detected.value
+        });
+      }
+    }
+  }, [isOpen, contextPdb, lastLoadedPdb, currentCode]);
+
   // Initialize from prop data
   useEffect(() => {
     if (initialData?.parameters) {
       setParameters(initialData.parameters);
       if (initialData.parameters.hotspot_res?.length > 0) {
         setHotspotsInput(initialData.parameters.hotspot_res.join(', '));
+      }
+      // If initialData has uploadId, set uploadedFile state
+      if (initialData.parameters.uploadId) {
+        setUploadedFile({
+          filename: 'uploaded.pdb',
+          file_id: initialData.parameters.uploadId
+        });
       }
     }
   }, [initialData]);
@@ -134,6 +225,26 @@ export const RFdiffusionDialog: React.FC<RFdiffusionDialogProps> = ({
     setParameters(prev => ({ ...prev, hotspot_res: hotspots }));
   };
 
+  // Handle file upload
+  const handleFileUploaded = (result: any) => {
+    if (result.status === 'success' && result.file_info) {
+      setUploadedFile({
+        filename: result.file_info.filename,
+        file_id: result.file_info.file_id,
+        file_path: result.file_info.file_path
+      });
+      setParameters(prev => ({ ...prev, uploadId: result.file_info.file_id, pdb_id: undefined }));
+      setUploadError(null);
+      // If file uploaded, suggest motif_scaffolding mode
+      if (parameters.design_mode === 'unconditional') {
+        setParameters(prev => ({ ...prev, design_mode: 'motif_scaffolding' }));
+      }
+    } else if (result.status === 'cleared') {
+      setUploadedFile(null);
+      setParameters(prev => ({ ...prev, uploadId: undefined }));
+    }
+  };
+
   // Validate and submit
   const handleConfirm = async () => {
     try {
@@ -151,7 +262,9 @@ export const RFdiffusionDialog: React.FC<RFdiffusionDialogProps> = ({
       const finalHotspots = parseHotspots(hotspotsInput);
       const finalParameters = {
         ...parameters,
-        hotspot_res: finalHotspots
+        hotspot_res: finalHotspots,
+        // Include uploadId if file was uploaded
+        uploadId: uploadedFile?.file_id || parameters.uploadId
       };
 
       onConfirm(finalParameters);
@@ -199,6 +312,39 @@ export const RFdiffusionDialog: React.FC<RFdiffusionDialogProps> = ({
             </svg>
           </button>
         </div>
+
+        {/* Detected PDB Context Banner */}
+        {detectedPdb && (
+          <div className="mb-4 p-3 bg-green-50 border border-green-200 rounded-lg">
+            <div className="flex items-start justify-between">
+              <div className="flex-1">
+                <div className="flex items-center space-x-2 mb-1">
+                  <svg className="w-4 h-4 text-green-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+                  </svg>
+                  <span className="text-sm font-medium text-green-900">PDB Detected from Viewer</span>
+                </div>
+                <div className="text-sm text-green-800">
+                  {detectedPdb.type === 'pdb_id' ? (
+                    <span>Using PDB ID: <strong>{detectedPdb.value}</strong></span>
+                  ) : (
+                    <span>Using uploaded file: <strong>{detectedPdb.filename || detectedPdb.value}</strong></span>
+                  )}
+                </div>
+                <p className="text-xs text-green-700 mt-1">You can override this below if needed.</p>
+              </div>
+              <button
+                onClick={() => setDetectedPdb(null)}
+                className="text-green-600 hover:text-green-800"
+                title="Dismiss"
+              >
+                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </button>
+            </div>
+          </div>
+        )}
 
         {/* Initial Data Summary */}
         {initialData && (
@@ -258,24 +404,67 @@ export const RFdiffusionDialog: React.FC<RFdiffusionDialogProps> = ({
           </div>
         </div>
 
-        {/* Template PDB (for motif scaffolding) */}
-        {parameters.design_mode === 'motif_scaffolding' && (
-          <div className="mb-4">
+        {/* Template PDB Section - Available for all modes */}
+        <div className="mb-4 space-y-3">
+          <div>
             <label className="block text-sm font-medium text-gray-700 mb-2">
               Template PDB ID (optional)
             </label>
             <input
               type="text"
               value={parameters.pdb_id || ''}
-              onChange={(e) => handleParameterChange('pdb_id', e.target.value)}
+              onChange={(e) => {
+                handleParameterChange('pdb_id', e.target.value);
+                // Clear uploadId if PDB ID is entered
+                if (e.target.value) {
+                  setParameters(prev => ({ ...prev, uploadId: undefined }));
+                  setUploadedFile(null);
+                }
+              }}
               placeholder="e.g., 1R42"
               className="w-full p-2 border border-gray-300 rounded-md text-sm"
             />
             <p className="text-xs text-gray-600 mt-1">
-              Leave empty to design without a specific template
+              {parameters.design_mode === 'unconditional' 
+                ? 'Optional: Provide a PDB ID as template for design'
+                : 'Enter a PDB ID to use as template, or upload a file below'}
             </p>
           </div>
-        )}
+
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-2">
+              Or Upload PDB File
+            </label>
+            <PDBFileUpload
+              onFileUploaded={handleFileUploaded}
+              onError={setUploadError}
+              currentFile={uploadedFile ? {
+                filename: uploadedFile.filename,
+                file_id: uploadedFile.file_id,
+                file_path: uploadedFile.file_path || ''
+              } : null}
+              sessionId={activeSessionId}
+            />
+            {uploadError && (
+              <div className="text-xs text-red-600 mt-1 flex items-center space-x-1">
+                <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                </svg>
+                <span>{uploadError}</span>
+              </div>
+            )}
+            {uploadedFile && (
+              <div className="mt-2 text-xs text-gray-600">
+                <span className="font-medium">Uploaded:</span> {uploadedFile.filename}
+              </div>
+            )}
+            <p className="text-xs text-gray-600 mt-1">
+              {parameters.design_mode === 'unconditional'
+                ? 'Optional: Upload a PDB file to use as template'
+                : 'Upload a PDB file to use as template for design'}
+            </p>
+          </div>
+        </div>
 
         {/* Contigs Configuration */}
         <div className="mb-4">

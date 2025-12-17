@@ -756,6 +756,32 @@ export class RFdiffusionErrorHandler {
   }
 
   static handleError(error: any, context: Record<string, any> = {}): ErrorDetails {
+    // Check if error has errorCode from backend
+    if (error?.errorCode && this.errorCatalog[error.errorCode]) {
+      const catalogEntry = this.errorCatalog[error.errorCode];
+      return {
+        ...catalogEntry,
+        code: error.errorCode,
+        userMessage: error.userMessage || catalogEntry.userMessage || error.message || 'Unknown error',
+        technicalMessage: error.technicalMessage || catalogEntry.technicalMessage || error.message,
+        suggestions: error.suggestions || catalogEntry.suggestions || [],
+        context: { ...context, originalError: error }
+      } as ErrorDetails;
+    }
+
+    // Check if error has userMessage from backend (API response)
+    if (error?.userMessage) {
+      return {
+        code: error.errorCode || 'DESIGN_FAILED',
+        category: ErrorCategory.API,
+        severity: ErrorSeverity.HIGH,
+        userMessage: error.userMessage,
+        technicalMessage: error.technicalMessage || error.userMessage,
+        suggestions: error.suggestions || [],
+        context: { ...context, originalError: error }
+      } as ErrorDetails;
+    }
+
     if (error?.code && this.errorCatalog[error.code]) {
       return this.createError(error.code, { ...context, originalError: error }, error.message);
     }
@@ -778,6 +804,32 @@ export class RFdiffusionErrorHandler {
 
     if (lowerMessage.includes('contigs')) {
       return this.createError('CONTIGS_INVALID', context, errorMessage);
+    }
+
+    // Check for validation errors (residue not in PDB, etc.)
+    if (lowerMessage.includes('residue') && lowerMessage.includes('not in pdb')) {
+      return {
+        code: 'VALIDATION_ERROR',
+        category: ErrorCategory.VALIDATION,
+        severity: ErrorSeverity.MEDIUM,
+        userMessage: errorMessage,
+        technicalMessage: errorMessage,
+        suggestions: [
+          {
+            action: 'Check hotspot residues',
+            description: 'Ensure the specified hotspot residues exist in the PDB file',
+            type: 'fix',
+            priority: 1
+          },
+          {
+            action: 'Remove invalid hotspots',
+            description: 'Remove hotspot residues that don\'t exist in the PDB structure',
+            type: 'fix',
+            priority: 2
+          }
+        ],
+        context: { ...context, originalError: error }
+      } as ErrorDetails;
     }
 
     // Generic error fallback

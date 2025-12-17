@@ -56,6 +56,7 @@ try:
     from .rfdiffusion_handler import rfdiffusion_handler
     from .proteinmpnn_handler import proteinmpnn_handler
     from .pdb_storage import save_uploaded_pdb, get_uploaded_pdb
+    from .session_file_tracker import associate_file_with_session, get_session_files
 except ImportError:
     # When running directly (not as module)
     import sys
@@ -70,6 +71,7 @@ except ImportError:
     from rfdiffusion_handler import rfdiffusion_handler
     from proteinmpnn_handler import proteinmpnn_handler
     from pdb_storage import save_uploaded_pdb, get_uploaded_pdb
+    from session_file_tracker import associate_file_with_session, get_session_files
 
 DEBUG_API = os.getenv("DEBUG_API", "0") == "1"
 
@@ -265,6 +267,7 @@ async def route(request: Request):
             history=body.get("history"),
             selection=body.get("selection"),
             selections=body.get("selections"),
+            current_structure_origin=body.get("currentStructureOrigin"),
             model_override=model_override,
         )
         
@@ -356,6 +359,7 @@ async def route_stream(request: Request):
                     history=body.get("history"),
                     selection=body.get("selection"),
                     selections=body.get("selections"),
+                    current_structure_origin=body.get("currentStructureOrigin"),
                     model_override=model_override,
                 ):
                     # Format chunk as JSON line
@@ -401,10 +405,12 @@ async def alphafold_fold(request: Request):
         sequence = body.get("sequence")
         parameters = body.get("parameters", {})
         job_id = body.get("jobId")
+        session_id = body.get("sessionId")  # Optional session ID
         
         # Comprehensive logging
         log_line("alphafold_request", {
             "jobId": job_id,
+            "sessionId": session_id,
             "sequence_length": len(sequence) if sequence else 0,
             "sequence_preview": sequence[:50] if sequence else None,
             "parameters": parameters,
@@ -430,6 +436,7 @@ async def alphafold_fold(request: Request):
         # Queue background job and return 202 Accepted immediately
         log_line("alphafold_submitting", {
             "jobId": job_id,
+            "sessionId": session_id,
             "handler": "alphafold_handler.submit_folding_job (background)"
         })
         # Mark job as queued
@@ -444,7 +451,8 @@ async def alphafold_fold(request: Request):
             alphafold_handler.submit_folding_job({
                 "sequence": sequence,
                 "parameters": parameters,
-                "jobId": job_id
+                "jobId": job_id,
+                "sessionId": session_id,  # Pass session ID to handler
             })
         )
 
@@ -505,10 +513,33 @@ async def alphafold_cancel(request: Request, job_id: str):
 @app.post("/api/upload/pdb")
 @limiter.limit("20/minute")
 async def upload_pdb(request: Request, file: UploadFile = File(...)):
-    _ = request
     try:
+        # Try to get session_id from form data or query params
+        form_data = await request.form()
+        session_id = form_data.get("session_id") or request.query_params.get("session_id")
+        
         contents = await file.read()
         metadata = save_uploaded_pdb(file.filename, contents)
+        
+        # Associate file with session if session_id provided
+        if session_id:
+            try:
+                associate_file_with_session(
+                    session_id=str(session_id),
+                    file_id=metadata["file_id"],
+                    file_type="upload",
+                    file_path=metadata.get("stored_path", ""),
+                    filename=metadata.get("filename", file.filename),
+                    size=metadata.get("size", len(contents)),
+                    metadata={
+                        "atoms": metadata.get("atoms"),
+                        "chains": metadata.get("chains", []),
+                    },
+                )
+            except Exception as e:
+                # Log but don't fail the upload if association fails
+                log_line("file_association_failed", {"error": str(e), "session_id": session_id})
+        
         log_line(
             "pdb_upload_success",
             {
@@ -516,6 +547,7 @@ async def upload_pdb(request: Request, file: UploadFile = File(...)):
                 "file_id": metadata["file_id"],
                 "size": metadata.get("size"),
                 "chains": metadata.get("chains"),
+                "session_id": session_id,
             },
         )
         return {
@@ -550,6 +582,235 @@ async def download_uploaded_pdb(request: Request, file_id: str):
         media_type="chemical/x-pdb",
         filename=metadata.get("filename") or f"{file_id}.pdb",
     )
+
+
+# Session file management endpoints -----------------------------------------
+
+
+@app.get("/api/sessions/{session_id}/files")
+@limiter.limit("30/minute")
+async def get_session_files_endpoint(request: Request, session_id: str):
+    """List all PDB files associated with a session."""
+    _ = request
+    try:
+        log_line("session_files_request", {"session_id": session_id})
+        files = get_session_files(session_id)
+        log_line("session_files_loaded", {"session_id": session_id, "file_count": len(files)})
+        
+        # Enrich file data with download URLs and verify file existence
+        enriched_files = []
+        for file_entry in files:
+            file_type = file_entry.get("type", "")
+            file_id = file_entry.get("file_id", "")
+            file_path = file_entry.get("file_path", "")
+            
+            # Determine download URL based on file type
+            if file_type == "upload":
+                download_url = f"/api/upload/pdb/{file_id}"
+            elif file_type == "alphafold":
+                # Check if file exists in server/alphafold_results (like proteinmpnn_results)
+                filename = file_entry.get("filename", "")
+                stored_path = file_entry.get("file_path", "")
+                
+                # Files are stored relative to server directory
+                if stored_path and not Path(stored_path).is_absolute():
+                    result_path = Path(__file__).parent / stored_path
+                elif stored_path and Path(stored_path).is_absolute():
+                    result_path = Path(stored_path)
+                else:
+                    # Fallback to standard location
+                    result_path = Path(__file__).parent / "alphafold_results" / filename
+                
+                if result_path.exists():
+                    download_url = f"/api/sessions/{session_id}/files/{file_id}/download"
+                else:
+                    log_line("alphafold_file_not_found", {
+                        "session_id": session_id,
+                        "file_id": file_id,
+                        "filename": filename,
+                        "expected_path": str(result_path),
+                        "stored_path": stored_path
+                    })
+                    continue  # Skip if file doesn't exist
+            elif file_type == "rfdiffusion":
+                # Check if file exists in server/rfdiffusion_results (like proteinmpnn_results)
+                filename = file_entry.get("filename", "")
+                stored_path = file_entry.get("file_path", "")
+                
+                # Files are stored relative to server directory
+                if stored_path and not Path(stored_path).is_absolute():
+                    result_path = Path(__file__).parent / stored_path
+                elif stored_path and Path(stored_path).is_absolute():
+                    result_path = Path(stored_path)
+                else:
+                    # Fallback to standard location
+                    result_path = Path(__file__).parent / "rfdiffusion_results" / filename
+                
+                if result_path.exists():
+                    download_url = f"/api/sessions/{session_id}/files/{file_id}/download"
+                else:
+                    log_line("rfdiffusion_file_not_found", {
+                        "session_id": session_id,
+                        "file_id": file_id,
+                        "filename": filename,
+                        "expected_path": str(result_path),
+                        "stored_path": stored_path
+                    })
+                    continue  # Skip if file doesn't exist
+            else:
+                download_url = f"/api/sessions/{session_id}/files/{file_id}/download"
+            
+            enriched_file = {
+                **file_entry,
+                "download_url": download_url,
+            }
+            enriched_files.append(enriched_file)
+        
+        return {
+            "status": "success",
+            "files": enriched_files,
+        }
+    except Exception as e:
+        log_line("session_files_list_failed", {"error": str(e), "trace": traceback.format_exc(), "session_id": session_id})
+        content = {"error": "Failed to list session files"}
+        if DEBUG_API:
+            content["detail"] = str(e)
+        return JSONResponse(status_code=500, content=content)
+
+
+@app.get("/api/sessions/{session_id}/files/{file_id}")
+@limiter.limit("30/minute")
+async def get_session_file_content(request: Request, session_id: str, file_id: str):
+    """Get content of a specific file from a session."""
+    _ = request
+    try:
+        files = get_session_files(session_id)
+        file_entry = next((f for f in files if f.get("file_id") == file_id), None)
+        
+        if not file_entry:
+            raise HTTPException(status_code=404, detail="File not found in session")
+        
+        file_type = file_entry.get("type", "")
+        file_path = file_entry.get("file_path", "")
+        filename = file_entry.get("filename", "")
+        
+        # Load file content based on type
+        if file_type == "upload":
+            metadata = get_uploaded_pdb(file_id)
+            if not metadata or not metadata.get("absolute_path"):
+                raise HTTPException(status_code=404, detail="Uploaded file not found")
+            file_path = metadata["absolute_path"]
+        elif file_type == "alphafold":
+            # Files are stored in server/alphafold_results (relative to server directory)
+            stored_path = file_entry.get("file_path", "")
+            if stored_path and not Path(stored_path).is_absolute():
+                result_path = Path(__file__).parent / stored_path
+            elif stored_path and Path(stored_path).is_absolute():
+                result_path = Path(stored_path)
+            else:
+                result_path = Path(__file__).parent / "alphafold_results" / filename
+            
+            if not result_path.exists():
+                raise HTTPException(status_code=404, detail="AlphaFold result file not found")
+            file_path = str(result_path)
+        elif file_type == "rfdiffusion":
+            # Files are stored in server/rfdiffusion_results (relative to server directory)
+            stored_path = file_entry.get("file_path", "")
+            if stored_path and not Path(stored_path).is_absolute():
+                result_path = Path(__file__).parent / stored_path
+            elif stored_path and Path(stored_path).is_absolute():
+                result_path = Path(stored_path)
+            else:
+                result_path = Path(__file__).parent / "rfdiffusion_results" / filename
+            
+            if not result_path.exists():
+                raise HTTPException(status_code=404, detail="RFdiffusion result file not found")
+            file_path = str(result_path)
+        else:
+            raise HTTPException(status_code=400, detail="Unknown file type")
+        
+        # Read and return file content
+        with open(file_path, "r", encoding="utf-8") as f:
+            content = f.read()
+        
+        return {
+            "status": "success",
+            "file_id": file_id,
+            "filename": filename,
+            "type": file_type,
+            "content": content,
+            "size": len(content),
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        log_line("session_file_content_failed", {"error": str(e), "trace": traceback.format_exc(), "session_id": session_id, "file_id": file_id})
+        content = {"error": "Failed to get file content"}
+        if DEBUG_API:
+            content["detail"] = str(e)
+        return JSONResponse(status_code=500, content=content)
+
+
+@app.get("/api/sessions/{session_id}/files/{file_id}/download")
+@limiter.limit("30/minute")
+async def download_session_file(request: Request, session_id: str, file_id: str):
+    """Download a file from a session."""
+    _ = request
+    try:
+        files = get_session_files(session_id)
+        file_entry = next((f for f in files if f.get("file_id") == file_id), None)
+        
+        if not file_entry:
+            raise HTTPException(status_code=404, detail="File not found in session")
+        
+        file_type = file_entry.get("type", "")
+        filename = file_entry.get("filename", "")
+        
+        # Determine file path based on type
+        if file_type == "upload":
+            metadata = get_uploaded_pdb(file_id)
+            if not metadata or not metadata.get("absolute_path"):
+                raise HTTPException(status_code=404, detail="Uploaded file not found")
+            file_path = metadata["absolute_path"]
+        elif file_type == "alphafold":
+            # Files are stored in server/alphafold_results (relative to server directory)
+            stored_path = file_entry.get("file_path", "")
+            if stored_path and not Path(stored_path).is_absolute():
+                result_path = Path(__file__).parent / stored_path
+            elif stored_path and Path(stored_path).is_absolute():
+                result_path = Path(stored_path)
+            else:
+                result_path = Path(__file__).parent / "alphafold_results" / filename
+            
+            if not result_path.exists():
+                raise HTTPException(status_code=404, detail="AlphaFold result file not found")
+            file_path = str(result_path)
+        elif file_type == "rfdiffusion":
+            # Files are stored in server/rfdiffusion_results (relative to server directory)
+            stored_path = file_entry.get("file_path", "")
+            if stored_path and not Path(stored_path).is_absolute():
+                result_path = Path(__file__).parent / stored_path
+            elif stored_path and Path(stored_path).is_absolute():
+                result_path = Path(stored_path)
+            else:
+                result_path = Path(__file__).parent / "rfdiffusion_results" / filename
+            
+            if not result_path.exists():
+                raise HTTPException(status_code=404, detail="RFdiffusion result file not found")
+            file_path = str(result_path)
+        else:
+            raise HTTPException(status_code=400, detail="Unknown file type")
+        
+        return FileResponse(
+            file_path,
+            media_type="chemical/x-pdb",
+            filename=filename,
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        log_line("session_file_download_failed", {"error": str(e), "trace": traceback.format_exc(), "session_id": session_id, "file_id": file_id})
+        raise HTTPException(status_code=500, detail="Failed to download file")
 
 
 # ProteinMPNN endpoints ---------------------------------------------------
@@ -704,6 +965,7 @@ async def rfdiffusion_design(request: Request):
         body = await request.json()
         parameters = body.get("parameters", {})
         job_id = body.get("jobId")
+        session_id = body.get("sessionId")  # Optional session ID
         
         if not job_id:
             return JSONResponse(
@@ -718,7 +980,8 @@ async def rfdiffusion_design(request: Request):
         
         result = await rfdiffusion_handler.submit_design_job({
             "parameters": parameters,
-            "jobId": job_id
+            "jobId": job_id,
+            "sessionId": session_id,  # Pass session ID to handler
         })
         
         # Check if result contains an error and return appropriate HTTP status
@@ -746,13 +1009,23 @@ async def rfdiffusion_design(request: Request):
                     }
                 )
             else:
+                # For validation errors (422), use the detailed error message as userMessage
+                # Check if it's a validation error (contains "Residue" or "not in pdb" or "Validation error")
+                is_validation_error = (
+                    "Validation error" in error_msg or 
+                    "Residue" in error_msg and "not in pdb" in error_msg.lower() or
+                    "422" in error_msg
+                )
+                
+                user_message = error_msg if is_validation_error else "Protein design computation failed"
+                
                 return JSONResponse(
                     status_code=500,
                     content={
                         "status": "error",
                         "error": "",  # Empty for frontend error handling
                         "errorCode": "DESIGN_FAILED",
-                        "userMessage": "Protein design computation failed",
+                        "userMessage": user_message,
                         "technicalMessage": error_msg
                     }
                 )

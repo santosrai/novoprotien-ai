@@ -15,6 +15,7 @@ try:
     # Try absolute import first (most reliable)
     from sequence_utils import SequenceExtractor
     from nims_client import NIMSClient
+    from session_file_tracker import associate_file_with_session
 except ImportError:
     try:
         # Add current directory to path and import
@@ -23,10 +24,12 @@ except ImportError:
         sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
         from sequence_utils import SequenceExtractor
         from nims_client import NIMSClient
+        from session_file_tracker import associate_file_with_session
     except ImportError:
         # Last resort: try relative import
         from .sequence_utils import SequenceExtractor
         from .nims_client import NIMSClient
+        from .session_file_tracker import associate_file_with_session
 
 # Set up file logging for AlphaFold API
 def setup_alphafold_logging():
@@ -312,6 +315,26 @@ class AlphaFoldHandler:
                     # Save PDB file
                     filename = f"alphafold_{job_id}.pdb"
                     filepath = nims_client.save_pdb_file(pdb_content, filename)
+                    
+                    # Associate file with session if session_id provided
+                    session_id = job_data.get("sessionId")
+                    if session_id:
+                        try:
+                            associate_file_with_session(
+                                session_id=str(session_id),
+                                file_id=job_id,  # Use job_id as file_id for generated files
+                                file_type="alphafold",
+                                file_path=str(filepath),
+                                filename=filename,
+                                size=len(pdb_content),
+                                job_id=job_id,
+                                metadata={
+                                    "sequence_length": len(sequence),
+                                    "parameters": parameters,
+                                },
+                            )
+                        except Exception as e:
+                            logger.warning(f"Failed to associate AlphaFold file with session: {e}")
                     
                     self.active_jobs[job_id] = "completed"
                     # Persist result for status polling retrieval

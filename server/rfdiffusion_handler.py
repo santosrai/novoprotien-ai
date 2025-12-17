@@ -8,6 +8,7 @@ import asyncio
 import json
 import logging
 import re
+from pathlib import Path
 from typing import Dict, Any, Optional, List
 
 # Import dependencies
@@ -15,11 +16,15 @@ try:
     # Try relative import first (when imported as module)
     from .rfdiffusion_client import RFdiffusionClient
     from .sequence_utils import SequenceExtractor
+    from .pdb_storage import get_uploaded_pdb
+    from .session_file_tracker import associate_file_with_session
 except ImportError:
     try:
         # Try absolute import (when running as script)
         from rfdiffusion_client import RFdiffusionClient
         from sequence_utils import SequenceExtractor
+        from pdb_storage import get_uploaded_pdb
+        from session_file_tracker import associate_file_with_session
     except ImportError:
         # Try importing from current directory
         import sys
@@ -27,6 +32,8 @@ except ImportError:
         sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
         from rfdiffusion_client import RFdiffusionClient
         from sequence_utils import SequenceExtractor
+        from pdb_storage import get_uploaded_pdb
+        from session_file_tracker import associate_file_with_session
 
 logger = logging.getLogger(__name__)
 
@@ -233,6 +240,59 @@ class RFdiffusionHandler:
         
         return base_time
     
+    def _resolve_pdb_content(self, parameters: Dict[str, Any]) -> Optional[str]:
+        """
+        Resolve PDB content from multiple sources with priority:
+        1. uploadId (uploaded file) - highest priority
+        2. pdb_id (PDB ID) - fetch from RCSB
+        3. input_pdb (raw content) - use directly
+        
+        Args:
+            parameters: Design parameters containing PDB source info
+            
+        Returns:
+            PDB content string or None if no PDB source provided
+        """
+        # Priority 1: Check for uploaded file
+        upload_id = parameters.get("uploadId") or parameters.get("upload_file_id")
+        if upload_id:
+            try:
+                metadata = get_uploaded_pdb(upload_id)
+                if metadata and metadata.get("absolute_path"):
+                    pdb_path = Path(metadata["absolute_path"])
+                    if pdb_path.exists():
+                        pdb_content = pdb_path.read_text()
+                        logger.info(f"Retrieved PDB from uploaded file: {upload_id}")
+                        return pdb_content
+                    else:
+                        logger.warning(f"Uploaded PDB file not found: {metadata.get('absolute_path')}")
+                else:
+                    logger.warning(f"Uploaded PDB metadata not found for ID: {upload_id}")
+            except Exception as e:
+                logger.error(f"Error retrieving uploaded PDB {upload_id}: {e}")
+                # Fall through to next priority
+        
+        # Priority 2: Check for PDB ID
+        pdb_id = parameters.get("pdb_id")
+        if pdb_id:
+            try:
+                rfdiffusion_client = self._get_rfdiffusion_client()
+                pdb_content = rfdiffusion_client.fetch_pdb_from_id(pdb_id)
+                logger.info(f"Fetched PDB from RCSB: {pdb_id}")
+                return pdb_content
+            except Exception as e:
+                logger.error(f"Error fetching PDB {pdb_id} from RCSB: {e}")
+                # Fall through to next priority
+        
+        # Priority 3: Check for raw input_pdb content
+        input_pdb = parameters.get("input_pdb")
+        if input_pdb and input_pdb.strip():
+            logger.info("Using provided input_pdb content")
+            return input_pdb
+        
+        # No PDB source found
+        return None
+    
     async def submit_design_job(self, job_data: Dict[str, Any]) -> Dict[str, Any]:
         """
         Submit design job to RFdiffusion API
@@ -273,11 +333,102 @@ class RFdiffusionHandler:
             # Start the design job
             self.active_jobs[job_id] = "running"
             
+            # Resolve PDB content from multiple sources
+            pdb_content = self._resolve_pdb_content(parameters)
+            design_mode = parameters.get("design_mode", "unconditional")
+            
+            # Prepare parameters for RFdiffusion client
+            # If PDB content was resolved, pass it as input_pdb
+            # Remove uploadId and pdb_id from parameters since we've resolved the content
+            client_params = {**parameters}
+            
+            # Ensure design_mode is always included
+            client_params["design_mode"] = design_mode
+            
+            # Remove empty string values for PDB-related fields
+            for key in ["uploadId", "upload_file_id", "pdb_id", "input_pdb"]:
+                if key in client_params and (client_params[key] == "" or client_params[key] is None):
+                    client_params.pop(key, None)
+            
+            if pdb_content:
+                client_params["input_pdb"] = pdb_content
+                # Remove source identifiers since we have the content
+                client_params.pop("uploadId", None)
+                client_params.pop("upload_file_id", None)
+                client_params.pop("pdb_id", None)
+            elif design_mode != "unconditional":
+                # For non-unconditional designs, PDB is required
+                return {
+                    "status": "error",
+                    "error": "PDB template is required for motif_scaffolding and partial_diffusion modes. Please provide a PDB ID, upload a file, or use unconditional design mode."
+                }
+            else:
+                # For unconditional design without PDB, ensure all PDB-related params are removed
+                client_params.pop("uploadId", None)
+                client_params.pop("upload_file_id", None)
+                client_params.pop("pdb_id", None)
+                client_params.pop("input_pdb", None)
+                logger.info(f"Unconditional design without PDB - removed all PDB-related params. Remaining keys: {list(client_params.keys())}")
+            
             # Submit to RFdiffusion API
-            result = await rfdiffusion_client.submit_design_request(
-                progress_callback=progress_callback,
-                **parameters
-            )
+            try:
+                logger.info(f"Submitting RFdiffusion design job {job_id} with params: {list(client_params.keys())}, design_mode={design_mode}")
+                result = await rfdiffusion_client.submit_design_request(
+                    progress_callback=progress_callback,
+                    **client_params
+                )
+            except Exception as e:
+                logger.error(f"Error in submit_design_request for job {job_id}: {e}", exc_info=True)
+                self.active_jobs[job_id] = "error"
+                return {
+                    "status": "error",
+                    "error": f"Failed to submit design request: {str(e)}"
+                }
+            
+            # Check for various error statuses
+            if result.get("status") == "exception" or result.get("status") == "request_failed":
+                self.active_jobs[job_id] = "error"
+                error_msg = result.get("error", "Design failed")
+                error_details = result.get("details", "")
+                
+                # Parse HTTP error responses for better user messages
+                if "HTTP 422" in error_msg or "422" in error_msg:
+                    # Extract detail from JSON response if available
+                    import json
+                    try:
+                        # Try to extract the detail message from the error
+                        if "detail" in error_msg.lower():
+                            # Look for JSON in the error message
+                            json_start = error_msg.find("{")
+                            if json_start != -1:
+                                json_str = error_msg[json_start:]
+                                error_data = json.loads(json_str)
+                                detail = error_data.get("detail", error_msg)
+                                logger.error(f"RFdiffusion API validation error: {detail}")
+                                return {
+                                    "status": "error",
+                                    "error": f"Validation error: {detail}. Please check that your hotspot residues exist in the PDB file and that the PDB file contains the expected chains and residues."
+                                }
+                    except:
+                        pass
+                
+                logger.error(f"RFdiffusion API returned error status: {error_msg}")
+                if error_details:
+                    logger.error(f"Error details: {error_details}")
+                
+                # Provide user-friendly error message
+                user_friendly_error = error_msg
+                if "422" in error_msg:
+                    user_friendly_error = "The RFdiffusion API rejected the request due to invalid parameters. Please check that hotspot residues exist in the PDB file."
+                elif "401" in error_msg or "403" in error_msg:
+                    user_friendly_error = "Authentication failed. Please check your NVIDIA API key configuration."
+                elif "500" in error_msg or "502" in error_msg or "503" in error_msg:
+                    user_friendly_error = "The RFdiffusion service is temporarily unavailable. Please try again later."
+                
+                return {
+                    "status": "error",
+                    "error": user_friendly_error
+                }
             
             if result.get("status") == "completed":
                 # Extract PDB content
@@ -287,6 +438,26 @@ class RFdiffusionHandler:
                     # Save PDB file
                     filename = f"rfdiffusion_{job_id}.pdb"
                     filepath = rfdiffusion_client.save_pdb_file(pdb_content, filename)
+                    
+                    # Associate file with session if session_id provided
+                    session_id = job_data.get("sessionId")
+                    if session_id:
+                        try:
+                            associate_file_with_session(
+                                session_id=str(session_id),
+                                file_id=job_id,  # Use job_id as file_id for generated files
+                                file_type="rfdiffusion",
+                                file_path=str(filepath),
+                                filename=filename,
+                                size=len(pdb_content),
+                                job_id=job_id,
+                                metadata={
+                                    "parameters": parameters,
+                                    "design_mode": parameters.get("design_mode", "unknown"),
+                                },
+                            )
+                        except Exception as e:
+                            logger.warning(f"Failed to associate RFdiffusion file with session: {e}")
                     
                     self.active_jobs[job_id] = "completed"
                     
