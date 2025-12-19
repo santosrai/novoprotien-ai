@@ -17,6 +17,9 @@ import { ModelSelector } from './ModelSelector';
 import { useAgentSettings } from '../stores/settingsStore';
 import { ThinkingProcessDisplay } from './ThinkingProcessDisplay';
 import { PDBFileUpload } from './PDBFileUpload';
+import ReactMarkdown from 'react-markdown';
+import { generatePDBSummary } from '../utils/pdbUtils';
+import { usePipelineStore, PipelineBlueprint } from '../components/pipeline-canvas';
 
 // Extended message metadata for structured agent results
 // Note: Message interface now includes thinkingProcess and uploadedFile, so ExtendedMessage is mainly for type compatibility
@@ -233,6 +236,7 @@ const createProteinMPNNError = (
 
 export const ChatPanel: React.FC = () => {
   const { plugin, currentCode, setCurrentCode, setIsExecuting, setActivePane, setPendingCodeToRun, setViewerVisible, setCurrentStructureOrigin, currentStructureOrigin } = useAppStore();
+  const { setGhostBlueprint } = usePipelineStore();
   const lastLoadedPdb = useAppStore(state => state.lastLoadedPdb);
   const selections = useAppStore(state => state.selections);
   const removeSelection = useAppStore(state => state.removeSelection);
@@ -455,7 +459,8 @@ export const ChatPanel: React.FC = () => {
   const [pendingFile, setPendingFile] = useState<File | null>(null);
   
   // Uploaded file state (after upload completes)
-  const [uploadedFile, setUploadedFile] = useState<{
+  // Note: Currently tracked via uploadedFileInfo local variable, state value kept for future use
+  const [, setUploadedFile] = useState<{
     filename: string;
     file_id: string;
     file_url: string;
@@ -547,7 +552,56 @@ export const ChatPanel: React.FC = () => {
       );
     }
 
-    return <p className="text-sm">{content}</p>;
+    // Render markdown content
+    return (
+      <div className="prose prose-sm max-w-none">
+        <ReactMarkdown
+          components={{
+            // Style code blocks
+            code: ({ node, inline, className, children, ...props }: any) => {
+              return !inline ? (
+                <pre className="bg-gray-100 rounded p-2 overflow-x-auto text-xs my-2">
+                  <code className={className} {...props}>
+                    {children}
+                  </code>
+                </pre>
+              ) : (
+                <code className="bg-gray-100 px-1 py-0.5 rounded text-xs" {...props}>
+                  {children}
+                </code>
+              );
+            },
+            // Style paragraphs
+            p: ({ children }: any) => <p className="mb-2 last:mb-0 text-sm">{children}</p>,
+            // Style lists
+            ul: ({ children }: any) => <ul className="list-disc list-inside mb-2 space-y-1">{children}</ul>,
+            ol: ({ children }: any) => <ol className="list-decimal list-inside mb-2 space-y-1">{children}</ol>,
+            li: ({ children }: any) => <li className="ml-4">{children}</li>,
+            // Style headings
+            h1: ({ children }: any) => <h1 className="text-lg font-bold mb-2 mt-4 first:mt-0">{children}</h1>,
+            h2: ({ children }: any) => <h2 className="text-base font-bold mb-2 mt-3 first:mt-0">{children}</h2>,
+            h3: ({ children }: any) => <h3 className="text-sm font-bold mb-1 mt-2 first:mt-0">{children}</h3>,
+            // Style strong and emphasis
+            strong: ({ children }: any) => <strong className="font-semibold">{children}</strong>,
+            em: ({ children }: any) => <em className="italic">{children}</em>,
+            // Style blockquotes
+            blockquote: ({ children }: any) => (
+              <blockquote className="border-l-4 border-gray-300 pl-4 italic my-2">
+                {children}
+              </blockquote>
+            ),
+            // Style links
+            a: ({ children, href }: any) => (
+              <a href={href} className="text-blue-600 hover:text-blue-800 underline" target="_blank" rel="noopener noreferrer">
+                {children}
+              </a>
+            ),
+          }}
+        >
+          {content}
+        </ReactMarkdown>
+      </div>
+    );
   };
 
   const loadUploadedFileInViewer = async (fileInfo: { file_id: string; filename: string; file_url: string }) => {
@@ -1700,7 +1754,7 @@ try {
         selections: selections, // Full selections array for new multi-selection support
         agentId: agentSettings.selectedAgentId || undefined, // Only send if manually selected
         model: agentSettings.selectedModel || undefined, // Only send if manually selected
-        uploadedFileId: fileUploadResult?.file_id || uploadedFile?.file_id || undefined, // Include uploaded file ID if available
+        uploadedFileId: fileUploadResult?.file_id || undefined, // Only include file ID when file is uploaded with this message
       };
       console.log('[AI] route:request', payload);
       console.log('[DEBUG] currentCode length:', currentCode?.length || 0);
@@ -1813,6 +1867,37 @@ try {
                   return;
                 }
               }
+
+              // Check if this is a pipeline blueprint response (streaming)
+              try {
+                const parsed = JSON.parse(finalResult.text || '');
+                if (parsed.type === 'blueprint' && parsed.blueprint) {
+                  console.log('🔧 [Pipeline] Blueprint detected in stream, setting ghost blueprint');
+                  const blueprint: PipelineBlueprint = {
+                    rationale: parsed.rationale || parsed.content || 'Pipeline blueprint generated',
+                    nodes: parsed.blueprint.nodes || [],
+                    edges: parsed.blueprint.edges || [],
+                    missing_resources: parsed.blueprint.missing_resources || [],
+                  };
+                  
+                  setGhostBlueprint(blueprint);
+                  setViewerVisible(true);
+                  setActivePane('pipeline');
+                  
+                  // Update message with blueprint info
+                  updateMessageWithFreshSession((msg: ExtendedMessage) => ({
+                    ...msg,
+                    content: blueprint.rationale + (blueprint.missing_resources.length > 0 
+                      ? `\n\n⚠️ Missing resources: ${blueprint.missing_resources.join(', ')}`
+                      : ''),
+                  }));
+                  
+                  setIsLoading(false);
+                  return;
+                }
+              } catch (e) {
+                // Not a JSON blueprint, continue
+              }
               
               // For text agents, we're done
               if (finalResult.type === 'text') {
@@ -1845,13 +1930,32 @@ try {
             if (placeholderMessageId && currentSession && currentSession.id === activeSessionId) {
               const finalThinkingProcess = convertThinkingData(finalResult.thinkingProcess, true);
               // Handle empty code case - preserve message with thinking process
-              const messageContent = finalResult.code && finalResult.code.trim()
+              const defaultMessageContent = finalResult.code && finalResult.code.trim()
                 ? `Generated code for: "${text}". Executing...`
                 : `I couldn't generate valid code for: "${text}". ${finalThinkingProcess ? 'See my thinking process above for details.' : ''}`;
               
+              // Try to generate PDB summary asynchronously
+              generatePDBSummary(text).then(summary => {
+                if (summary) {
+                  const currentSession = getActiveSession();
+                  if (currentSession && currentSession.id === activeSessionId && placeholderMessageId) {
+                    updateMessageWithFreshSession((msg: ExtendedMessage) => 
+                      msg.id === placeholderMessageId ? {
+                        ...msg,
+                        content: summary,
+                        thinkingProcess: finalThinkingProcess || msg.thinkingProcess
+                      } : msg
+                    );
+                  }
+                }
+              }).catch(err => {
+                console.warn('Failed to generate PDB summary:', err);
+              });
+              
+              // Set default message immediately
               updateMessageWithFreshSession((msg: ExtendedMessage) => ({
                 ...msg,
-                content: messageContent,
+                content: defaultMessageContent,
                 thinkingProcess: finalThinkingProcess || msg.thinkingProcess
               }));
               messageAlreadyUpdated = true; // Mark that we've updated the message
@@ -2030,6 +2134,49 @@ try {
               return;
             }
           }
+
+          // Check if this is a pipeline blueprint response
+          try {
+            const parsed = JSON.parse(aiText);
+            if (parsed.type === 'blueprint' && parsed.blueprint) {
+              console.log('🔧 [Pipeline] Blueprint detected, setting ghost blueprint');
+              const blueprint: PipelineBlueprint = {
+                rationale: parsed.rationale || parsed.content || 'Pipeline blueprint generated',
+                nodes: parsed.blueprint.nodes || [],
+                edges: parsed.blueprint.edges || [],
+                missing_resources: parsed.blueprint.missing_resources || [],
+              };
+              
+              setGhostBlueprint(blueprint);
+              setViewerVisible(true);
+              setActivePane('pipeline');
+              
+              // Create a message explaining the blueprint
+              const blueprintMsg: ExtendedMessage = {
+                id: uuidv4(),
+                content: blueprint.rationale + (blueprint.missing_resources.length > 0 
+                  ? `\n\n⚠️ Missing resources: ${blueprint.missing_resources.join(', ')}`
+                  : ''),
+                type: 'ai',
+                timestamp: new Date(),
+              };
+              
+              if (placeholderMessageId && activeSession) {
+                const updatedMessages = activeSession.messages.map(msg => 
+                  msg.id === placeholderMessageId
+                    ? blueprintMsg
+                    : msg
+                );
+                updateMessages(updatedMessages);
+              } else {
+                addMessage(blueprintMsg);
+              }
+              
+              return; // Exit early, blueprint is set
+            }
+          } catch (e) {
+            // Not a JSON blueprint, continue with normal text handling
+          }
           
           // Bio-chat and other text agents should never modify the editor code
           console.log(`[${agentId}] Text response received, preserving current editor code`);
@@ -2119,28 +2266,49 @@ try {
             : (currentSession.messages.find(m => m.id === placeholderMessageId) as ExtendedMessage)?.thinkingProcess;
           
           // Determine message content based on whether code is empty
-          const messageContent = code && code.trim()
+          const defaultMessageContent = code && code.trim()
             ? `Generated code for: "${text}". Executing...`
             : `I couldn't generate valid code for: "${text}". ${thinkingProcess ? 'See my thinking process above for details.' : ''}`;
+          
+          // Try to generate PDB summary asynchronously
+          generatePDBSummary(text).then(summary => {
+            if (summary) {
+              const currentSession = getActiveSession();
+              if (currentSession && currentSession.id === activeSessionId && placeholderMessageId) {
+                const updatedMessages = currentSession.messages.map(msg => 
+                  msg.id === placeholderMessageId
+                    ? { 
+                        ...msg, 
+                        content: summary,
+                        thinkingProcess: finalThinkingProcess
+                      } as ExtendedMessage
+                    : msg
+                );
+                updateMessages(updatedMessages);
+              }
+            }
+          }).catch(err => {
+            console.warn('Failed to generate PDB summary:', err);
+          });
           
           const updatedMessages = currentSession.messages.map(msg => 
             msg.id === placeholderMessageId
               ? { 
                   ...msg, 
-                  content: messageContent,
+                  content: defaultMessageContent,
                   thinkingProcess: finalThinkingProcess
                 } as ExtendedMessage
               : msg
           );
           updateMessages(updatedMessages);
         } else {
-          const messageContent = code && code.trim()
+          const defaultMessageContent = code && code.trim()
             ? `Generated code for: "${text}". Executing...`
             : `I couldn't generate valid code for: "${text}".`;
           
           const aiResponse: ExtendedMessage = {
             id: uuidv4(),
-            content: messageContent,
+            content: defaultMessageContent,
             type: 'ai',
             timestamp: new Date()
           };
@@ -2151,6 +2319,26 @@ try {
           }
           
           addMessage(aiResponse);
+          
+          // Try to generate PDB summary asynchronously and update message
+          generatePDBSummary(text).then(summary => {
+            if (summary) {
+              const currentSession = getActiveSession();
+              if (currentSession && currentSession.id === activeSessionId) {
+                const updatedMessages = currentSession.messages.map(msg => 
+                  msg.id === aiResponse.id
+                    ? { 
+                        ...msg, 
+                        content: summary
+                      } as ExtendedMessage
+                    : msg
+                );
+                updateMessages(updatedMessages);
+              }
+            }
+          }).catch(err => {
+            console.warn('Failed to generate PDB summary:', err);
+          });
         }
       }
 

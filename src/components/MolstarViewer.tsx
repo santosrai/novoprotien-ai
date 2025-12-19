@@ -6,11 +6,12 @@ import { PluginUIContext } from 'molstar/lib/mol-plugin-ui/context';
 import { renderReact18 } from 'molstar/lib/mol-plugin-ui/react18';
 import { PluginSpec } from 'molstar/lib/mol-plugin/spec';
 import { MolViewSpec } from 'molstar/lib/extensions/mvs/behavior';
-import { Camera, FullscreenIcon, RotateCw } from 'lucide-react';
 import { useAppStore } from '../stores/appStore';
+import { useChatHistoryStore } from '../stores/chatHistoryStore';
 import { StructureElement, StructureProperties } from 'molstar/lib/mol-model/structure';
 // OrderedSet no longer needed after switching to getFirstLocation
 import { CodeExecutor } from '../utils/codeExecutor';
+import { MolstarToolbar } from './MolstarToolbar';
 
 export const MolstarViewer: React.FC = () => {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -18,13 +19,59 @@ export const MolstarViewer: React.FC = () => {
   const [plugin, setPlugin] = useState<PluginUIContext | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [isInitialized, setIsInitialized] = useState(false);
-  const { setPlugin: setStorePlugin, pendingCodeToRun, setPendingCodeToRun, setActivePane, setIsExecuting, currentCode } = useAppStore();
+  const [hasCheckedPersistedCode, setHasCheckedPersistedCode] = useState(false);
+  const { setPlugin: setStorePlugin, pendingCodeToRun, setPendingCodeToRun, setActivePane, setIsExecuting, currentCode, setCurrentCode } = useAppStore();
   const addSelection = useAppStore(state => state.addSelection);
   const lastLoadedPdb = useAppStore(state => state.lastLoadedPdb);
+  const { activeSessionId, getVisualizationCode } = useChatHistoryStore();
+
+  // Helper function to get the code to execute (checks both global and session-specific)
+  const getCodeToExecute = (): string | null => {
+    // First check global currentCode
+    if (currentCode && currentCode.trim()) {
+      return currentCode;
+    }
+    
+    // Then check session-specific visualization code
+    if (activeSessionId) {
+      const sessionCode = getVisualizationCode(activeSessionId);
+      if (sessionCode && sessionCode.trim()) {
+        return sessionCode;
+      }
+    }
+    
+    return null;
+  };
+
+  // Check for persisted code on mount (after stores have hydrated)
+  useEffect(() => {
+    // Give stores a moment to hydrate from localStorage
+    const checkPersistedCode = () => {
+      const code = getCodeToExecute();
+      if (code) {
+        // If we found persisted code, update the store so it's available
+        if (!currentCode || currentCode.trim() === '') {
+          setCurrentCode(code);
+          console.log('[Molstar] Restored persisted visualization code');
+        }
+      }
+      setHasCheckedPersistedCode(true);
+    };
+
+    // Small delay to ensure Zustand persistence has hydrated
+    const timer = setTimeout(checkPersistedCode, 150);
+    return () => clearTimeout(timer);
+  }, []); // Only run once on mount
 
   useEffect(() => {
     const initViewer = async () => {
       if (!containerRef.current || isInitialized) return;
+      
+      // Wait for persisted code check to complete before initializing
+      if (!hasCheckedPersistedCode) {
+        console.log('[Molstar] Waiting for persisted code check...');
+        return;
+      }
 
       try {
         setIsLoading(true);
@@ -37,6 +84,19 @@ export const MolstarViewer: React.FC = () => {
           render: renderReact18,
           spec: {
             ...spec,
+            layout: {
+              initial: {
+                isExpanded: true,
+                showControls: true,
+                controlsDisplay: 'reactive',
+                regionState: {
+                  top: 'full',      // Sequence panel
+                  left: 'hidden',
+                  right: 'hidden', 
+                  bottom: 'hidden',
+                }
+              }
+            },
             behaviors: [
               ...spec.behaviors,
               PluginSpec.Behavior(MolViewSpec)
@@ -106,15 +166,21 @@ export const MolstarViewer: React.FC = () => {
           return;
         }
 
-        // Priority 2: If there is existing code in the editor, execute it
-        if (currentCode && currentCode.trim()) {
+        // Priority 2: Get code to execute (checks both global and session-specific)
+        const codeToExecute = getCodeToExecute();
+        if (codeToExecute) {
           try {
             setIsExecuting(true);
             const exec = new CodeExecutor(pluginInstance);
-            await exec.executeCode(currentCode);
+            await exec.executeCode(codeToExecute);
+            // Sync to store if it came from session
+            if (!currentCode || currentCode.trim() === '') {
+              setCurrentCode(codeToExecute);
+            }
             setActivePane('viewer');
+            lastExecutedCodeRef.current = codeToExecute;
           } catch (e) {
-            console.error('[Molstar] execute currentCode on mount failed', e);
+            console.error('[Molstar] execute persisted code on mount failed', e);
           } finally {
             setIsExecuting(false);
           }
@@ -148,7 +214,7 @@ export const MolstarViewer: React.FC = () => {
       }
       console.log('[Molstar] cleanup: end');
     };
-  }, []);
+  }, [hasCheckedPersistedCode, activeSessionId]);
 
   const loadDefaultStructure = async (pluginInstance: PluginUIContext) => {
     try {
@@ -205,9 +271,25 @@ export const MolstarViewer: React.FC = () => {
   useEffect(() => {
     const run = async () => {
       if (!plugin || !isInitialized) return;
-      const code = currentCode?.trim();
+      
+      // Get code to execute (checks both global and session-specific)
+      let code = currentCode?.trim();
+      
+      // If no global code, check session-specific code
+      if (!code && activeSessionId) {
+        const sessionCode = getVisualizationCode(activeSessionId);
+        if (sessionCode && sessionCode.trim()) {
+          code = sessionCode;
+          // Sync to store so it's available globally
+          if (!currentCode || currentCode.trim() === '') {
+            setCurrentCode(sessionCode);
+          }
+        }
+      }
+      
       if (!code) return;
       if (lastExecutedCodeRef.current === code) return;
+      
       try {
         setIsExecuting(true);
         const exec = new CodeExecutor(plugin);
@@ -221,97 +303,50 @@ export const MolstarViewer: React.FC = () => {
     };
     void run();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [plugin, isInitialized, currentCode]);
-
-  const handleScreenshot = async () => {
-    if (!plugin) return;
-    
-    try {
-      const canvas = plugin.canvas3d?.webgl.gl.canvas;
-      if (canvas && 'toDataURL' in canvas) {
-        const imageData = (canvas as HTMLCanvasElement).toDataURL('image/png');
-        if (imageData) {
-          const link = document.createElement('a');
-          link.download = 'molstar-screenshot.png';
-          link.href = imageData;
-          link.click();
-        }
-      }
-    } catch (error) {
-      console.error('[Molstar] screenshot failed', error);
-    }
-  };
-
-  const handleReset = () => {
-    if (!plugin) return;
-    try {
-      plugin.managers.camera.reset();
-      console.log('[Molstar] camera reset');
-    } catch (e) {
-      console.warn('[Molstar] camera reset failed', e);
-    }
-  };
-
-  const handleFullscreen = () => {
-    if (!containerRef.current) return;
-    
-    if (document.fullscreenElement) {
-      void document.exitFullscreen();
-    } else {
-      void containerRef.current.requestFullscreen();
-    }
-  };
+  }, [plugin, isInitialized, currentCode, activeSessionId]);
 
   return (
-    <div className="h-full relative bg-gray-900 overflow-hidden">
-      {isLoading && (
-        <div className="absolute inset-0 bg-gray-900 flex items-center justify-center z-10">
-          <div className="text-white text-center">
-            <div className="w-8 h-8 border-2 border-white border-t-transparent rounded-full animate-spin mx-auto mb-4"></div>
-            <div>Initializing Molstar Viewer...</div>
+    <div className="h-full w-full flex flex-col bg-gray-900">
+      {/* Chimera-style Select/Actions Toolbar */}
+      <MolstarToolbar plugin={plugin} />
+      
+      {/* Molstar Viewer Container */}
+      <div className="flex-1 relative molstar-container">
+        <style>{`
+          .molstar-container .msp-plugin {
+            position: absolute !important;
+            inset: 0 !important;
+            width: 100% !important;
+            height: 100% !important;
+          }
+          .molstar-container .msp-layout-expanded {
+            position: absolute !important;
+            inset: 0 !important;
+          }
+        `}</style>
+        {isLoading && (
+          <div className="absolute inset-0 bg-gray-900 flex items-center justify-center z-10">
+            <div className="text-white text-center">
+              <div className="w-8 h-8 border-2 border-white border-t-transparent rounded-full animate-spin mx-auto mb-4"></div>
+              <div>Initializing Molstar Viewer...</div>
+            </div>
           </div>
-        </div>
-      )}
+        )}
 
-      <div 
-        ref={containerRef} 
-        className="absolute inset-0 h-full w-full"
-      />
+        <div 
+          ref={containerRef} 
+          className="absolute inset-0 h-full w-full"
+        />
 
-      {isInitialized && (
-        <div className="absolute top-4 right-4 flex space-x-2 z-20">
-          <button
-            onClick={handleScreenshot}
-            className="p-2 bg-black bg-opacity-50 text-white rounded hover:bg-opacity-70"
-            title="Take screenshot"
-          >
-            <Camera className="w-4 h-4" />
-          </button>
-          <button
-            onClick={handleReset}
-            className="p-2 bg-black bg-opacity-50 text-white rounded hover:bg-opacity-70"
-            title="Reset camera"
-          >
-            <RotateCw className="w-4 h-4" />
-          </button>
-          <button
-            onClick={handleFullscreen}
-            className="p-2 bg-black bg-opacity-50 text-white rounded hover:bg-opacity-70"
-            title="Toggle fullscreen"
-          >
-            <FullscreenIcon className="w-4 h-4" />
-          </button>
-        </div>
-      )}
-
-      {!isLoading && !isInitialized && (
-        <div className="absolute inset-0 bg-gray-900 flex items-center justify-center">
-          <div className="text-white text-center">
-            <div className="text-red-400 mb-2">Failed to initialize Molstar viewer</div>
-            <div className="text-sm text-gray-400">Please refresh the page to try again</div>
+        {!isLoading && !isInitialized && (
+          <div className="absolute inset-0 bg-gray-900 flex items-center justify-center">
+            <div className="text-white text-center">
+              <div className="text-red-400 mb-2">Failed to initialize Molstar viewer</div>
+              <div className="text-sm text-gray-400">Please refresh the page to try again</div>
+            </div>
           </div>
-        </div>
-      )}
+        )}
+      </div>
     </div>
   );
 };
