@@ -159,7 +159,7 @@ const DropdownMenu: React.FC<DropdownMenuProps> = ({ label, children, disabled }
       
       {isOpen && (
         <div 
-          className="absolute top-full left-0 mt-1 min-w-[180px] bg-white border border-gray-200 rounded shadow-xl z-[9999]"
+          className="absolute top-full left-0 mt-1 min-w-[180px] bg-white border border-gray-200 rounded shadow-xl z-[9999] text-black"
           onClick={(e) => {
             // Only close if clicking on a leaf item (not a submenu trigger)
             const target = e.target as HTMLElement;
