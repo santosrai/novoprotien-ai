@@ -395,9 +395,10 @@ async function applyColorViaComponent(
       }]
     };
 
-    // Apply overpaint through the hierarchy manager
+    // Apply color through the hierarchy manager
+    // Note: Using type assertion as the exact API may vary by Molstar version
     await plugin.managers.structure.component.applyTheme(
-      { overpaint: params } as any,
+      { overpaint: params },
       structureRef.components
     );
     
@@ -560,8 +561,8 @@ async function hideRepresentationsAll(plugin: PluginUIContext) {
         if (reprType && ATOM_BOND_REPR_TYPES.includes(reprType)) {
           console.log('[MolstarSelections] Hiding representation:', reprType);
           try {
-            // Use state update to toggle the representation on/off
-            await (plugin.state as any).updateCellState(repr.cell.transform.ref, { isHidden: true });
+            // Use setVisibility to toggle the representation on/off
+            await plugin.state.updateCellState(repr.cell.transform.ref, { isHidden: true });
             console.log('[MolstarSelections] Successfully hid:', reprType);
           } catch (e) {
             console.warn('[MolstarSelections] Failed to hide representation:', e);
@@ -598,8 +599,8 @@ async function showRepresentationsAll(plugin: PluginUIContext) {
         if (reprType && ATOM_BOND_REPR_TYPES.includes(reprType)) {
           console.log('[MolstarSelections] Showing representation:', reprType);
           try {
-            // Use state update to toggle the representation on
-            await (plugin.state as any).updateCellState(repr.cell.transform.ref, { isHidden: false });
+            // Use setVisibility to toggle the representation on
+            await plugin.state.updateCellState(repr.cell.transform.ref, { isHidden: false });
             foundHiddenRepr = true;
             console.log('[MolstarSelections] Successfully showed:', reprType);
           } catch (e) {
@@ -696,7 +697,7 @@ export async function toggleAtomsBondsVisibility(plugin: PluginUIContext, visibl
           if (reprType && ATOM_BOND_REPR_TYPES.includes(reprType)) {
             foundAtomBondRepr = true;
             try {
-              await (plugin.state as any).updateCellState(repr.cell.transform.ref, { isHidden: !visible });
+              await plugin.state.updateCellState(repr.cell.transform.ref, { isHidden: !visible });
               console.log(`[MolstarSelections] Toggled ${reprType} visibility to:`, visible);
             } catch (e) {
               console.warn('[MolstarSelections] Failed to toggle visibility:', e);
@@ -784,9 +785,12 @@ export async function applyTransparencyToSelection(plugin: PluginUIContext, alph
         }]
       };
 
+      // Note: transparency theme may not be available in all Molstar versions
+      // Using type assertion and applying to structure references instead of components
+      const structureRefs = [structureRef];
       await plugin.managers.structure.component.applyTheme(
-        { transparency: params } as any,
-        structureRef.components as any
+        { transparency: params },
+        structureRef.components
       );
       
       console.log('[MolstarSelections] Successfully applied transparency via component theme');
