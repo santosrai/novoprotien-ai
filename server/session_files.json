@@ -315,5 +315,37 @@
         ]
       }
     }
+  ],
+  "59131e53-8e87-4c9e-b68d-9efa938c862d": [
+    {
+      "file_id": "0f13dbbe84284a23ab848634936d51fa",
+      "type": "upload",
+      "file_path": "uploads\\pdb\\0f13dbbe84284a23ab848634936d51fa.pdb",
+      "filename": "9TGG.pdb",
+      "size": 1529685,
+      "job_id": null,
+      "metadata": {
+        "atoms": 16731,
+        "chains": [
+          "A",
+          "B",
+          "C",
+          "D",
+          "E",
+          "F",
+          "G",
+          "H",
+          "I",
+          "J",
+          "K",
+          "L",
+          "M",
+          "N",
+          "O",
+          "P",
+          "Q"
+        ]
+      }
+    }
   ]
 }

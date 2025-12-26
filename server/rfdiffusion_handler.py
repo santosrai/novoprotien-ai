@@ -7,9 +7,16 @@ Integrates request parsing, NIMS API calls, and result processing.
 import asyncio
 import json
 import logging
+import os
+import sys
 import re
 from pathlib import Path
 from typing import Dict, Any, Optional, List
+
+# Ensure server directory is in Python path for imports
+_server_dir = os.path.dirname(os.path.abspath(__file__))
+if _server_dir not in sys.path:
+    sys.path.insert(0, _server_dir)
 
 # Import dependencies
 try:
@@ -19,21 +26,11 @@ try:
     from .pdb_storage import get_uploaded_pdb
     from .session_file_tracker import associate_file_with_session
 except ImportError:
-    try:
-        # Try absolute import (when running as script)
-        from rfdiffusion_client import RFdiffusionClient
-        from sequence_utils import SequenceExtractor
-        from pdb_storage import get_uploaded_pdb
-        from session_file_tracker import associate_file_with_session
-    except ImportError:
-        # Try importing from current directory
-        import sys
-        import os
-        sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-        from rfdiffusion_client import RFdiffusionClient
-        from sequence_utils import SequenceExtractor
-        from pdb_storage import get_uploaded_pdb
-        from session_file_tracker import associate_file_with_session
+    # Fallback to absolute import (when running directly)
+    from rfdiffusion_client import RFdiffusionClient
+    from sequence_utils import SequenceExtractor
+    from pdb_storage import get_uploaded_pdb
+    from session_file_tracker import associate_file_with_session
 
 logger = logging.getLogger(__name__)
 

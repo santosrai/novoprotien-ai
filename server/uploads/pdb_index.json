@@ -331,5 +331,31 @@
       "D",
       "E"
     ]
+  },
+  "0f13dbbe84284a23ab848634936d51fa": {
+    "file_id": "0f13dbbe84284a23ab848634936d51fa",
+    "filename": "9TGG.pdb",
+    "stored_path": "uploads\\pdb\\0f13dbbe84284a23ab848634936d51fa.pdb",
+    "size": 1529685,
+    "atoms": 16731,
+    "chains": [
+      "A",
+      "B",
+      "C",
+      "D",
+      "E",
+      "F",
+      "G",
+      "H",
+      "I",
+      "J",
+      "K",
+      "L",
+      "M",
+      "N",
+      "O",
+      "P",
+      "Q"
+    ]
   }
 }

@@ -8,28 +8,26 @@ import asyncio
 import json
 import logging
 import os
+import sys
 from pathlib import Path
 from typing import Dict, Any, Optional
-# Import sequence_utils and nims_client - prioritize non-relative imports
+
+# Ensure server directory is in Python path for imports
+_server_dir = os.path.dirname(os.path.abspath(__file__))
+if _server_dir not in sys.path:
+    sys.path.insert(0, _server_dir)
+
+# Import sequence_utils and nims_client
 try:
-    # Try absolute import first (most reliable)
+    # Try relative import first (when running as module)
+    from .sequence_utils import SequenceExtractor
+    from .nims_client import NIMSClient
+    from .session_file_tracker import associate_file_with_session
+except ImportError:
+    # Fallback to absolute import (when running directly)
     from sequence_utils import SequenceExtractor
     from nims_client import NIMSClient
     from session_file_tracker import associate_file_with_session
-except ImportError:
-    try:
-        # Add current directory to path and import
-        import sys
-        import os
-        sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-        from sequence_utils import SequenceExtractor
-        from nims_client import NIMSClient
-        from session_file_tracker import associate_file_with_session
-    except ImportError:
-        # Last resort: try relative import
-        from .sequence_utils import SequenceExtractor
-        from .nims_client import NIMSClient
-        from .session_file_tracker import associate_file_with_session
 
 # Set up file logging for AlphaFold API
 def setup_alphafold_logging():

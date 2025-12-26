@@ -354,9 +354,6 @@ export async function applyOverpaintToSelection(plugin: PluginUIContext, colorNa
     for (const component of structureRef.components) {
       for (const repr of component.representations) {
         try {
-          // Create overpaint theme using the bundle
-          const overpaintData = Overpaint.ofBundle(bundle, color, 1.0, loci.structure);
-          
           // Apply overpaint via state update
           await plugin.build().to(repr.cell)
             .apply(
@@ -400,7 +397,7 @@ async function applyColorViaComponent(
 
     // Apply overpaint through the hierarchy manager
     await plugin.managers.structure.component.applyTheme(
-      { overpaint: params },
+      { overpaint: params } as any,
       structureRef.components
     );
     
@@ -563,8 +560,8 @@ async function hideRepresentationsAll(plugin: PluginUIContext) {
         if (reprType && ATOM_BOND_REPR_TYPES.includes(reprType)) {
           console.log('[MolstarSelections] Hiding representation:', reprType);
           try {
-            // Use setVisibility to toggle the representation on/off
-            await plugin.state.updateCellState(repr.cell.transform.ref, { isHidden: true });
+            // Use state update to toggle the representation on/off
+            await (plugin.state as any).updateCellState(repr.cell.transform.ref, { isHidden: true });
             console.log('[MolstarSelections] Successfully hid:', reprType);
           } catch (e) {
             console.warn('[MolstarSelections] Failed to hide representation:', e);
@@ -601,8 +598,8 @@ async function showRepresentationsAll(plugin: PluginUIContext) {
         if (reprType && ATOM_BOND_REPR_TYPES.includes(reprType)) {
           console.log('[MolstarSelections] Showing representation:', reprType);
           try {
-            // Use setVisibility to toggle the representation on
-            await plugin.state.updateCellState(repr.cell.transform.ref, { isHidden: false });
+            // Use state update to toggle the representation on
+            await (plugin.state as any).updateCellState(repr.cell.transform.ref, { isHidden: false });
             foundHiddenRepr = true;
             console.log('[MolstarSelections] Successfully showed:', reprType);
           } catch (e) {
@@ -699,7 +696,7 @@ export async function toggleAtomsBondsVisibility(plugin: PluginUIContext, visibl
           if (reprType && ATOM_BOND_REPR_TYPES.includes(reprType)) {
             foundAtomBondRepr = true;
             try {
-              await plugin.state.updateCellState(repr.cell.transform.ref, { isHidden: !visible });
+              await (plugin.state as any).updateCellState(repr.cell.transform.ref, { isHidden: !visible });
               console.log(`[MolstarSelections] Toggled ${reprType} visibility to:`, visible);
             } catch (e) {
               console.warn('[MolstarSelections] Failed to toggle visibility:', e);
@@ -788,8 +785,8 @@ export async function applyTransparencyToSelection(plugin: PluginUIContext, alph
       };
 
       await plugin.managers.structure.component.applyTheme(
-        { transparency: params },
-        structureRef.components
+        { transparency: params } as any,
+        structureRef.components as any
       );
       
       console.log('[MolstarSelections] Successfully applied transparency via component theme');

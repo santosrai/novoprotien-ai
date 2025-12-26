@@ -28,11 +28,28 @@ class SimpleRouterGraph:
             keys.append(key)
             self.agent_texts[key] = text
         # Initialize embeddings only if OPENAI_API_KEY present and library available
-        if texts and OpenAIEmbeddings and os.getenv("OPENAI_API_KEY"):
-            self.embeddings = OpenAIEmbeddings()
-            vecs = await self.embeddings.aembed_documents(texts)  # type: ignore[attr-defined]
-            for key, vec in zip(keys, vecs):
-                self.agent_vecs[key] = vec
+        openai_api_key = os.getenv("OPENAI_API_KEY")
+        if texts and OpenAIEmbeddings and openai_api_key:
+            try:
+                # Initialize embeddings - will use OPENAI_API_KEY from environment
+                # or can be passed explicitly as api_key parameter
+                self.embeddings = OpenAIEmbeddings(api_key=openai_api_key)
+                vecs = await self.embeddings.aembed_documents(texts)  # type: ignore[attr-defined]
+                for key, vec in zip(keys, vecs):
+                    self.agent_vecs[key] = vec
+                print("[RouterGraph] Successfully initialized embeddings for semantic routing")
+            except Exception as e:
+                # If embeddings fail (e.g., invalid API key), continue without them
+                # The router will fall back to rule-based routing
+                print(f"[RouterGraph] Warning: Failed to initialize embeddings: {e}")
+                print("[RouterGraph] Continuing with rule-based routing only (embeddings disabled)")
+                self.embeddings = None
+                self.agent_vecs = {}
+        else:
+            if not openai_api_key:
+                print("[RouterGraph] OPENAI_API_KEY not found - using rule-based routing only")
+            elif not OpenAIEmbeddings:
+                print("[RouterGraph] OpenAIEmbeddings not available - using rule-based routing only")
 
     async def ainvoke(self, state: Dict[str, Any]) -> Dict[str, Any]:
         # Rule-based shortcut: selection present + interrogative → bio-chat

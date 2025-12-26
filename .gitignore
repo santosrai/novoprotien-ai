@@ -51,3 +51,4 @@ server/uploads/pdb/*.pdb
 server/proteinmpnn_results/*
 !server/proteinmpnn_results/.gitkeep
 server/rfdiffusion_results/*
+*.pdb

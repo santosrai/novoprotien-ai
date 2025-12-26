@@ -6,8 +6,14 @@ import asyncio
 import json
 import logging
 import os
+import sys
 from pathlib import Path
 from typing import Any, Dict, Optional, Tuple
+
+# Ensure server directory is in Python path for imports
+_server_dir = os.path.dirname(os.path.abspath(__file__))
+if _server_dir not in sys.path:
+    sys.path.insert(0, _server_dir)
 
 try:
     from .utils import log_line
