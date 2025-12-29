@@ -180,7 +180,7 @@ const LogDetailsPanel: React.FC<LogDetailsPanelProps> = ({ log }) => {
         </div>
         
         {/* View sub-execution link */}
-        {log.status === 'success' && (
+        {(log.status === 'success' || log.status === 'completed') && (
           <button className="mt-2 flex items-center gap-1 text-xs text-blue-400 hover:text-blue-300 transition-colors">
             <ExternalLink className="w-3 h-3" />
             View sub-execution
@@ -245,7 +245,7 @@ export const ExecutionLogsPanel: React.FC = () => {
   const selectedLog = displayLogs.find(l => l.nodeId === selectedLogNodeId);
 
   // Calculate execution summary
-  const completedCount = displayLogs.filter(l => l.status === 'success').length;
+  const completedCount = displayLogs.filter(l => l.status === 'success' || l.status === 'completed').length;
   const totalDuration = displayLogs.reduce((acc, l) => acc + (l.duration || 0), 0);
 
   return (

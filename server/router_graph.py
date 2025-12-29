@@ -64,7 +64,7 @@ class SimpleRouterGraph:
         interrogatives = [
             "what is this", "what's this", "what am i looking at", "this residue", "selected", "identify", "which residue", "these residues", "what are these",
         ]
-        low = input_text.lower()
+        low = input_text.lower().strip()
         
         # Visualization keywords when uploaded file is present
         visualization_keywords = [
@@ -123,9 +123,28 @@ class SimpleRouterGraph:
         if any(k in low for k in proteinmpnn_keywords) or (has_sequence_design and has_structure_context):
             return {"routedAgentId": "proteinmpnn-agent", "reason": "rule:proteinmpnn"}
 
-        # RFdiffusion protein design rule
+        # Pipeline creation rule (check BEFORE RFdiffusion to avoid conflicts)
+        # Check for explicit pipeline/workflow creation intent first
+        pipeline_keywords = [
+            "create pipeline", "design workflow", "build pipeline", "make pipeline",
+            "create workflow", "build workflow", "make workflow",
+            "design protein pipeline", "fold pipeline", "protein workflow",
+            "create a pipeline", "set up pipeline", "setup pipeline",
+            "pipeline for", "workflow for", "create a workflow",
+            "generate pipeline", "generate workflow", "make a pipeline"
+        ]
+        # Check for explicit pipeline/workflow creation intent
+        has_pipeline_intent = any(k in low for k in pipeline_keywords) or (
+            ("pipeline" in low or "workflow" in low) and 
+            ("create" in low or "build" in low or "make" in low or "design" in low or "set up" in low or "setup" in low or "generate" in low)
+        )
+        if has_pipeline_intent:
+            return {"routedAgentId": "pipeline-agent", "reason": "rule:pipeline-creation"}
+        
+        # RFdiffusion protein design rule (after pipeline check)
         rfdiffusion_keywords = ["design", "create", "generate", "build", "rfdiffusion", "rf-diffusion", "protein design", "design protein", "create protein", "generate protein", "scaffold", "motif scaffolding", "hotspot design", "de novo", "new protein"]
-        if any(k in low for k in rfdiffusion_keywords):
+        # Exclude pipeline-related keywords from RFdiffusion
+        if any(k in low for k in rfdiffusion_keywords) and not has_pipeline_intent:
             return {"routedAgentId": "rfdiffusion-agent", "reason": "rule:rfdiffusion-design"}
         
         # Bio-chat for selection questions, BUT NOT if explicit visualization command

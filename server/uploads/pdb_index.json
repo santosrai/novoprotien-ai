@@ -357,5 +357,326 @@
       "P",
       "Q"
     ]
+  },
+  "6638895faa754d729ba03263bea056f6": {
+    "file_id": "6638895faa754d729ba03263bea056f6",
+    "filename": "1R42.pdb",
+    "stored_path": "uploads/pdb/6638895faa754d729ba03263bea056f6.pdb",
+    "size": 504711,
+    "atoms": 5511,
+    "chains": [
+      "A",
+      "B",
+      "C",
+      "D",
+      "E"
+    ],
+    "chain_residue_counts": {
+      "A": 597
+    },
+    "total_residues": 597,
+    "suggested_contigs": "A149-249"
+  },
+  "539e77cb05ad460195c033c3e6312cb7": {
+    "file_id": "539e77cb05ad460195c033c3e6312cb7",
+    "filename": "1R42.pdb",
+    "stored_path": "uploads/pdb/539e77cb05ad460195c033c3e6312cb7.pdb",
+    "size": 504711,
+    "atoms": 5511,
+    "chains": [
+      "A",
+      "B",
+      "C",
+      "D",
+      "E"
+    ],
+    "chain_residue_counts": {
+      "A": 597
+    },
+    "total_residues": 597,
+    "suggested_contigs": "A149-249"
+  },
+  "81727bb77a054f22b62353aad5f59bce": {
+    "file_id": "81727bb77a054f22b62353aad5f59bce",
+    "filename": "1R42.pdb",
+    "stored_path": "uploads/pdb/81727bb77a054f22b62353aad5f59bce.pdb",
+    "size": 504711,
+    "atoms": 5511,
+    "chains": [
+      "A",
+      "B",
+      "C",
+      "D",
+      "E"
+    ],
+    "chain_residue_counts": {
+      "A": 597
+    },
+    "total_residues": 597,
+    "suggested_contigs": "A149-249"
+  },
+  "e55f1e693b904b3686f77a1f324bb6d6": {
+    "file_id": "e55f1e693b904b3686f77a1f324bb6d6",
+    "filename": "1R42.pdb",
+    "stored_path": "uploads/pdb/e55f1e693b904b3686f77a1f324bb6d6.pdb",
+    "size": 504711,
+    "atoms": 5511,
+    "chains": [
+      "A",
+      "B",
+      "C",
+      "D",
+      "E"
+    ],
+    "chain_residue_counts": {
+      "A": 597
+    },
+    "total_residues": 597,
+    "suggested_contigs": "A149-249"
+  },
+  "ae93eb9bb0a64a49a0bdf02980a49a9b": {
+    "file_id": "ae93eb9bb0a64a49a0bdf02980a49a9b",
+    "filename": "1R42.pdb",
+    "stored_path": "uploads/pdb/ae93eb9bb0a64a49a0bdf02980a49a9b.pdb",
+    "size": 504711,
+    "atoms": 5511,
+    "chains": [
+      "A",
+      "B",
+      "C",
+      "D",
+      "E"
+    ],
+    "chain_residue_counts": {
+      "A": 597
+    },
+    "total_residues": 597,
+    "suggested_contigs": "A149-249"
+  },
+  "124bafb2255b4499848773812f159dfd": {
+    "file_id": "124bafb2255b4499848773812f159dfd",
+    "filename": "1R42.pdb",
+    "stored_path": "uploads/pdb/124bafb2255b4499848773812f159dfd.pdb",
+    "size": 504711,
+    "atoms": 5511,
+    "chains": [
+      "A",
+      "B",
+      "C",
+      "D",
+      "E"
+    ],
+    "chain_residue_counts": {
+      "A": 597
+    },
+    "total_residues": 597,
+    "suggested_contigs": "A149-249"
+  },
+  "f43bd8b7aad3430ba0e49fcf8c7afb68": {
+    "file_id": "f43bd8b7aad3430ba0e49fcf8c7afb68",
+    "filename": "1R42.pdb",
+    "stored_path": "uploads/pdb/f43bd8b7aad3430ba0e49fcf8c7afb68.pdb",
+    "size": 504711,
+    "atoms": 5511,
+    "chains": [
+      "A",
+      "B",
+      "C",
+      "D",
+      "E"
+    ],
+    "chain_residue_counts": {
+      "A": 597
+    },
+    "total_residues": 597,
+    "suggested_contigs": "A149-249"
+  },
+  "eea55f1c70584cceb35270665de04ac4": {
+    "file_id": "eea55f1c70584cceb35270665de04ac4",
+    "filename": "2MLT.pdb",
+    "stored_path": "uploads/pdb/eea55f1c70584cceb35270665de04ac4.pdb",
+    "size": 65691,
+    "atoms": 435,
+    "chains": [
+      "A",
+      "B"
+    ],
+    "chain_residue_counts": {
+      "A": 26,
+      "B": 26
+    },
+    "total_residues": 52,
+    "suggested_contigs": "A1-26"
+  },
+  "6b26933fbcbc419daf4aaa0cea97c9e5": {
+    "file_id": "6b26933fbcbc419daf4aaa0cea97c9e5",
+    "filename": "1R42.pdb",
+    "stored_path": "uploads/pdb/6b26933fbcbc419daf4aaa0cea97c9e5.pdb",
+    "size": 504711,
+    "atoms": 5511,
+    "chains": [
+      "A",
+      "B",
+      "C",
+      "D",
+      "E"
+    ],
+    "chain_residue_counts": {
+      "A": 597
+    },
+    "total_residues": 597,
+    "suggested_contigs": "A149-249"
+  },
+  "6e7bf90909244d248462bea767ddb338": {
+    "file_id": "6e7bf90909244d248462bea767ddb338",
+    "filename": "1R42.pdb",
+    "stored_path": "uploads/pdb/6e7bf90909244d248462bea767ddb338.pdb",
+    "size": 504711,
+    "atoms": 5511,
+    "chains": [
+      "A",
+      "B",
+      "C",
+      "D",
+      "E"
+    ],
+    "chain_residue_counts": {
+      "A": 597
+    },
+    "total_residues": 597,
+    "suggested_contigs": "A149-249"
+  },
+  "ae29bdf32cc1433d957641335c3159f6": {
+    "file_id": "ae29bdf32cc1433d957641335c3159f6",
+    "filename": "1R42.pdb",
+    "stored_path": "uploads/pdb/ae29bdf32cc1433d957641335c3159f6.pdb",
+    "size": 504711,
+    "atoms": 5511,
+    "chains": [
+      "A",
+      "B",
+      "C",
+      "D",
+      "E"
+    ],
+    "chain_residue_counts": {
+      "A": 597
+    },
+    "total_residues": 597,
+    "suggested_contigs": "A149-249"
+  },
+  "9ade6b80ce974f3494f1ee70794e18c8": {
+    "file_id": "9ade6b80ce974f3494f1ee70794e18c8",
+    "filename": "1R42.pdb",
+    "stored_path": "uploads/pdb/9ade6b80ce974f3494f1ee70794e18c8.pdb",
+    "size": 504711,
+    "atoms": 5511,
+    "chains": [
+      "A",
+      "B",
+      "C",
+      "D",
+      "E"
+    ],
+    "chain_residue_counts": {
+      "A": 597
+    },
+    "total_residues": 597,
+    "suggested_contigs": "A149-249"
+  },
+  "3a6a6d253ebe4af69a4a48d07431c631": {
+    "file_id": "3a6a6d253ebe4af69a4a48d07431c631",
+    "filename": "1R42.pdb",
+    "stored_path": "uploads/pdb/3a6a6d253ebe4af69a4a48d07431c631.pdb",
+    "size": 504711,
+    "atoms": 5511,
+    "chains": [
+      "A",
+      "B",
+      "C",
+      "D",
+      "E"
+    ],
+    "chain_residue_counts": {
+      "A": 597
+    },
+    "total_residues": 597,
+    "suggested_contigs": "A149-249"
+  },
+  "4fe2262180b34b8f9ddf73523e0c2b48": {
+    "file_id": "4fe2262180b34b8f9ddf73523e0c2b48",
+    "filename": "1R42.pdb",
+    "stored_path": "uploads/pdb/4fe2262180b34b8f9ddf73523e0c2b48.pdb",
+    "size": 504711,
+    "atoms": 5511,
+    "chains": [
+      "A",
+      "B",
+      "C",
+      "D",
+      "E"
+    ],
+    "chain_residue_counts": {
+      "A": 597
+    },
+    "total_residues": 597,
+    "suggested_contigs": "A149-249"
+  },
+  "7789efa2d6d84d188544129f9752a1d5": {
+    "file_id": "7789efa2d6d84d188544129f9752a1d5",
+    "filename": "1R42.pdb",
+    "stored_path": "uploads/pdb/7789efa2d6d84d188544129f9752a1d5.pdb",
+    "size": 504711,
+    "atoms": 5511,
+    "chains": [
+      "A",
+      "B",
+      "C",
+      "D",
+      "E"
+    ],
+    "chain_residue_counts": {
+      "A": 597
+    },
+    "total_residues": 597,
+    "suggested_contigs": "A149-249"
+  },
+  "e34801c541604bd5a4bce4d56a15f6ab": {
+    "file_id": "e34801c541604bd5a4bce4d56a15f6ab",
+    "filename": "1R42.pdb",
+    "stored_path": "uploads/pdb/e34801c541604bd5a4bce4d56a15f6ab.pdb",
+    "size": 504711,
+    "atoms": 5511,
+    "chains": [
+      "A",
+      "B",
+      "C",
+      "D",
+      "E"
+    ],
+    "chain_residue_counts": {
+      "A": 597
+    },
+    "total_residues": 597,
+    "suggested_contigs": "A149-249"
+  },
+  "45fd3c203a4a476b91219330accdc072": {
+    "file_id": "45fd3c203a4a476b91219330accdc072",
+    "filename": "1R42.pdb",
+    "stored_path": "uploads/pdb/45fd3c203a4a476b91219330accdc072.pdb",
+    "size": 504711,
+    "atoms": 5511,
+    "chains": [
+      "A",
+      "B",
+      "C",
+      "D",
+      "E"
+    ],
+    "chain_residue_counts": {
+      "A": 597
+    },
+    "total_residues": 597,
+    "suggested_contigs": "A149-249"
   }
 }

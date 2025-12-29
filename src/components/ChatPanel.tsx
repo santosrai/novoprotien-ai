@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Send, Sparkles, Download, Play, X, Copy, Paperclip } from 'lucide-react';
+import { Send, Sparkles, Download, Play, X, Copy, Paperclip, ChevronUp, ChevronDown } from 'lucide-react';
 import { useAppStore } from '../stores/appStore';
 import { useChatHistoryStore, useActiveSession, Message } from '../stores/chatHistoryStore';
 import { CodeExecutor } from '../utils/codeExecutor';
@@ -20,6 +20,9 @@ import { PDBFileUpload } from './PDBFileUpload';
 import ReactMarkdown from 'react-markdown';
 import { generatePDBSummary } from '../utils/pdbUtils';
 import { usePipelineStore, PipelineBlueprint } from '../components/pipeline-canvas';
+import { PipelineBlueprintDisplay } from './PipelineBlueprintDisplay';
+import { PipelineProgressDisplay } from './PipelineProgressDisplay';
+import { NodeParameterConfig } from './NodeParameterConfig';
 
 // Extended message metadata for structured agent results
 // Note: Message interface now includes thinkingProcess and uploadedFile, so ExtendedMessage is mainly for type compatibility
@@ -51,6 +54,25 @@ interface ExtendedMessage extends Message {
   // uploadedFile is now in Message interface, but keeping here for backward compatibility
   // thinkingProcess is now in Message interface, but keeping here for type compatibility
   error?: ErrorDetails;
+  pipelineBlueprint?: PipelineBlueprint;
+  pipelineConfigState?: {
+    selectedNodeIds: string[];
+    currentNodeIndex: number;
+    nodeConfigs: Record<string, Record<string, any>>;
+    isApproved: boolean;
+  };
+  pipelineResult?: {
+    pipelineId: string;
+    status: 'running' | 'completed' | 'error';
+    nodes: Array<{
+      id: string;
+      label: string;
+      status: any;
+      result?: any;
+    }>;
+    progress: { completed: number; total: number };
+    pipelineLink?: string;
+  };
 }
 
 const renderProteinMPNNResult = (result: ExtendedMessage['proteinmpnnResult']) => {
@@ -236,7 +258,7 @@ const createProteinMPNNError = (
 
 export const ChatPanel: React.FC = () => {
   const { plugin, currentCode, setCurrentCode, setIsExecuting, setActivePane, setPendingCodeToRun, setViewerVisible, setCurrentStructureOrigin, currentStructureOrigin } = useAppStore();
-  const { setGhostBlueprint } = usePipelineStore();
+  const { setGhostBlueprint, approveBlueprintWithSelection, startExecution } = usePipelineStore();
   const lastLoadedPdb = useAppStore(state => state.lastLoadedPdb);
   const selections = useAppStore(state => state.selections);
   const removeSelection = useAppStore(state => state.removeSelection);
@@ -261,6 +283,7 @@ export const ChatPanel: React.FC = () => {
   const [input, setInput] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [lastAgentId, setLastAgentId] = useState<string>('');
+  const [isQuickStartExpanded, setIsQuickStartExpanded] = useState(true);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const previousSessionIdRef = useRef<string | null>(null);
@@ -432,6 +455,118 @@ export const ChatPanel: React.FC = () => {
     loadAgentsAndModels();
   }, []);
 
+  // Listen for pipeline execution events
+  useEffect(() => {
+    const handlePipelineNodeCompleted = (event: CustomEvent) => {
+      const { pipelineId, nodeId, status, result } = event.detail;
+      console.log('[Pipeline] Node completed:', { pipelineId, nodeId, status });
+      
+      // Find or create pipeline result message
+      if (activeSession) {
+        const existingMsgIndex = activeSession.messages.findIndex(
+          (msg: ExtendedMessage) => 
+            msg.pipelineResult?.pipelineId === pipelineId
+        );
+        
+        const { currentPipeline } = usePipelineStore.getState();
+        if (currentPipeline && currentPipeline.id === pipelineId) {
+          const updatedNodes = currentPipeline.nodes.map(node => ({
+            id: node.id,
+            label: node.label,
+            status: node.status,
+            result: node.result_metadata,
+            error: node.error,
+          }));
+          
+          const progress = {
+            completed: updatedNodes.filter(n => n.status === 'completed' || n.status === 'success').length,
+            total: updatedNodes.length,
+            percent: (updatedNodes.filter(n => n.status === 'completed' || n.status === 'success').length / updatedNodes.length) * 100,
+          };
+          
+          const pipelineResult = {
+            pipelineId,
+            status: currentPipeline.status === 'running' ? 'running' as const : 
+                    currentPipeline.status === 'completed' ? 'completed' as const : 'error' as const,
+            nodes: updatedNodes,
+            progress,
+            pipelineLink: `/pipeline?pipelineId=${pipelineId}`,
+          };
+          
+          if (existingMsgIndex >= 0) {
+            const updatedMessages = activeSession.messages.map((msg, idx) =>
+              idx === existingMsgIndex
+                ? { ...msg, pipelineResult } as ExtendedMessage
+                : msg
+            );
+            updateMessages(updatedMessages);
+          } else {
+            const newMsg: ExtendedMessage = {
+              id: uuidv4(),
+              content: `Pipeline execution progress: ${progress.completed}/${progress.total} nodes completed`,
+              type: 'ai',
+              timestamp: new Date(),
+              pipelineResult,
+            };
+            addMessage(newMsg);
+          }
+        }
+      }
+    };
+
+    const handlePipelineCompleted = (event: CustomEvent) => {
+      const { pipelineId, status, nodes } = event.detail;
+      console.log('[Pipeline] Pipeline completed:', { pipelineId, status });
+      
+      // Update pipeline result message
+      if (activeSession) {
+        const existingMsgIndex = activeSession.messages.findIndex(
+          (msg: ExtendedMessage) => 
+            msg.pipelineResult?.pipelineId === pipelineId
+        );
+        
+        if (existingMsgIndex >= 0) {
+          const updatedNodes = nodes.map((node: any) => ({
+            id: node.id,
+            label: node.label,
+            status: node.status,
+            result: node.result_metadata,
+            error: node.error,
+          }));
+          
+          const progress = {
+            completed: updatedNodes.filter((n: any) => n.status === 'completed' || n.status === 'success').length,
+            total: updatedNodes.length,
+            percent: 100,
+          };
+          
+          const pipelineResult = {
+            pipelineId,
+            status: status === 'completed' ? 'completed' as const : 'error' as const,
+            nodes: updatedNodes,
+            progress,
+            pipelineLink: `/pipeline?pipelineId=${pipelineId}`,
+          };
+          
+          const updatedMessages = activeSession.messages.map((msg, idx) =>
+            idx === existingMsgIndex
+              ? { ...msg, pipelineResult } as ExtendedMessage
+              : msg
+          );
+          updateMessages(updatedMessages);
+        }
+      }
+    };
+
+    window.addEventListener('pipeline-node-completed', handlePipelineNodeCompleted as EventListener);
+    window.addEventListener('pipeline-completed', handlePipelineCompleted as EventListener);
+
+    return () => {
+      window.removeEventListener('pipeline-node-completed', handlePipelineNodeCompleted as EventListener);
+      window.removeEventListener('pipeline-completed', handlePipelineCompleted as EventListener);
+    };
+  }, [activeSession, updateMessages, addMessage]);
+
   // Get messages from active session
   const rawMessages = activeSession?.messages || [];
   const messages = rawMessages as ExtendedMessage[];
@@ -457,6 +592,14 @@ export const ChatPanel: React.FC = () => {
 
   // Pending file state (file selected but not uploaded yet)
   const [pendingFile, setPendingFile] = useState<File | null>(null);
+  
+  // Pipeline configuration state
+  const [pipelineConfigStates, setPipelineConfigStates] = useState<Map<string, {
+    selectedNodeIds: string[];
+    currentNodeIndex: number;
+    nodeConfigs: Record<string, Record<string, any>>;
+    isApproved: boolean;
+  }>>(new Map());
   
   // Uploaded file state (after upload completes)
   // Note: Currently tracked via uploadedFileInfo local variable, state value kept for future use
@@ -1277,6 +1420,98 @@ try {
   };
 
   // RFdiffusion handling functions
+  // Pipeline configuration handlers
+  const handleBlueprintApprove = (messageId: string, selectedNodeIds: string[]) => {
+    if (!activeSession) return;
+    
+    const message = activeSession.messages.find(m => m.id === messageId);
+    if (!message || !message.pipelineBlueprint) return;
+    
+    // Set ghost blueprint in store (needed for approveBlueprintWithSelection)
+    setGhostBlueprint(message.pipelineBlueprint);
+    
+    // Sort selected node IDs so input nodes come first
+    const sortedNodeIds = [...selectedNodeIds].sort((a, b) => {
+      const nodeA = message.pipelineBlueprint.nodes.find(n => n.id === a);
+      const nodeB = message.pipelineBlueprint.nodes.find(n => n.id === b);
+      if (nodeA?.type === 'input_node' && nodeB?.type !== 'input_node') return -1;
+      if (nodeA?.type !== 'input_node' && nodeB?.type === 'input_node') return 1;
+      return 0;
+    });
+    
+    // Initialize config state
+    const configState = {
+      selectedNodeIds: sortedNodeIds,
+      currentNodeIndex: 0,
+      nodeConfigs: {},
+      isApproved: true,
+    };
+    
+    setPipelineConfigStates(prev => {
+      const newMap = new Map(prev);
+      newMap.set(messageId, configState);
+      return newMap;
+    });
+    
+    // Update message with config state
+    const updatedMessages = activeSession.messages.map(msg =>
+      msg.id === messageId
+        ? { ...msg, pipelineConfigState: configState } as ExtendedMessage
+        : msg
+    );
+    updateMessages(updatedMessages);
+  };
+  
+  const handleNodeParameterConfirm = (messageId: string, nodeId: string, config: Record<string, any>) => {
+    if (!activeSession) return;
+    
+    const configState = pipelineConfigStates.get(messageId);
+    if (!configState) return;
+    
+    // Update config for this node
+    const newConfigs = { ...configState.nodeConfigs, [nodeId]: config };
+    const nextNodeIndex = configState.currentNodeIndex + 1;
+    
+    const newConfigState = {
+      ...configState,
+      nodeConfigs: newConfigs,
+      currentNodeIndex: nextNodeIndex,
+    };
+    
+    setPipelineConfigStates(prev => {
+      const newMap = new Map(prev);
+      newMap.set(messageId, newConfigState);
+      return newMap;
+    });
+    
+    // Update message
+    const updatedMessages = activeSession.messages.map(msg =>
+      msg.id === messageId
+        ? { ...msg, pipelineConfigState: newConfigState } as ExtendedMessage
+        : msg
+    );
+    updateMessages(updatedMessages);
+    
+    // Check if all nodes are configured
+    const message = activeSession.messages.find(m => m.id === messageId);
+    if (message && message.pipelineBlueprint) {
+      const selectedNodes = message.pipelineBlueprint.nodes.filter(
+        n => configState.selectedNodeIds.includes(n.id)
+      );
+      
+      if (nextNodeIndex >= selectedNodes.length) {
+        // All nodes configured, create pipeline and execute
+        const pipeline = approveBlueprintWithSelection(configState.selectedNodeIds, newConfigs);
+        if (pipeline) {
+          // Start execution
+          setTimeout(() => {
+            startExecution();
+          }, 500);
+        }
+      }
+    }
+  };
+  
   const handleRFdiffusionConfirm = async (parameters: any) => {
     setShowRFdiffusionDialog(false);
     
@@ -2136,46 +2371,49 @@ try {
           }
 
           // Check if this is a pipeline blueprint response
-          try {
-            const parsed = JSON.parse(aiText);
-            if (parsed.type === 'blueprint' && parsed.blueprint) {
-              console.log('🔧 [Pipeline] Blueprint detected, setting ghost blueprint');
-              const blueprint: PipelineBlueprint = {
-                rationale: parsed.rationale || parsed.content || 'Pipeline blueprint generated',
-                nodes: parsed.blueprint.nodes || [],
-                edges: parsed.blueprint.edges || [],
-                missing_resources: parsed.blueprint.missing_resources || [],
-              };
-              
-              setGhostBlueprint(blueprint);
-              setViewerVisible(true);
-              setActivePane('pipeline');
-              
-              // Create a message explaining the blueprint
-              const blueprintMsg: ExtendedMessage = {
-                id: uuidv4(),
-                content: blueprint.rationale + (blueprint.missing_resources.length > 0 
-                  ? `\n\n⚠️ Missing resources: ${blueprint.missing_resources.join(', ')}`
-                  : ''),
-                type: 'ai',
-                timestamp: new Date(),
-              };
-              
-              if (placeholderMessageId && activeSession) {
-                const updatedMessages = activeSession.messages.map(msg => 
-                  msg.id === placeholderMessageId
-                    ? blueprintMsg
-                    : msg
-                );
-                updateMessages(updatedMessages);
-              } else {
-                addMessage(blueprintMsg);
+          if (agentId === 'pipeline-agent') {
+            try {
+              const parsed = JSON.parse(aiText);
+              if (parsed.type === 'blueprint' && parsed.blueprint) {
+                console.log('🔧 [Pipeline] Blueprint detected');
+                const blueprint: PipelineBlueprint = {
+                  rationale: parsed.rationale || parsed.message || 'Pipeline blueprint generated',
+                  nodes: parsed.blueprint.nodes || [],
+                  edges: parsed.blueprint.edges || [],
+                  missing_resources: parsed.blueprint.missing_resources || [],
+                };
+                
+                // Set ghost blueprint in store
+                setGhostBlueprint(blueprint);
+                
+                // Create a message with the blueprint
+                const blueprintMsg: ExtendedMessage = {
+                  id: uuidv4(),
+                  content: blueprint.rationale + (blueprint.missing_resources.length > 0 
+                    ? `\n\n⚠️ Missing resources: ${blueprint.missing_resources.join(', ')}`
+                    : ''),
+                  type: 'ai',
+                  timestamp: new Date(),
+                  pipelineBlueprint: blueprint,
+                };
+                
+                if (placeholderMessageId && activeSession) {
+                  const updatedMessages = activeSession.messages.map(msg => 
+                    msg.id === placeholderMessageId
+                      ? blueprintMsg
+                      : msg
+                  );
+                  updateMessages(updatedMessages);
+                } else {
+                  addMessage(blueprintMsg);
+                }
+                
+                return; // Exit early, blueprint is set
               }
-              
-              return; // Exit early, blueprint is set
+            } catch (e) {
+              // Not a JSON blueprint, continue with normal text handling
+              console.log('[Pipeline] Response is not a JSON blueprint, treating as text');
             }
-          } catch (e) {
-            // Not a JSON blueprint, continue with normal text handling
           }
           
           // Bio-chat and other text agents should never modify the editor code
@@ -2402,11 +2640,11 @@ try {
   return (
     <div className="h-full flex flex-col">
       {!showCenteredLayout && (
-        <div className="p-4 border-b border-gray-200">
+        <div className="px-4 py-2 border-b border-gray-200">
           <div className="flex items-center space-x-2">
-            <Sparkles className="w-5 h-5 text-blue-600" />
+            <Sparkles className="w-4 h-4 text-blue-600" />
             <div>
-              <h2 className="text-lg font-semibold text-gray-900">AI Assistant</h2>
+              <h2 className="text-sm font-semibold text-gray-900">AI Assistant</h2>
               {activeSession && (
                 <p className="text-xs text-gray-500 truncate max-w-[200px]">
                   {activeSession.title}
@@ -2461,6 +2699,63 @@ try {
                   })()}
                   {renderAlphaFoldResult(message.alphafoldResult)}
                   {renderProteinMPNNResult(message.proteinmpnnResult)}
+                  {message.pipelineBlueprint && (() => {
+                    const configState = message.pipelineConfigState || pipelineConfigStates.get(message.id);
+                    const isApproved = configState?.isApproved || false;
+                    const selectedNodes = message.pipelineBlueprint.nodes
+                      .filter(n => !configState || configState.selectedNodeIds.includes(n.id))
+                      .sort((a, b) => {
+                        // Sort input nodes first, then others maintain their order
+                        if (a.type === 'input_node' && b.type !== 'input_node') return -1;
+                        if (a.type !== 'input_node' && b.type === 'input_node') return 1;
+                        return 0;
+                      });
+                    const currentNodeIndex = configState?.currentNodeIndex ?? -1;
+                    const allNodesConfigured = configState && currentNodeIndex >= selectedNodes.length;
+                    
+                    return (
+                      <>
+                        <PipelineBlueprintDisplay
+                          blueprint={message.pipelineBlueprint}
+                          rationale={message.pipelineBlueprint.rationale}
+                          onApprove={(selectedNodeIds) => handleBlueprintApprove(message.id, selectedNodeIds)}
+                          isApproved={isApproved}
+                        />
+                        {isApproved && !allNodesConfigured && currentNodeIndex < selectedNodes.length && (
+                          <NodeParameterConfig
+                            node={selectedNodes[currentNodeIndex]}
+                            nodeIndex={currentNodeIndex}
+                            totalNodes={selectedNodes.length}
+                            onConfirm={(config) => handleNodeParameterConfirm(message.id, selectedNodes[currentNodeIndex].id, config)}
+                          />
+                        )}
+                        {allNodesConfigured && (
+                          <div className="mt-3 p-4 bg-green-50 border border-green-200 rounded-lg">
+                            <p className="text-sm text-green-800">
+                              ✓ All nodes configured. Pipeline is being created and executed...
+                            </p>
+                          </div>
+                        )}
+                      </>
+                    );
+                  })()}
+                  {message.pipelineResult && (
+                    <PipelineProgressDisplay
+                      pipelineId={message.pipelineResult.pipelineId}
+                      status={message.pipelineResult.status}
+                      nodes={message.pipelineResult.nodes}
+                      progress={message.pipelineResult.progress}
+                      pipelineLink={message.pipelineResult.pipelineLink}
+                      onViewPipeline={() => {
+                        // Switch to pipeline pane in the current app
+                        setActivePane('pipeline');
+                        // Also scroll to top to show the pipeline canvas
+                        setTimeout(() => {
+                          window.scrollTo({ top: 0, behavior: 'smooth' });
+                        }, 100);
+                      }}
+                    />
+                  )}
                   {message.error && (
                     <div className="mt-3">
                       <ErrorDisplay 
@@ -2516,7 +2811,7 @@ try {
         </div>
       )}
 
-      <div className={`p-4 ${!showCenteredLayout ? 'border-t border-gray-200' : ''}`}>
+      <div className={`px-4 py-2 ${!showCenteredLayout ? 'border-t border-gray-200' : ''}`}>
         {/* Multiple selection chips */}
         {selections.length > 0 && (
           <div className="mb-3">
@@ -2575,19 +2870,31 @@ try {
         />
 
         {!showCenteredLayout && (
-          <div className="mb-3">
-            <div className="text-xs text-gray-500 mb-2">Quick start:</div>
-            <div className="flex flex-wrap gap-2">
-              {quickPrompts.map((prompt, index) => (
-                <button
-                  key={index}
-                  onClick={() => setInput(prompt)}
-                  className="text-xs bg-gray-100 hover:bg-gray-200 text-gray-700 px-2 py-1 rounded"
-                >
-                  {prompt}
-                </button>
-              ))}
-            </div>
+          <div className="mb-2">
+            <button
+              onClick={() => setIsQuickStartExpanded(!isQuickStartExpanded)}
+              className="flex items-center gap-1 text-xs text-gray-500 mb-1 hover:text-gray-700 transition-colors"
+            >
+              Quick start:
+              {isQuickStartExpanded ? (
+                <ChevronUp className="w-3 h-3" />
+              ) : (
+                <ChevronDown className="w-3 h-3" />
+              )}
+            </button>
+            {isQuickStartExpanded && (
+              <div className="flex flex-wrap gap-1.5">
+                {quickPrompts.map((prompt, index) => (
+                  <button
+                    key={index}
+                    onClick={() => setInput(prompt)}
+                    className="text-xs bg-gray-100 hover:bg-gray-200 text-gray-700 px-1.5 py-0.5 rounded"
+                  >
+                    {prompt}
+                  </button>
+                ))}
+              </div>
+            )}
           </div>
         )}
 
@@ -2621,10 +2928,10 @@ try {
               value={input}
               onChange={(e) => setInput(e.target.value)}
               placeholder={"Chat, visualize, or build..."}
-              className={`w-full px-4 py-3 bg-white text-gray-900 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent text-sm placeholder-gray-400 resize-none ${
-                showCenteredLayout ? 'min-h-[120px] text-base' : 'min-h-[100px]'
+              className={`w-full px-3 py-2 bg-white text-gray-900 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent text-sm placeholder-gray-400 resize-none ${
+                showCenteredLayout ? 'min-h-[120px] text-base pb-12' : 'min-h-[60px] pb-12'
               }`}
-              rows={showCenteredLayout ? 4 : 3}
+              rows={showCenteredLayout ? 4 : 2}
               disabled={isLoading}
               onKeyDown={(e) => {
                 if (e.key === 'Enter' && !e.shiftKey) {
@@ -2633,69 +2940,72 @@ try {
                 }
               }}
             />
-          
-          </div>
-          
-          {/* Bottom row: Agent, Model selectors, Microphone, and Send button */}
-          <div className="flex items-center gap-2">
-            {/* Agent Selector */}
-            {agents.length > 0 && (
-              <AgentSelector
-                agents={agents}
-              />
-            )}
             
-            {/* Model Selector */}
-            <ModelSelector
-              models={models}
-            />
-            
-            {/* Spacer */}
-            <div className="flex-1" />
-            
-            {/* Upload PDB file button */}
-            <PDBFileUpload
-              onFileSelected={(file) => {
-                // Store file locally, don't upload yet
-                setPendingFile(file);
-              }}
-              onFileCleared={() => {
-                // Clear pending file
-                setPendingFile(null);
-              }}
-              onError={(error) => {
-                console.error('File selection error:', error);
-                // Could show a toast notification here
-              }}
-              disabled={isLoading}
-              pendingFile={pendingFile}
-              sessionId={activeSessionId}
-            />
-            
-            {/* Microphone button */}
-            <button
-              type="button"
-              className="p-2 text-gray-400 hover:text-gray-600 transition-colors"
-              title="Voice input"
-            >
-              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z" />
-              </svg>
-            </button>
-            
-            {/* Send button */}
-            <button
-              type="submit"
-              disabled={!input.trim() || isLoading}
-              className={`flex items-center justify-center transition-colors disabled:opacity-50 disabled:cursor-not-allowed ${
-                showCenteredLayout 
-                  ? 'p-2 text-gray-400 hover:text-gray-600' 
-                  : 'px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700'
-              }`}
-              title="Send"
-            >
-              <Send className="w-5 h-5" />
-            </button>
+            {/* Bottom row: Agent, Model selectors, Microphone, and Send button - positioned inside textarea */}
+            <div className="absolute bottom-2 left-3 right-3 flex items-center gap-2 pointer-events-none">
+              <div className="flex items-center gap-2 pointer-events-auto min-w-0" style={{ flexShrink: 1 }}>
+                {/* Agent Selector */}
+                {agents.length > 0 && (
+                  <AgentSelector
+                    agents={agents}
+                  />
+                )}
+                
+                {/* Model Selector */}
+                <ModelSelector
+                  models={models}
+                />
+              </div>
+              
+              {/* Spacer */}
+              <div className="flex-1" />
+              
+              <div className="flex items-center gap-2 pointer-events-auto">
+                {/* Upload PDB file button */}
+                <PDBFileUpload
+                  onFileSelected={(file) => {
+                    // Store file locally, don't upload yet
+                    setPendingFile(file);
+                  }}
+                  onFileCleared={() => {
+                    // Clear pending file
+                    setPendingFile(null);
+                  }}
+                  onError={(error) => {
+                    console.error('File selection error:', error);
+                    // Could show a toast notification here
+                  }}
+                  disabled={isLoading}
+                  pendingFile={pendingFile}
+                  sessionId={activeSessionId}
+                />
+                
+                {/* Microphone button */}
+                <button
+                  type="button"
+                  className="p-2 text-gray-400 hover:text-gray-600 transition-colors"
+                  title="Voice input"
+                >
+                  <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z" />
+                  </svg>
+                </button>
+                
+                {/* Send button */}
+                <button
+                  type="submit"
+                  disabled={!input.trim() || isLoading}
+                  className={`flex items-center justify-center transition-colors disabled:opacity-50 disabled:cursor-not-allowed ${
+                    showCenteredLayout 
+                      ? 'p-2 text-gray-400 hover:text-gray-600' 
+                      : 'px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700'
+                  }`}
+                  title="Send"
+                >
+                  <Send className="w-5 h-5" />
+                </button>
+              </div>
+            </div>
           </div>
         </form>
 

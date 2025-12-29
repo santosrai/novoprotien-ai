@@ -10,6 +10,7 @@ interface ApiClient {
 interface ExecutionContext {
   pipeline: Pipeline;
   apiClient: ApiClient;
+  sessionId?: string | null;
 }
 
 /**
@@ -339,7 +340,32 @@ export async function executeNode(
       // Resolve request body
       let resolvedPayload: any = undefined;
       if (executionConfig.payload) {
-        const payloadResolved = resolveTemplates(executionConfig.payload, node, inputData);
+        // Extract body_json template BEFORE full resolution to prevent recursive template resolution
+        // that could corrupt the JSON string
+        const bodyJsonTemplate = executionConfig.payload['__body_json__'];
+        let bodyJsonRaw: string | undefined = undefined;
+        
+        // If body_json is a template variable, extract the config value directly
+        if (typeof bodyJsonTemplate === 'string' && bodyJsonTemplate.trim().startsWith('{{') && bodyJsonTemplate.trim().endsWith('}}')) {
+          const match = bodyJsonTemplate.trim().match(/^\{\{config\.(.+)\}\}$/);
+          if (match) {
+            // Get the raw JSON string from config without template resolution
+            bodyJsonRaw = node.config?.[match[1]] as string | undefined;
+          }
+        }
+        
+        // Resolve the rest of the payload (but skip __body_json__ to avoid double processing)
+        const payloadToResolve = { ...executionConfig.payload };
+        if (bodyJsonRaw !== undefined) {
+          // Temporarily remove __body_json__ to prevent recursive resolution
+          delete payloadToResolve['__body_json__'];
+        }
+        const payloadResolved = resolveTemplates(payloadToResolve, node, inputData);
+        
+        // Restore __body_json__ with the raw value
+        if (bodyJsonRaw !== undefined) {
+          payloadResolved['__body_json__'] = bodyJsonRaw;
+        }
         
           // Handle special body flags
           if (payloadResolved && typeof payloadResolved === 'object') {
@@ -356,14 +382,94 @@ export async function executeNode(
                 // Parse JSON body
                 try {
                   if (typeof bodyJson === 'string') {
-                    resolvedPayload = JSON.parse(bodyJson);
+                    // Validate JSON string before parsing
+                    if (!bodyJson.trim()) {
+                      throw new Error('body_json is empty');
+                    }
+                    
+                    // Fix unquoted template variables in JSON string before parsing
+                    // Replace patterns like {{config.field}} (unquoted) with "{{config.field}}" (quoted)
+                    // This handles cases where users have old configs with unquoted template variables
+                    let fixedJson = bodyJson;
+                    // Match unquoted template variables: "key": {{variable}} -> "key": "{{variable}}"
+                    // Pattern matches colon, optional whitespace, then {{...}} that's NOT already quoted
+                    // We detect "not quoted" by checking that there's no quote immediately after the colon
+                    fixedJson = fixedJson.replace(/("([^"]+)":\s*)(\{\{([^}]+)\}\})(\s*[,}])/g, (match, prefix, _key, _templateVar, content, suffix) => {
+                      // If prefix ends with a quote, it's already quoted, don't modify
+                      if (prefix.endsWith('"')) {
+                        return match;
+                      }
+                      // Otherwise, quote the template variable
+                      return `${prefix}"{{${content}}}"${suffix}`;
+                    });
+                    
+                    // Try to parse the fixed JSON
+                    resolvedPayload = JSON.parse(fixedJson);
                   } else {
                     resolvedPayload = bodyJson;
                   }
                   // CRITICAL: Resolve template variables in the parsed payload
                   resolvedPayload = resolveTemplates(resolvedPayload, node, inputData);
+                  
+                  // Convert string numbers to actual numbers for numeric fields (RFdiffusion compatibility)
+                  if (node.type === 'rfdiffusion_node' && resolvedPayload && typeof resolvedPayload === 'object') {
+                    // Handle diffusion_steps: convert string to number, use default 15 if empty
+                    if (typeof resolvedPayload.diffusion_steps === 'string') {
+                      if (resolvedPayload.diffusion_steps === '') {
+                        resolvedPayload.diffusion_steps = node.config?.diffusion_steps ?? 15;
+                      } else {
+                        const steps = Number(resolvedPayload.diffusion_steps);
+                        if (!isNaN(steps)) resolvedPayload.diffusion_steps = steps;
+                      }
+                    }
+                    // Handle num_designs: convert string to number, use default 1 if empty
+                    if (typeof resolvedPayload.num_designs === 'string') {
+                      if (resolvedPayload.num_designs === '') {
+                        resolvedPayload.num_designs = node.config?.num_designs ?? 1;
+                      } else {
+                        const designs = Number(resolvedPayload.num_designs);
+                        if (!isNaN(designs)) resolvedPayload.num_designs = designs;
+                      }
+                    }
+                    // Handle hotspot_res: convert empty string to empty array, or omit if empty
+                    if (typeof resolvedPayload.hotspot_res === 'string') {
+                      if (resolvedPayload.hotspot_res.trim() === '') {
+                        // Remove empty hotspot_res to avoid API validation errors
+                        delete resolvedPayload.hotspot_res;
+                      } else {
+                        // Parse comma-separated string to array
+                        const hotspots = resolvedPayload.hotspot_res.split(',').map((h: string) => h.trim()).filter((h: string) => h);
+                        if (hotspots.length > 0) {
+                          resolvedPayload.hotspot_res = hotspots;
+                        } else {
+                          delete resolvedPayload.hotspot_res;
+                        }
+                      }
+                    } else if (Array.isArray(resolvedPayload.hotspot_res)) {
+                      // Filter out empty values from array
+                      const filtered = resolvedPayload.hotspot_res.filter((h: any) => h && String(h).trim());
+                      if (filtered.length > 0) {
+                        resolvedPayload.hotspot_res = filtered;
+                      } else {
+                        delete resolvedPayload.hotspot_res;
+                      }
+                    }
+                    
+                    // Add sessionId to associate files with session
+                    if (context.sessionId) {
+                      resolvedPayload.sessionId = context.sessionId;
+                      console.log('[ExecutionEngine] Added sessionId to RFdiffusion payload:', context.sessionId);
+                    } else {
+                      console.warn('[ExecutionEngine] No sessionId available for RFdiffusion node');
+                    }
+                  }
                 } catch (e) {
-                  throw new Error(`Invalid JSON body: ${e}`);
+                  // Provide more context about the JSON parsing error
+                  const errorMessage = e instanceof Error ? e.message : String(e);
+                  const jsonPreview = typeof bodyJson === 'string' 
+                    ? (bodyJson.length > 200 ? bodyJson.substring(0, 200) + '...' : bodyJson)
+                    : 'Not a string';
+                  throw new Error(`Invalid JSON body: ${errorMessage}. JSON preview: ${jsonPreview}`);
                 }
               } else if (bodySpecify === 'expression' && bodyJson) {
                 // Expression-based body (for now, treat as JSON)
@@ -375,6 +481,14 @@ export async function executeNode(
                   }
                   // CRITICAL: Resolve template variables in the parsed payload
                   resolvedPayload = resolveTemplates(resolvedPayload, node, inputData);
+                  
+                // Add sessionId for RFdiffusion nodes to associate files with session
+                if (node.type === 'rfdiffusion_node' && context.sessionId && resolvedPayload && typeof resolvedPayload === 'object') {
+                  resolvedPayload.sessionId = context.sessionId;
+                  console.log('[ExecutionEngine] Added sessionId to RFdiffusion payload (expression):', context.sessionId);
+                } else if (node.type === 'rfdiffusion_node' && !context.sessionId) {
+                  console.warn('[ExecutionEngine] No sessionId available for RFdiffusion node (expression)');
+                }
                 } catch (e) {
                   resolvedPayload = bodyJson; // Fallback to raw string
                   // Even for raw string, try to resolve templates if it's a string
@@ -390,6 +504,14 @@ export async function executeNode(
                 resolvedPayload = legacyPayload;
                 // CRITICAL: Resolve template variables in legacy payload
                 resolvedPayload = resolveTemplates(resolvedPayload, node, inputData);
+                
+                // Add sessionId for RFdiffusion nodes to associate files with session
+                if (node.type === 'rfdiffusion_node' && context.sessionId) {
+                  resolvedPayload.sessionId = context.sessionId;
+                  console.log('[ExecutionEngine] Added sessionId to RFdiffusion payload (legacy):', context.sessionId);
+                } else if (node.type === 'rfdiffusion_node' && !context.sessionId) {
+                  console.warn('[ExecutionEngine] No sessionId available for RFdiffusion node (legacy)');
+                }
               }
               
               // Set Content-Type header based on body_content_type

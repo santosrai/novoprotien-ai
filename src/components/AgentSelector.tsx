@@ -14,10 +14,11 @@ const categoryLabels: Record<string, string> = {
   code: 'Code',
   fold: 'Fold',
   design: 'Design',
+  workflow: 'Workflow',
   other: 'Other',
 };
 
-const categoryOrder = ['ask', 'plan', 'code', 'fold', 'design', 'other'];
+const categoryOrder = ['ask', 'plan', 'code', 'fold', 'design', 'workflow', 'other'];
 
 export const AgentSelector: React.FC<AgentSelectorProps> = ({ agents, onAgentChange }) => {
   const { settings, updateSettings } = useAgentSettings();
@@ -60,19 +61,20 @@ export const AgentSelector: React.FC<AgentSelectorProps> = ({ agents, onAgentCha
   const displayText = selectedAgent ? selectedAgent.name : 'Auto';
 
   return (
-    <div className="relative" ref={dropdownRef}>
+    <div className="relative min-w-0 flex-shrink" ref={dropdownRef} style={{ maxWidth: '140px', flexShrink: 1 }}>
       <button
         type="button"
         onClick={() => setIsOpen(!isOpen)}
-        className="inline-flex items-center gap-1.5 px-2.5 py-1 bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-full text-xs font-medium transition-colors focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-1 shrink-0"
+        className="inline-flex items-center gap-1 px-2 py-1 bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-full text-xs font-medium transition-colors focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-1 w-full min-w-0"
+        title={displayText}
       >
-        <Infinity className="w-3.5 h-3.5" />
-        <span className="max-w-[120px] truncate">{displayText}</span>
-        <ChevronDown className={`w-3 h-3 transition-transform ${isOpen ? 'rotate-180' : ''}`} />
+        <Infinity className="w-3 h-3 shrink-0" />
+        <span className="truncate min-w-0 flex-1 text-left overflow-hidden text-ellipsis whitespace-nowrap">{displayText}</span>
+        <ChevronDown className={`w-2.5 h-2.5 transition-transform shrink-0 ${isOpen ? 'rotate-180' : ''}`} />
       </button>
 
       {isOpen && (
-        <div className="absolute bottom-full left-0 mb-2 w-64 bg-white border border-gray-200 rounded-lg shadow-lg z-50 max-h-96 overflow-y-auto">
+        <div className="absolute bottom-full left-0 mb-2 w-64 bg-white border border-gray-200 rounded-lg shadow-lg z-[100] max-h-96 overflow-y-auto">
           <div className="p-2">
             {/* Auto option */}
             <button
@@ -128,6 +130,8 @@ export const AgentSelector: React.FC<AgentSelectorProps> = ({ agents, onAgentCha
     </div>
   );
 };
+
+
 
 
 

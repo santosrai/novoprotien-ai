@@ -457,8 +457,10 @@ class RFdiffusionHandler:
                     
                     # Associate file with session if session_id provided
                     session_id = job_data.get("sessionId")
+                    logger.info(f"[RFdiffusion Handler] Session ID from job_data: {session_id} (type: {type(session_id).__name__})")
                     if session_id:
                         try:
+                            logger.info(f"[RFdiffusion Handler] Associating file with session: session_id={session_id}, file_id={job_id}, filepath={filepath}")
                             associate_file_with_session(
                                 session_id=str(session_id),
                                 file_id=job_id,  # Use job_id as file_id for generated files
@@ -472,8 +474,11 @@ class RFdiffusionHandler:
                                     "design_mode": parameters.get("design_mode", "unknown"),
                                 },
                             )
+                            logger.info(f"[RFdiffusion Handler] Successfully associated file {job_id} with session {session_id}")
                         except Exception as e:
-                            logger.warning(f"Failed to associate RFdiffusion file with session: {e}")
+                            logger.error(f"Failed to associate RFdiffusion file with session: {e}", exc_info=True)
+                    else:
+                        logger.warning(f"[RFdiffusion Handler] No session_id provided, file {job_id} will not be associated with any session")
                     
                     self.active_jobs[job_id] = "completed"
                     

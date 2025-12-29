@@ -44,22 +44,33 @@ function App() {
     // Load file content and show in editor
     try {
       const { activeSessionId } = useChatHistoryStore.getState();
-      if (!activeSessionId) return;
+      if (!activeSessionId) {
+        console.error('[App] No active session ID for file selection');
+        return;
+      }
 
-      const response = await fetch(`/api/sessions/${activeSessionId}/files/${file.file_id}`);
-      const data = await response.json();
+      console.log('[App] Loading file:', file.file_id, 'type:', file.type);
       
-      if (data.status === 'success') {
+      // Use api utility to ensure correct base URL
+      const response = await api.get(`/sessions/${activeSessionId}/files/${file.file_id}`);
+      
+      if (response.data.status === 'success') {
+        console.log('[App] File loaded successfully:', response.data.filename);
         setSelectedFile({
           id: file.file_id,
           type: file.type,
-          content: data.content,
-          filename: file.filename || data.filename || `file_${file.file_id}.pdb`,
+          content: response.data.content,
+          filename: file.filename || response.data.filename || `file_${file.file_id}.pdb`,
         } as { id: string; type: string; content: string; filename?: string });
         setActivePane('files');
+      } else {
+        console.error('[App] Failed to load file - unexpected response:', response.data);
       }
-    } catch (error) {
-      console.error('Failed to load file:', error);
+    } catch (error: any) {
+      console.error('[App] Failed to load file:', error);
+      if (error.response) {
+        console.error('[App] Error response:', error.response.status, error.response.data);
+      }
     }
   };
 

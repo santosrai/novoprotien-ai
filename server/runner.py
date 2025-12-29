@@ -840,6 +840,55 @@ async def run_agent(
             log_line("agent:proteinmpnn:failed", {"error": str(e), "userText": user_text})
             return {"type": "text", "text": f"ProteinMPNN processing failed: {str(e)}"}
 
+    # Special handling for Pipeline agent - gather context and enhance prompt
+    if agent.get("id") == "pipeline-agent":
+        try:
+            from .pipeline_context import get_pipeline_context
+            
+            # Gather pipeline context
+            pipeline_state = {
+                "input": user_text,
+                "uploadedFileId": uploaded_file_context.get("file_id") if uploaded_file_context else None,
+                "currentStructureOrigin": current_structure_origin,
+                "history": history or [],
+                "selection": selection,
+                "selections": selections
+            }
+            
+            context = await get_pipeline_context(pipeline_state)
+            
+            # Enhance user text with context information
+            context_summary = []
+            if context.get("uploaded_files"):
+                files_info = ", ".join([f.get("filename", "file") for f in context["uploaded_files"]])
+                context_summary.append(f"Available uploaded files: {files_info}")
+            if context.get("canvas_structure"):
+                canvas = context["canvas_structure"]
+                if canvas.get("pdb_id"):
+                    context_summary.append(f"Current structure in 3D viewer: PDB {canvas['pdb_id']}")
+                elif canvas.get("file_id"):
+                    context_summary.append(f"Current structure in 3D viewer: {canvas.get('filename', 'uploaded file')}")
+            
+            enhanced_user_text = user_text
+            if context_summary:
+                enhanced_user_text = f"{user_text}\n\nContext: {'; '.join(context_summary)}"
+            
+            # Include context in the system message or as additional context
+            # The agent will use this to generate appropriate blueprints
+            log_line("agent:pipeline:context", {
+                "has_files": len(context.get("uploaded_files", [])) > 0,
+                "has_canvas": context.get("canvas_structure") is not None,
+                "userText": user_text
+            })
+            
+            # Continue with normal LLM flow but with enhanced text
+            # We'll modify the user_text for this agent
+            user_text = enhanced_user_text
+            
+        except Exception as e:
+            log_line("agent:pipeline:context_error", {"error": str(e), "userText": user_text})
+            # Continue without context enhancement if gathering fails
+
     # Deterministic UniProt search agent (no LLM call)
     if agent.get("id") == "uniprot-search":
         import re, json

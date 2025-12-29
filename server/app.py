@@ -641,89 +641,251 @@ async def download_uploaded_pdb(request: Request, file_id: str):
 @app.get("/api/sessions/{session_id}/files")
 @limiter.limit("30/minute")
 async def get_session_files_endpoint(request: Request, session_id: str):
-    """List all PDB files associated with a session."""
+    """List all files in the session directories (uploads, rfdiffusion, proteinmpnn, alphafold)."""
     _ = request
     try:
         log_line("session_files_request", {"session_id": session_id})
-        files = get_session_files(session_id)
-        log_line("session_files_loaded", {"session_id": session_id, "file_count": len(files)})
+        base_dir = Path(__file__).parent
+        all_files = []
         
-        # Enrich file data with download URLs and verify file existence
-        enriched_files = []
-        for file_entry in files:
+        # 1. Get files from session tracker (explicitly associated files)
+        tracked_files = get_session_files(session_id)
+        tracked_file_ids = set()
+        for file_entry in tracked_files:
             file_type = file_entry.get("type", "")
             file_id = file_entry.get("file_id", "")
             file_path = file_entry.get("file_path", "")
+            filename = file_entry.get("filename", "")
             
-            # Determine download URL based on file type
+            # Verify file exists and get actual path
             if file_type == "upload":
-                download_url = f"/api/upload/pdb/{file_id}"
-            elif file_type == "alphafold":
-                # Check if file exists in server/alphafold_results (like proteinmpnn_results)
-                filename = file_entry.get("filename", "")
+                metadata = get_uploaded_pdb(file_id)
+                if metadata and metadata.get("absolute_path"):
+                    actual_path = Path(metadata["absolute_path"])
+                    if actual_path.exists():
+                        tracked_file_ids.add(file_id)
+                        all_files.append({
+                            "file_id": file_id,
+                            "type": "upload",
+                            "filename": filename or metadata.get("filename", f"{file_id}.pdb"),
+                            "file_path": str(actual_path.relative_to(base_dir)),
+                            "size": actual_path.stat().st_size,
+                            "download_url": f"/api/upload/pdb/{file_id}",
+                            "metadata": file_entry.get("metadata", {}),
+                        })
+            elif file_type in ["rfdiffusion", "alphafold"]:
                 stored_path = file_entry.get("file_path", "")
-                
-                # Files are stored relative to server directory
                 if stored_path and not Path(stored_path).is_absolute():
-                    result_path = Path(__file__).parent / stored_path
+                    result_path = base_dir / stored_path
                 elif stored_path and Path(stored_path).is_absolute():
                     result_path = Path(stored_path)
                 else:
-                    # Fallback to standard location
-                    result_path = Path(__file__).parent / "alphafold_results" / filename
+                    result_path = base_dir / f"{file_type}_results" / filename
                 
                 if result_path.exists():
-                    download_url = f"/api/sessions/{session_id}/files/{file_id}/download"
-                else:
-                    log_line("alphafold_file_not_found", {
-                        "session_id": session_id,
+                    tracked_file_ids.add(file_id)
+                    all_files.append({
                         "file_id": file_id,
+                        "type": file_type,
                         "filename": filename,
-                        "expected_path": str(result_path),
-                        "stored_path": stored_path
+                        "file_path": str(result_path.relative_to(base_dir)),
+                        "size": result_path.stat().st_size,
+                        "download_url": f"/api/sessions/{session_id}/files/{file_id}/download",
+                        "metadata": file_entry.get("metadata", {}),
                     })
-                    continue  # Skip if file doesn't exist
-            elif file_type == "rfdiffusion":
-                # Check if file exists in server/rfdiffusion_results (like proteinmpnn_results)
-                filename = file_entry.get("filename", "")
+            elif file_type == "proteinmpnn":
+                # ProteinMPNN files are in subdirectories
                 stored_path = file_entry.get("file_path", "")
-                
-                # Files are stored relative to server directory
                 if stored_path and not Path(stored_path).is_absolute():
-                    result_path = Path(__file__).parent / stored_path
-                elif stored_path and Path(stored_path).is_absolute():
-                    result_path = Path(stored_path)
+                    result_path = base_dir / stored_path
                 else:
-                    # Fallback to standard location
-                    result_path = Path(__file__).parent / "rfdiffusion_results" / filename
+                    result_path = base_dir / "proteinmpnn_results" / file_id
                 
                 if result_path.exists():
-                    download_url = f"/api/sessions/{session_id}/files/{file_id}/download"
-                else:
-                    log_line("rfdiffusion_file_not_found", {
-                        "session_id": session_id,
+                    tracked_file_ids.add(file_id)
+                    # Find the main result file
+                    result_json = result_path / "result.json"
+                    if result_json.exists():
+                        all_files.append({
+                            "file_id": file_id,
+                            "type": "proteinmpnn",
+                            "filename": f"{file_id}/result.json",
+                            "file_path": str(result_path.relative_to(base_dir)),
+                            "size": result_json.stat().st_size,
+                            "download_url": f"/api/proteinmpnn/result/{file_id}",
+                            "metadata": file_entry.get("metadata", {}),
+                        })
+        
+        # 2. Scan directories for all files (including those not in tracker)
+        # RFdiffusion files
+        rfdiffusion_dir = base_dir / "rfdiffusion_results"
+        if rfdiffusion_dir.exists():
+            for pdb_file in rfdiffusion_dir.glob("*.pdb"):
+                file_id = pdb_file.stem
+                if file_id not in tracked_file_ids:
+                    all_files.append({
                         "file_id": file_id,
-                        "filename": filename,
-                        "expected_path": str(result_path),
-                        "stored_path": stored_path
+                        "type": "rfdiffusion",
+                        "filename": pdb_file.name,
+                        "file_path": str(pdb_file.relative_to(base_dir)),
+                        "size": pdb_file.stat().st_size,
+                        "download_url": f"/api/sessions/{session_id}/files/{file_id}/download",
+                        "metadata": {},
                     })
-                    continue  # Skip if file doesn't exist
-            else:
-                download_url = f"/api/sessions/{session_id}/files/{file_id}/download"
-            
-            enriched_file = {
-                **file_entry,
-                "download_url": download_url,
-            }
-            enriched_files.append(enriched_file)
+        
+        # AlphaFold files
+        alphafold_dir = base_dir / "alphafold_results"
+        if alphafold_dir.exists():
+            for pdb_file in alphafold_dir.glob("*.pdb"):
+                file_id = pdb_file.stem
+                if file_id not in tracked_file_ids:
+                    all_files.append({
+                        "file_id": file_id,
+                        "type": "alphafold",
+                        "filename": pdb_file.name,
+                        "file_path": str(pdb_file.relative_to(base_dir)),
+                        "size": pdb_file.stat().st_size,
+                        "download_url": f"/api/sessions/{session_id}/files/{file_id}/download",
+                        "metadata": {},
+                    })
+        
+        # ProteinMPNN files (in subdirectories)
+        proteinmpnn_dir = base_dir / "proteinmpnn_results"
+        if proteinmpnn_dir.exists():
+            for job_dir in proteinmpnn_dir.iterdir():
+                if job_dir.is_dir():
+                    file_id = job_dir.name
+                    result_json = job_dir / "result.json"
+                    if result_json.exists() and file_id not in tracked_file_ids:
+                        all_files.append({
+                            "file_id": file_id,
+                            "type": "proteinmpnn",
+                            "filename": f"{file_id}/result.json",
+                            "file_path": str(job_dir.relative_to(base_dir)),
+                            "size": result_json.stat().st_size,
+                            "download_url": f"/api/proteinmpnn/result/{file_id}",
+                            "metadata": {},
+                        })
+        
+        # Uploads (from pdb_storage index)
+        try:
+            from .pdb_storage import _load_index
+            upload_index = _load_index()
+            uploads_dir = base_dir / "uploads" / "pdb"
+            for file_id, metadata in upload_index.items():
+                if file_id not in tracked_file_ids:
+                    stored_name = metadata.get("stored_name", f"{file_id}.pdb")
+                    upload_path = uploads_dir / stored_name
+                    if upload_path.exists():
+                        all_files.append({
+                            "file_id": file_id,
+                            "type": "upload",
+                            "filename": metadata.get("filename", stored_name),
+                            "file_path": str(upload_path.relative_to(base_dir)),
+                            "size": upload_path.stat().st_size,
+                            "download_url": f"/api/upload/pdb/{file_id}",
+                            "metadata": metadata,
+                        })
+        except Exception as e:
+            log_line("upload_index_load_failed", {"error": str(e)})
+        
+        log_line("session_files_loaded", {"session_id": session_id, "file_count": len(all_files)})
         
         return {
             "status": "success",
-            "files": enriched_files,
+            "files": all_files,
         }
     except Exception as e:
         log_line("session_files_list_failed", {"error": str(e), "trace": traceback.format_exc(), "session_id": session_id})
         content = {"error": "Failed to list session files"}
+        if DEBUG_API:
+            content["detail"] = str(e)
+        return JSONResponse(status_code=500, content=content)
+
+
+@app.delete("/api/sessions/{session_id}/files/{file_id}")
+@limiter.limit("10/minute")
+async def delete_session_file(request: Request, session_id: str, file_id: str):
+    """Delete a file from the session directories."""
+    _ = request
+    try:
+        base_dir = Path(__file__).parent
+        
+        # Try to find the file in tracked files first
+        tracked_files = get_session_files(session_id)
+        file_entry = next((f for f in tracked_files if f.get("file_id") == file_id), None)
+        
+        deleted = False
+        file_path = None
+        
+        if file_entry:
+            file_type = file_entry.get("type", "")
+            stored_path = file_entry.get("file_path", "")
+            
+            if file_type == "upload":
+                metadata = get_uploaded_pdb(file_id)
+                if metadata and metadata.get("absolute_path"):
+                    file_path = Path(metadata["absolute_path"])
+            elif file_type in ["rfdiffusion", "alphafold"]:
+                if stored_path and not Path(stored_path).is_absolute():
+                    file_path = base_dir / stored_path
+                elif stored_path and Path(stored_path).is_absolute():
+                    file_path = Path(stored_path)
+                else:
+                    filename = file_entry.get("filename", "")
+                    file_path = base_dir / f"{file_type}_results" / filename
+            elif file_type == "proteinmpnn":
+                if stored_path and not Path(stored_path).is_absolute():
+                    file_path = base_dir / stored_path
+                else:
+                    file_path = base_dir / "proteinmpnn_results" / file_id
+        else:
+            # File not in tracker, search directories
+            # Try RFdiffusion
+            rfdiffusion_file = base_dir / "rfdiffusion_results" / f"{file_id}.pdb"
+            if rfdiffusion_file.exists():
+                file_path = rfdiffusion_file
+            else:
+                # Try AlphaFold
+                alphafold_file = base_dir / "alphafold_results" / f"{file_id}.pdb"
+                if alphafold_file.exists():
+                    file_path = alphafold_file
+                else:
+                    # Try ProteinMPNN
+                    proteinmpnn_dir = base_dir / "proteinmpnn_results" / file_id
+                    if proteinmpnn_dir.exists() and proteinmpnn_dir.is_dir():
+                        file_path = proteinmpnn_dir
+                    else:
+                        # Try uploads
+                        metadata = get_uploaded_pdb(file_id)
+                        if metadata and metadata.get("absolute_path"):
+                            file_path = Path(metadata["absolute_path"])
+        
+        if file_path and file_path.exists():
+            if file_path.is_dir():
+                # Delete entire directory (for ProteinMPNN)
+                import shutil
+                shutil.rmtree(file_path)
+                deleted = True
+            else:
+                # Delete single file
+                file_path.unlink()
+                deleted = True
+            
+            # Remove from session tracker if it was tracked
+            if file_entry:
+                from .session_file_tracker import remove_file_from_session
+                remove_file_from_session(session_id, file_id, file_entry.get("type", ""))
+            
+            log_line("file_deleted", {"session_id": session_id, "file_id": file_id, "file_path": str(file_path)})
+            return {"status": "success", "message": "File deleted successfully"}
+        else:
+            raise HTTPException(status_code=404, detail="File not found")
+    except HTTPException:
+        raise
+    except Exception as e:
+        log_line("file_delete_failed", {"error": str(e), "trace": traceback.format_exc(), "session_id": session_id, "file_id": file_id})
+        content = {"error": "Failed to delete file"}
         if DEBUG_API:
             content["detail"] = str(e)
         return JSONResponse(status_code=500, content=content)
@@ -735,50 +897,71 @@ async def get_session_file_content(request: Request, session_id: str, file_id: s
     """Get content of a specific file from a session."""
     _ = request
     try:
+        base_dir = Path(__file__).parent
         files = get_session_files(session_id)
         file_entry = next((f for f in files if f.get("file_id") == file_id), None)
         
-        if not file_entry:
-            raise HTTPException(status_code=404, detail="File not found in session")
+        file_type = None
+        file_path = None
+        filename = None
         
-        file_type = file_entry.get("type", "")
-        file_path = file_entry.get("file_path", "")
-        filename = file_entry.get("filename", "")
-        
-        # Load file content based on type
-        if file_type == "upload":
-            metadata = get_uploaded_pdb(file_id)
-            if not metadata or not metadata.get("absolute_path"):
-                raise HTTPException(status_code=404, detail="Uploaded file not found")
-            file_path = metadata["absolute_path"]
-        elif file_type == "alphafold":
-            # Files are stored in server/alphafold_results (relative to server directory)
+        if file_entry:
+            # File found in tracker
+            file_type = file_entry.get("type", "")
             stored_path = file_entry.get("file_path", "")
-            if stored_path and not Path(stored_path).is_absolute():
-                result_path = Path(__file__).parent / stored_path
-            elif stored_path and Path(stored_path).is_absolute():
-                result_path = Path(stored_path)
-            else:
-                result_path = Path(__file__).parent / "alphafold_results" / filename
+            filename = file_entry.get("filename", "")
             
-            if not result_path.exists():
-                raise HTTPException(status_code=404, detail="AlphaFold result file not found")
-            file_path = str(result_path)
-        elif file_type == "rfdiffusion":
-            # Files are stored in server/rfdiffusion_results (relative to server directory)
-            stored_path = file_entry.get("file_path", "")
-            if stored_path and not Path(stored_path).is_absolute():
-                result_path = Path(__file__).parent / stored_path
-            elif stored_path and Path(stored_path).is_absolute():
-                result_path = Path(stored_path)
-            else:
-                result_path = Path(__file__).parent / "rfdiffusion_results" / filename
-            
-            if not result_path.exists():
-                raise HTTPException(status_code=404, detail="RFdiffusion result file not found")
-            file_path = str(result_path)
+            if file_type == "upload":
+                metadata = get_uploaded_pdb(file_id)
+                if metadata and metadata.get("absolute_path"):
+                    file_path = Path(metadata["absolute_path"])
+            elif file_type in ["alphafold", "rfdiffusion"]:
+                if stored_path and not Path(stored_path).is_absolute():
+                    file_path = base_dir / stored_path
+                elif stored_path and Path(stored_path).is_absolute():
+                    file_path = Path(stored_path)
+                else:
+                    file_path = base_dir / f"{file_type}_results" / filename
+            elif file_type == "proteinmpnn":
+                if stored_path and not Path(stored_path).is_absolute():
+                    result_dir = base_dir / stored_path
+                else:
+                    result_dir = base_dir / "proteinmpnn_results" / file_id
+                file_path = result_dir / "result.json"
+                filename = f"proteinmpnn_{file_id}.json"
         else:
-            raise HTTPException(status_code=400, detail="Unknown file type")
+            # File not in tracker, search directories
+            # Try RFdiffusion
+            rfdiffusion_file = base_dir / "rfdiffusion_results" / f"{file_id}.pdb"
+            if rfdiffusion_file.exists():
+                file_type = "rfdiffusion"
+                filename = rfdiffusion_file.name
+                file_path = rfdiffusion_file
+            else:
+                # Try AlphaFold
+                alphafold_file = base_dir / "alphafold_results" / f"{file_id}.pdb"
+                if alphafold_file.exists():
+                    file_type = "alphafold"
+                    filename = alphafold_file.name
+                    file_path = alphafold_file
+                else:
+                    # Try ProteinMPNN
+                    proteinmpnn_dir = base_dir / "proteinmpnn_results" / file_id
+                    result_json = proteinmpnn_dir / "result.json"
+                    if result_json.exists():
+                        file_type = "proteinmpnn"
+                        filename = f"proteinmpnn_{file_id}.json"
+                        file_path = result_json
+                    else:
+                        # Try uploads
+                        metadata = get_uploaded_pdb(file_id)
+                        if metadata and metadata.get("absolute_path"):
+                            file_type = "upload"
+                            filename = metadata.get("filename", f"{file_id}.pdb")
+                            file_path = Path(metadata["absolute_path"])
+        
+        if not file_path or not file_path.exists():
+            raise HTTPException(status_code=404, detail="File not found")
         
         # Read and return file content
         with open(file_path, "r", encoding="utf-8") as f:
@@ -787,8 +970,8 @@ async def get_session_file_content(request: Request, session_id: str, file_id: s
         return {
             "status": "success",
             "file_id": file_id,
-            "filename": filename,
-            "type": file_type,
+            "filename": filename or file_path.name,
+            "type": file_type or "unknown",
             "content": content,
             "size": len(content),
         }
@@ -808,14 +991,55 @@ async def download_session_file(request: Request, session_id: str, file_id: str)
     """Download a file from a session."""
     _ = request
     try:
+        base_dir = Path(__file__).parent
         files = get_session_files(session_id)
         file_entry = next((f for f in files if f.get("file_id") == file_id), None)
         
-        if not file_entry:
+        file_type = None
+        filename = None
+        file_path = None
+        
+        if file_entry:
+            file_type = file_entry.get("type", "")
+            filename = file_entry.get("filename", "")
+        else:
+            # File not in tracker, search directories
+            # Try RFdiffusion
+            rfdiffusion_file = base_dir / "rfdiffusion_results" / f"{file_id}.pdb"
+            if rfdiffusion_file.exists():
+                file_type = "rfdiffusion"
+                filename = rfdiffusion_file.name
+                file_path = str(rfdiffusion_file)
+            else:
+                # Try AlphaFold
+                alphafold_file = base_dir / "alphafold_results" / f"{file_id}.pdb"
+                if alphafold_file.exists():
+                    file_type = "alphafold"
+                    filename = alphafold_file.name
+                    file_path = str(alphafold_file)
+                else:
+                    # Try ProteinMPNN
+                    proteinmpnn_dir = base_dir / "proteinmpnn_results" / file_id
+                    result_json = proteinmpnn_dir / "result.json"
+                    if result_json.exists():
+                        file_type = "proteinmpnn"
+                        filename = f"proteinmpnn_{file_id}.json"
+                        file_path = str(result_json)
+                    else:
+                        # Try uploads
+                        metadata = get_uploaded_pdb(file_id)
+                        if metadata and metadata.get("absolute_path"):
+                            file_type = "upload"
+                            filename = metadata.get("filename", f"{file_id}.pdb")
+                            file_path = metadata["absolute_path"]
+        
+        if not file_type or not file_path:
             raise HTTPException(status_code=404, detail="File not found in session")
         
-        file_type = file_entry.get("type", "")
-        filename = file_entry.get("filename", "")
+        if file_entry:
+            # Use file_entry data if available
+            file_type = file_entry.get("type", file_type)
+            filename = file_entry.get("filename", filename)
         
         # Determine file path based on type
         if file_type == "upload":
@@ -849,12 +1073,35 @@ async def download_session_file(request: Request, session_id: str, file_id: str)
             if not result_path.exists():
                 raise HTTPException(status_code=404, detail="RFdiffusion result file not found")
             file_path = str(result_path)
+        elif file_type == "proteinmpnn":
+            # Files are stored in server/proteinmpnn_results/{job_id}/
+            stored_path = file_entry.get("file_path", "")
+            if stored_path and not Path(stored_path).is_absolute():
+                result_dir = Path(__file__).parent / stored_path
+            elif stored_path and Path(stored_path).is_absolute():
+                result_dir = Path(stored_path)
+            else:
+                result_dir = Path(__file__).parent / "proteinmpnn_results" / file_id
+            
+            # Return the result.json file
+            result_json = result_dir / "result.json"
+            if not result_json.exists():
+                raise HTTPException(status_code=404, detail="ProteinMPNN result file not found")
+            file_path = str(result_json)
+            filename = f"proteinmpnn_{file_id}.json"
         else:
             raise HTTPException(status_code=400, detail="Unknown file type")
         
+        # Determine media type based on file extension
+        media_type = "chemical/x-pdb"  # Default for PDB files
+        if file_path.endswith(".json"):
+            media_type = "application/json"
+        elif file_path.endswith(".fasta"):
+            media_type = "text/plain"
+        
         return FileResponse(
             file_path,
-            media_type="chemical/x-pdb",
+            media_type=media_type,
             filename=filename,
         )
     except HTTPException:
@@ -1193,7 +1440,7 @@ async def rfdiffusion_run(request: Request):
         diffusion_steps = body.get("diffusion_steps", 15)
         design_mode = body.get("design_mode", "unconditional")
         
-        # Handle pdb_file if it's an object (from input_node)
+        # Handle pdb_file if it's an object (from input_node or rfdiffusion_node)
         upload_id_from_object = None
         if pdb_file and isinstance(pdb_file, dict):
             # Extract file_id if it's a file metadata object
@@ -1204,8 +1451,11 @@ async def rfdiffusion_run(request: Request):
             # If it has file_id, use that as uploadId and clear pdb_file
             if upload_id_from_object:
                 pdb_file = None  # Clear pdb_file so we use uploadId instead
+            elif pdb_file.get("filepath"):
+                # If it has filepath (from RFdiffusion output), use that as the file path
+                pdb_file = pdb_file.get("filepath")
             else:
-                # If it's a dict but no file_id, try to extract other useful info
+                # If it's a dict but no file_id or filepath, try to extract other useful info
                 # Maybe it has file_url or we should treat it as invalid
                 # For now, clear it and let the handler deal with missing PDB
                 pdb_file = None
@@ -1354,11 +1604,15 @@ async def rfdiffusion_run(request: Request):
             print(f"[RFdiffusion Run] input_pdb type: {type(input_pdb_val).__name__}, length: {len(input_pdb_val) if isinstance(input_pdb_val, str) else 'N/A'}")
         print("=" * 80)
         
+        # Extract sessionId from request body if provided (for pipeline nodes)
+        session_id = body.get("sessionId")
+        print(f"[RFdiffusion Run] Session ID from request: {session_id} (type: {type(session_id).__name__})")
+        
         # Call existing handler
         result = await rfdiffusion_handler.submit_design_job({
             "parameters": parameters,
             "jobId": job_id,
-            "sessionId": None,  # Pipeline nodes don't use sessions
+            "sessionId": session_id,  # Pass sessionId from request to associate files with session
         })
         
         # Check for errors

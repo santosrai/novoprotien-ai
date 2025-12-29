@@ -1,5 +1,6 @@
 import React, { useEffect } from 'react';
 import { usePipelineStore } from '../store/pipelineStore';
+import { useChatHistoryStore } from '../../../stores/chatHistoryStore';
 import { Loader2, CheckCircle2, XCircle, AlertCircle } from 'lucide-react';
 import { executeNode } from '../utils/executionEngine';
 
@@ -20,6 +21,17 @@ export const PipelineExecution: React.FC<PipelineExecutionProps> = ({ apiClient 
     updateNodeStatus,
     stopExecution,
   } = usePipelineStore();
+  
+  const { activeSessionId } = useChatHistoryStore();
+  
+  // Debug: Log session ID
+  useEffect(() => {
+    if (activeSessionId) {
+      console.log('[PipelineExecution] Active session ID:', activeSessionId);
+    } else {
+      console.warn('[PipelineExecution] No active session ID found');
+    }
+  }, [activeSessionId]);
 
   useEffect(() => {
     if (!isExecuting || !currentPipeline || executionOrder.length === 0) {
@@ -63,9 +75,9 @@ export const PipelineExecution: React.FC<PipelineExecutionProps> = ({ apiClient 
           label: node.label,
         });
 
-        // Skip if already successful
-        if (node.status === 'success') {
-          console.log(`[PipelineExecution] Skipping ${nodeId} - already successful`);
+        // Skip if already successful or completed
+        if (node.status === 'success' || node.status === 'completed') {
+          console.log(`[PipelineExecution] Skipping ${nodeId} - already completed`);
           continue;
         }
 
@@ -92,6 +104,7 @@ export const PipelineExecution: React.FC<PipelineExecutionProps> = ({ apiClient 
             executionResult = await executeNode(node, {
               pipeline: currentPipeline,
               apiClient: nodeApiClient,
+              sessionId: activeSessionId,
             });
           } catch (execError: any) {
             console.error(`[PipelineExecution] Error executing node ${nodeId}:`, execError);
@@ -162,23 +175,54 @@ export const PipelineExecution: React.FC<PipelineExecutionProps> = ({ apiClient 
                 // Also store in data for consistency
                 resultMetadata.data = result.data;
               } else {
-                // Extract common result fields for other node types
-                if (result.output_file || result.file) {
-                  resultMetadata.output_file = result.output_file || result.file;
-                }
-                if (result.sequence) {
-                  resultMetadata.sequence = result.sequence;
-                }
-                if (result.message) {
-                  resultMetadata.message = result.message;
-                }
-                if (result.data) {
-                  resultMetadata.data = result.data;
-                }
-                
-                // Store full result if no specific fields found
-                if (Object.keys(resultMetadata).length === 0 && typeof result === 'object') {
-                  Object.assign(resultMetadata, result);
+                // Special handling for RFdiffusion nodes - extract filepath from response
+                if (node.type === 'rfdiffusion_node') {
+                  // RFdiffusion API returns: { status, output_pdb, filename, filepath, data: { pdbContent, filename, filepath } }
+                  const filepath = result.filepath || result.data?.filepath;
+                  const filename = result.filename || result.data?.filename;
+                  const pdbContent = result.output_pdb || result.data?.pdbContent;
+                  
+                  if (filepath) {
+                    // Store filepath as output_file for downstream nodes to use
+                    resultMetadata.output_file = {
+                      type: 'pdb_file',
+                      filename: filename || `rfdiffusion_${node.id}.pdb`,
+                      filepath: filepath,
+                      file_id: node.id, // Use node ID as file identifier
+                      // Store relative path from server directory (e.g., "rfdiffusion_results/rfdiffusion_xxx.pdb")
+                      file_url: `/api/files/${filepath}`,
+                    };
+                    resultMetadata.filepath = filepath;
+                    resultMetadata.filename = filename;
+                  }
+                  
+                  if (pdbContent) {
+                    resultMetadata.pdbContent = pdbContent;
+                  }
+                  
+                  // Store full data for reference
+                  if (result.data) {
+                    resultMetadata.data = result.data;
+                  }
+                } else {
+                  // Extract common result fields for other node types
+                  if (result.output_file || result.file) {
+                    resultMetadata.output_file = result.output_file || result.file;
+                  }
+                  if (result.sequence) {
+                    resultMetadata.sequence = result.sequence;
+                  }
+                  if (result.message) {
+                    resultMetadata.message = result.message;
+                  }
+                  if (result.data) {
+                    resultMetadata.data = result.data;
+                  }
+                  
+                  // Store full result if no specific fields found
+                  if (Object.keys(resultMetadata).length === 0 && typeof result === 'object') {
+                    Object.assign(resultMetadata, result);
+                  }
                 }
               }
 
@@ -192,6 +236,16 @@ export const PipelineExecution: React.FC<PipelineExecutionProps> = ({ apiClient 
               usePipelineStore.getState().updateNode(nodeId, {
                 result_metadata: resultMetadata,
               });
+              
+              // Trigger file refresh event for RFdiffusion nodes (so FileBrowser updates)
+              if (node.type === 'rfdiffusion_node' && resultMetadata.filepath) {
+                console.log('[PipelineExecution] RFdiffusion completed, triggering file refresh. Active session:', activeSessionId);
+                // Small delay to ensure backend has saved the file and associated it with session
+                setTimeout(() => {
+                  window.dispatchEvent(new CustomEvent('session-file-added'));
+                  console.log('[PipelineExecution] Dispatched session-file-added event');
+                }, 1000); // Increased delay to ensure backend processing completes
+              }
               
               // #region agent log
               const logEntry18 = {location:'PipelineExecution.tsx:115',message:'result metadata stored in node',data:{nodeId},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'H5'};
@@ -208,7 +262,32 @@ export const PipelineExecution: React.FC<PipelineExecutionProps> = ({ apiClient 
             }
           }
 
-          // Update execution log with detailed request/response
+          // Update node status to completed - this should preserve result_metadata
+          // The result_metadata was already set above, so updateNodeStatus won't overwrite it
+          updateNodeStatus(nodeId, 'completed');
+          
+          // Emit pipeline node completed event
+          if (currentPipeline) {
+            window.dispatchEvent(new CustomEvent('pipeline-node-completed', {
+              detail: {
+                pipelineId: currentPipeline.id,
+                nodeId: nodeId,
+                status: 'completed',
+                result: result,
+              }
+            }));
+          }
+          
+          // Log the final state to verify
+          const finalNode = usePipelineStore.getState().currentPipeline?.nodes.find(n => n.id === nodeId);
+          console.log(`[PipelineExecution] Node ${nodeId} final state:`, {
+            status: finalNode?.status,
+            hasResultMetadata: !!(finalNode?.result_metadata && Object.keys(finalNode.result_metadata).length > 0),
+            resultMetadataKeys: finalNode?.result_metadata ? Object.keys(finalNode.result_metadata) : []
+          });
+          
+          // Then add detailed request/response info to the log
+          // This ensures the execution panel shows status updates immediately
           const existingLog = usePipelineStore.getState().currentExecution?.logs.find(
             l => l.nodeId === nodeId
           );
@@ -228,23 +307,23 @@ export const PipelineExecution: React.FC<PipelineExecutionProps> = ({ apiClient 
             });
           }
           
+          // Add detailed execution info (request/response) to the log
+          // updateNodeStatus already updated the status, so this just adds details
           if (existingLog) {
             usePipelineStore.getState().updateExecutionLog(nodeId, {
-              status: 'success',
-              completedAt: new Date(),
-              duration,
               output: result,
               input: inputDataForLog,
               request: executionResult?.request,
               response: executionResult?.response,
+              duration, // Ensure duration is set
             });
           } else {
-            // Create new log entry if it doesn't exist
+            // Create new log entry if it doesn't exist (shouldn't happen, but handle it)
             usePipelineStore.getState().addExecutionLog({
               nodeId,
               nodeLabel: node.label,
               nodeType: node.type,
-              status: 'success',
+              status: 'completed',
               completedAt: new Date(),
               duration,
               output: result,
@@ -255,7 +334,6 @@ export const PipelineExecution: React.FC<PipelineExecutionProps> = ({ apiClient 
           }
 
           console.log(`[PipelineExecution] Node ${nodeId} completed successfully`);
-          updateNodeStatus(nodeId, 'success');
         } catch (error: any) {
           console.error(`[PipelineExecution] Error in node ${nodeId} (${node.type}):`, error);
           const errorResponse = (error as any).response;
@@ -280,7 +358,22 @@ export const PipelineExecution: React.FC<PipelineExecutionProps> = ({ apiClient 
           )?.startedAt;
           const duration = startTime ? endTime - new Date(startTime).getTime() : 0;
 
-          // Update execution log with error details
+          // Update node status first to sync with execution panel
+          updateNodeStatus(nodeId, 'error', error.message || 'Execution failed');
+          
+          // Emit pipeline node error event
+          if (currentPipeline) {
+            window.dispatchEvent(new CustomEvent('pipeline-node-completed', {
+              detail: {
+                pipelineId: currentPipeline.id,
+                nodeId: nodeId,
+                status: 'error',
+                error: error.message || 'Execution failed',
+              }
+            }));
+          }
+          
+          // Then add detailed error info to the log
           const existingErrorLog = usePipelineStore.getState().currentExecution?.logs.find(
             l => l.nodeId === nodeId
           );
@@ -291,18 +384,17 @@ export const PipelineExecution: React.FC<PipelineExecutionProps> = ({ apiClient 
             data: error.response.data,
           } : undefined);
 
+          // Add detailed error info (request/response) to the log
+          // updateNodeStatus already updated the status, so this just adds details
           if (existingErrorLog) {
             usePipelineStore.getState().updateExecutionLog(nodeId, {
-              status: 'error',
-              completedAt: new Date(),
-              duration,
-              error: error.message || 'Execution failed',
               input: inputDataForLog,
               request: (error as any).request,
               response: errorResponseData,
+              duration, // Ensure duration is set
             });
           } else {
-            // Create new log entry if it doesn't exist
+            // Create new log entry if it doesn't exist (shouldn't happen, but handle it)
             usePipelineStore.getState().addExecutionLog({
               nodeId,
               nodeLabel: node.label,
@@ -316,8 +408,6 @@ export const PipelineExecution: React.FC<PipelineExecutionProps> = ({ apiClient 
               response: errorResponseData,
             });
           }
-
-          updateNodeStatus(nodeId, 'error', error.message || 'Execution failed');
         }
       }
 
@@ -341,10 +431,20 @@ export const PipelineExecution: React.FC<PipelineExecutionProps> = ({ apiClient 
         }
         
         if (currentPipeline) {
-          usePipelineStore.getState().setCurrentPipeline({
+          const updatedPipeline = {
             ...currentPipeline,
             status: 'completed',
-          });
+          };
+          usePipelineStore.getState().setCurrentPipeline(updatedPipeline);
+          
+          // Emit pipeline completed event
+          window.dispatchEvent(new CustomEvent('pipeline-completed', {
+            detail: {
+              pipelineId: currentPipeline.id,
+              status: 'completed',
+              nodes: updatedPipeline.nodes,
+            }
+          }));
         }
       }
     };
@@ -362,7 +462,7 @@ export const PipelineExecution: React.FC<PipelineExecutionProps> = ({ apiClient 
   }
 
   const runningNode = currentPipeline.nodes.find((n) => n.status === 'running');
-  const completedCount = currentPipeline.nodes.filter((n) => n.status === 'success').length;
+  const completedCount = currentPipeline.nodes.filter((n) => n.status === 'completed' || n.status === 'success').length;
   const totalCount = currentPipeline.nodes.length;
 
   return (
@@ -408,7 +508,7 @@ export const PipelineExecution: React.FC<PipelineExecutionProps> = ({ apiClient 
               {node.status === 'running' && (
                 <Loader2 className="w-3 h-3 animate-spin text-blue-600" />
               )}
-              {node.status === 'success' && (
+              {(node.status === 'success' || node.status === 'completed') && (
                 <CheckCircle2 className="w-3 h-3 text-green-600" />
               )}
               {node.status === 'error' && (
