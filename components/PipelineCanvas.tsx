@@ -37,16 +37,21 @@ import {
   Dna,
   Atom,
   MessageSquare,
-  Globe,
-  GripVertical
+  Globe
 } from 'lucide-react';
 
 // Get status class for node border glow
-const getStatusClasses = (status: NodeStatus, isExecuting: boolean) => {
+const getStatusClasses = (status: NodeStatus, isExecuting: boolean, hasResultMetadata?: boolean) => {
+  // If node has result_metadata, treat it as completed even if status is not explicitly set
+  if (hasResultMetadata) {
+    return 'border-green-500 shadow-[0_0_10px_rgba(34,197,94,0.3)]';
+  }
+  
   switch (status) {
     case 'running':
       return 'border-blue-500 shadow-[0_0_15px_rgba(59,130,246,0.5)] animate-pulse-glow';
     case 'success':
+    case 'completed':
       return 'border-green-500 shadow-[0_0_10px_rgba(34,197,94,0.3)]';
     case 'error':
       return 'border-red-500 shadow-[0_0_10px_rgba(239,68,68,0.3)]';
@@ -132,7 +137,28 @@ const InputNode: React.FC<{ data: any }> = ({ data }) => {
   const isExecuting = data.isExecuting;
   const lastClickTimeRef = useRef<number>(0);
   
+  // Determine if node is completed (either by status or by having result_metadata)
+  const isCompleted = status === 'completed' || status === 'success' || (data.result_metadata && Object.keys(data.result_metadata).length > 0);
+  
+  // Debug logging to help troubleshoot
+  React.useEffect(() => {
+    if (data.id && (status === 'completed' || status === 'success' || (data.result_metadata && Object.keys(data.result_metadata).length > 0))) {
+      console.log('[InputNode] Status check:', {
+        nodeId: data.id,
+        status,
+        hasResultMetadata: !!(data.result_metadata && Object.keys(data.result_metadata).length > 0),
+        isCompleted,
+        resultMetadataKeys: data.result_metadata ? Object.keys(data.result_metadata) : []
+      });
+    }
+  }, [data.id, status, data.result_metadata, isCompleted]);
+  
   const getStatusIcon = () => {
+    // Always show checkmark if node has been executed (has result_metadata)
+    if (isCompleted) {
+      return <CheckCircle2 className="w-4 h-4 text-green-500" />;
+    }
+    
     switch (status) {
       case 'running':
         return (
@@ -141,11 +167,13 @@ const InputNode: React.FC<{ data: any }> = ({ data }) => {
             <div className="absolute inset-0 bg-blue-400/30 rounded-full animate-ping" />
           </div>
         );
-      case 'success':
-        return <CheckCircle2 className="w-4 h-4 text-green-500" />;
       case 'error':
         return <XCircle className="w-4 h-4 text-red-500" />;
       default:
+        // Show checkmark if node has result_metadata (completed previously, even if status was reset)
+        if (data.result_metadata && Object.keys(data.result_metadata).length > 0) {
+          return <CheckCircle2 className="w-4 h-4 text-green-500" />;
+        }
         return null;
     }
   };
@@ -167,10 +195,10 @@ const InputNode: React.FC<{ data: any }> = ({ data }) => {
       <div 
         className={`
           px-4 py-3 bg-white border-2 rounded-xl min-w-[220px] relative transition-all duration-300
-          ${getStatusClasses(status, isExecuting)}
+          ${getStatusClasses(status, isExecuting, !!(data.result_metadata && Object.keys(data.result_metadata).length > 0))}
         `}
         onClick={handleClick}
-        onDoubleClick={(e) => {
+        onDoubleClick={() => {
           // Allow double-click to bubble up to React Flow's onNodeDoubleClick
           // Don't stop propagation so the panel opens
         }}
@@ -180,12 +208,12 @@ const InputNode: React.FC<{ data: any }> = ({ data }) => {
           <div className="flex items-center gap-2">
             <div className={`w-8 h-8 rounded-lg flex items-center justify-center ${
               status === 'running' ? 'bg-blue-100' : 
-              status === 'success' ? 'bg-green-100' : 
+              isCompleted ? 'bg-green-100' : 
               status === 'error' ? 'bg-red-100' : 'bg-blue-100'
             }`}>
               <FileInput className={`w-4 h-4 ${
                 status === 'running' ? 'text-blue-600' : 
-                status === 'success' ? 'text-green-600' : 
+                isCompleted ? 'text-green-600' : 
                 status === 'error' ? 'text-red-600' : 'text-blue-600'
               }`} />
             </div>
@@ -196,8 +224,8 @@ const InputNode: React.FC<{ data: any }> = ({ data }) => {
         <div className="text-xs text-gray-500 pl-10">
           {data.config?.filename || 'No file selected'}
         </div>
-        {status === 'success' && (
-          <div className="absolute -top-1 -right-1 w-4 h-4 bg-green-500 rounded-full flex items-center justify-center shadow-lg">
+        {(status === 'success' || status === 'completed' || (data.result_metadata && Object.keys(data.result_metadata).length > 0)) && (
+          <div className="absolute -top-1 -right-1 w-4 h-4 bg-green-500 rounded-full flex items-center justify-center shadow-lg z-10">
             <CheckCircle2 className="w-3 h-3 text-white" />
           </div>
         )}
@@ -217,7 +245,15 @@ const RFdiffusionNode: React.FC<{ data: any }> = ({ data }) => {
   const status = data.status as NodeStatus;
   const isExecuting = data.isExecuting;
   
+  // Determine if node is completed (either by status or by having result_metadata)
+  const isCompleted = status === 'completed' || status === 'success' || (data.result_metadata && Object.keys(data.result_metadata).length > 0);
+  
   const getStatusIcon = () => {
+    // Always show checkmark if node has been executed (has result_metadata)
+    if (isCompleted) {
+      return <CheckCircle2 className="w-4 h-4 text-green-500" />;
+    }
+    
     switch (status) {
       case 'running':
         return (
@@ -226,11 +262,13 @@ const RFdiffusionNode: React.FC<{ data: any }> = ({ data }) => {
             <div className="absolute inset-0 bg-blue-400/30 rounded-full animate-ping" />
           </div>
         );
-      case 'success':
-        return <CheckCircle2 className="w-4 h-4 text-green-500" />;
       case 'error':
         return <XCircle className="w-4 h-4 text-red-500" />;
       default:
+        // Show checkmark if node has result_metadata (completed previously, even if status was reset)
+        if (data.result_metadata && Object.keys(data.result_metadata).length > 0) {
+          return <CheckCircle2 className="w-4 h-4 text-green-500" />;
+        }
         return null;
     }
   };
@@ -240,7 +278,7 @@ const RFdiffusionNode: React.FC<{ data: any }> = ({ data }) => {
       <div 
         className={`
           px-4 py-3 bg-white border-2 rounded-xl min-w-[220px] relative transition-all duration-300
-          ${getStatusClasses(status, isExecuting)}
+          ${getStatusClasses(status, isExecuting, !!(data.result_metadata && Object.keys(data.result_metadata).length > 0))}
         `}
         onClick={(e) => e.stopPropagation()}
       >
@@ -250,12 +288,12 @@ const RFdiffusionNode: React.FC<{ data: any }> = ({ data }) => {
           <div className="flex items-center gap-2">
             <div className={`w-8 h-8 rounded-lg flex items-center justify-center ${
               status === 'running' ? 'bg-blue-100' : 
-              status === 'success' ? 'bg-green-100' : 
+              isCompleted ? 'bg-green-100' : 
               status === 'error' ? 'bg-red-100' : 'bg-purple-100'
             }`}>
               <Sparkles className={`w-4 h-4 ${
                 status === 'running' ? 'text-blue-600' : 
-                status === 'success' ? 'text-green-600' : 
+                isCompleted ? 'text-green-600' : 
                 status === 'error' ? 'text-red-600' : 'text-purple-600'
               }`} />
             </div>
@@ -272,8 +310,8 @@ const RFdiffusionNode: React.FC<{ data: any }> = ({ data }) => {
             </div>
           )}
         </div>
-        {status === 'success' && (
-          <div className="absolute -top-1 -right-1 w-4 h-4 bg-green-500 rounded-full flex items-center justify-center shadow-lg">
+        {(status === 'success' || status === 'completed' || (data.result_metadata && Object.keys(data.result_metadata).length > 0)) && (
+          <div className="absolute -top-1 -right-1 w-4 h-4 bg-green-500 rounded-full flex items-center justify-center shadow-lg z-10">
             <CheckCircle2 className="w-3 h-3 text-white" />
           </div>
         )}
@@ -293,7 +331,15 @@ const ProteinMPNNNode: React.FC<{ data: any }> = ({ data }) => {
   const status = data.status as NodeStatus;
   const isExecuting = data.isExecuting;
   
+  // Determine if node is completed (either by status or by having result_metadata)
+  const isCompleted = status === 'completed' || status === 'success' || (data.result_metadata && Object.keys(data.result_metadata).length > 0);
+  
   const getStatusIcon = () => {
+    // Always show checkmark if node has been executed (has result_metadata)
+    if (isCompleted) {
+      return <CheckCircle2 className="w-4 h-4 text-green-500" />;
+    }
+    
     switch (status) {
       case 'running':
         return (
@@ -302,11 +348,13 @@ const ProteinMPNNNode: React.FC<{ data: any }> = ({ data }) => {
             <div className="absolute inset-0 bg-blue-400/30 rounded-full animate-ping" />
           </div>
         );
-      case 'success':
-        return <CheckCircle2 className="w-4 h-4 text-green-500" />;
       case 'error':
         return <XCircle className="w-4 h-4 text-red-500" />;
       default:
+        // Show checkmark if node has result_metadata (completed previously, even if status was reset)
+        if (data.result_metadata && Object.keys(data.result_metadata).length > 0) {
+          return <CheckCircle2 className="w-4 h-4 text-green-500" />;
+        }
         return null;
     }
   };
@@ -316,7 +364,7 @@ const ProteinMPNNNode: React.FC<{ data: any }> = ({ data }) => {
       <div 
         className={`
           px-4 py-3 bg-white border-2 rounded-xl min-w-[220px] relative transition-all duration-300
-          ${getStatusClasses(status, isExecuting)}
+          ${getStatusClasses(status, isExecuting, !!(data.result_metadata && Object.keys(data.result_metadata).length > 0))}
         `}
         onClick={(e) => e.stopPropagation()}
       >
@@ -326,12 +374,12 @@ const ProteinMPNNNode: React.FC<{ data: any }> = ({ data }) => {
           <div className="flex items-center gap-2">
             <div className={`w-8 h-8 rounded-lg flex items-center justify-center ${
               status === 'running' ? 'bg-blue-100' : 
-              status === 'success' ? 'bg-green-100' : 
+              isCompleted ? 'bg-green-100' : 
               status === 'error' ? 'bg-red-100' : 'bg-green-100'
             }`}>
               <Dna className={`w-4 h-4 ${
                 status === 'running' ? 'text-blue-600' : 
-                status === 'success' ? 'text-green-600' : 
+                isCompleted ? 'text-green-600' : 
                 status === 'error' ? 'text-red-600' : 'text-green-600'
               }`} />
             </div>
@@ -348,8 +396,8 @@ const ProteinMPNNNode: React.FC<{ data: any }> = ({ data }) => {
             </div>
           )}
         </div>
-        {status === 'success' && (
-          <div className="absolute -top-1 -right-1 w-4 h-4 bg-green-500 rounded-full flex items-center justify-center shadow-lg">
+        {(status === 'success' || status === 'completed' || (data.result_metadata && Object.keys(data.result_metadata).length > 0)) && (
+          <div className="absolute -top-1 -right-1 w-4 h-4 bg-green-500 rounded-full flex items-center justify-center shadow-lg z-10">
             <CheckCircle2 className="w-3 h-3 text-white" />
           </div>
         )}
@@ -369,7 +417,15 @@ const AlphaFoldNode: React.FC<{ data: any }> = ({ data }) => {
   const status = data.status as NodeStatus;
   const isExecuting = data.isExecuting;
   
+  // Determine if node is completed (either by status or by having result_metadata)
+  const isCompleted = status === 'completed' || status === 'success' || (data.result_metadata && Object.keys(data.result_metadata).length > 0);
+  
   const getStatusIcon = () => {
+    // Always show checkmark if node has been executed (has result_metadata)
+    if (isCompleted) {
+      return <CheckCircle2 className="w-4 h-4 text-green-500" />;
+    }
+    
     switch (status) {
       case 'running':
         return (
@@ -378,11 +434,13 @@ const AlphaFoldNode: React.FC<{ data: any }> = ({ data }) => {
             <div className="absolute inset-0 bg-blue-400/30 rounded-full animate-ping" />
           </div>
         );
-      case 'success':
-        return <CheckCircle2 className="w-4 h-4 text-green-500" />;
       case 'error':
         return <XCircle className="w-4 h-4 text-red-500" />;
       default:
+        // Show checkmark if node has result_metadata (completed previously, even if status was reset)
+        if (data.result_metadata && Object.keys(data.result_metadata).length > 0) {
+          return <CheckCircle2 className="w-4 h-4 text-green-500" />;
+        }
         return null;
     }
   };
@@ -392,7 +450,7 @@ const AlphaFoldNode: React.FC<{ data: any }> = ({ data }) => {
       <div 
         className={`
           px-4 py-3 bg-white border-2 rounded-xl min-w-[220px] relative transition-all duration-300
-          ${getStatusClasses(status, isExecuting)}
+          ${getStatusClasses(status, isExecuting, !!(data.result_metadata && Object.keys(data.result_metadata).length > 0))}
         `}
         onClick={(e) => e.stopPropagation()}
       >
@@ -402,12 +460,12 @@ const AlphaFoldNode: React.FC<{ data: any }> = ({ data }) => {
           <div className="flex items-center gap-2">
             <div className={`w-8 h-8 rounded-lg flex items-center justify-center ${
               status === 'running' ? 'bg-blue-100' : 
-              status === 'success' ? 'bg-green-100' : 
+              isCompleted ? 'bg-green-100' : 
               status === 'error' ? 'bg-red-100' : 'bg-orange-100'
             }`}>
               <Atom className={`w-4 h-4 ${
                 status === 'running' ? 'text-blue-600' : 
-                status === 'success' ? 'text-green-600' : 
+                isCompleted ? 'text-green-600' : 
                 status === 'error' ? 'text-red-600' : 'text-orange-600'
               }`} />
             </div>
@@ -424,8 +482,8 @@ const AlphaFoldNode: React.FC<{ data: any }> = ({ data }) => {
             </div>
           )}
         </div>
-        {status === 'success' && (
-          <div className="absolute -top-1 -right-1 w-4 h-4 bg-green-500 rounded-full flex items-center justify-center shadow-lg">
+        {(status === 'success' || status === 'completed' || (data.result_metadata && Object.keys(data.result_metadata).length > 0)) && (
+          <div className="absolute -top-1 -right-1 w-4 h-4 bg-green-500 rounded-full flex items-center justify-center shadow-lg z-10">
             <CheckCircle2 className="w-3 h-3 text-white" />
           </div>
         )}
@@ -445,7 +503,15 @@ const MessageInputNode: React.FC<{ data: any }> = ({ data }) => {
   const status = data.status as NodeStatus;
   const isExecuting = data.isExecuting;
   
+  // Determine if node is completed (either by status or by having result_metadata)
+  const isCompleted = status === 'completed' || status === 'success' || (data.result_metadata && Object.keys(data.result_metadata).length > 0);
+  
   const getStatusIcon = () => {
+    // Always show checkmark if node has been executed (has result_metadata)
+    if (isCompleted) {
+      return <CheckCircle2 className="w-4 h-4 text-green-500" />;
+    }
+    
     switch (status) {
       case 'running':
         return (
@@ -454,11 +520,13 @@ const MessageInputNode: React.FC<{ data: any }> = ({ data }) => {
             <div className="absolute inset-0 bg-blue-400/30 rounded-full animate-ping" />
           </div>
         );
-      case 'success':
-        return <CheckCircle2 className="w-4 h-4 text-green-500" />;
       case 'error':
         return <XCircle className="w-4 h-4 text-red-500" />;
       default:
+        // Show checkmark if node has result_metadata (completed previously, even if status was reset)
+        if (data.result_metadata && Object.keys(data.result_metadata).length > 0) {
+          return <CheckCircle2 className="w-4 h-4 text-green-500" />;
+        }
         return null;
     }
   };
@@ -474,7 +542,7 @@ const MessageInputNode: React.FC<{ data: any }> = ({ data }) => {
       <div 
         className={`
           px-4 py-3 bg-white border-2 rounded-xl min-w-[220px] relative transition-all duration-300
-          ${getStatusClasses(status, isExecuting)}
+          ${getStatusClasses(status, isExecuting, !!(data.result_metadata && Object.keys(data.result_metadata).length > 0))}
         `}
         onClick={(e) => e.stopPropagation()}
       >
@@ -483,12 +551,12 @@ const MessageInputNode: React.FC<{ data: any }> = ({ data }) => {
           <div className="flex items-center gap-2">
             <div className={`w-8 h-8 rounded-lg flex items-center justify-center ${
               status === 'running' ? 'bg-blue-100' : 
-              status === 'success' ? 'bg-green-100' : 
+              isCompleted ? 'bg-green-100' : 
               status === 'error' ? 'bg-red-100' : 'bg-green-100'
             }`}>
               <MessageSquare className={`w-4 h-4 ${
                 status === 'running' ? 'text-blue-600' : 
-                status === 'success' ? 'text-green-600' : 
+                isCompleted ? 'text-green-600' : 
                 status === 'error' ? 'text-red-600' : 'text-green-600'
               }`} />
             </div>
@@ -499,8 +567,8 @@ const MessageInputNode: React.FC<{ data: any }> = ({ data }) => {
         <div className="text-xs text-gray-500 pl-10 font-mono">
           {codePreview}
         </div>
-        {status === 'success' && (
-          <div className="absolute -top-1 -right-1 w-4 h-4 bg-green-500 rounded-full flex items-center justify-center shadow-lg">
+        {(status === 'success' || status === 'completed' || (data.result_metadata && Object.keys(data.result_metadata).length > 0)) && (
+          <div className="absolute -top-1 -right-1 w-4 h-4 bg-green-500 rounded-full flex items-center justify-center shadow-lg z-10">
             <CheckCircle2 className="w-3 h-3 text-white" />
           </div>
         )}
@@ -520,7 +588,15 @@ const HttpRequestNode: React.FC<{ data: any }> = ({ data }) => {
   const status = data.status as NodeStatus;
   const isExecuting = data.isExecuting;
   
+  // Determine if node is completed (either by status or by having result_metadata)
+  const isCompleted = status === 'completed' || status === 'success' || (data.result_metadata && Object.keys(data.result_metadata).length > 0);
+  
   const getStatusIcon = () => {
+    // Always show checkmark if node has been executed (has result_metadata)
+    if (isCompleted) {
+      return <CheckCircle2 className="w-4 h-4 text-green-500" />;
+    }
+    
     switch (status) {
       case 'running':
         return (
@@ -529,11 +605,13 @@ const HttpRequestNode: React.FC<{ data: any }> = ({ data }) => {
             <div className="absolute inset-0 bg-blue-400/30 rounded-full animate-ping" />
           </div>
         );
-      case 'success':
-        return <CheckCircle2 className="w-4 h-4 text-green-500" />;
       case 'error':
         return <XCircle className="w-4 h-4 text-red-500" />;
       default:
+        // Show checkmark if node has result_metadata (completed previously, even if status was reset)
+        if (data.result_metadata && Object.keys(data.result_metadata).length > 0) {
+          return <CheckCircle2 className="w-4 h-4 text-green-500" />;
+        }
         return null;
     }
   };
@@ -549,7 +627,7 @@ const HttpRequestNode: React.FC<{ data: any }> = ({ data }) => {
       <div 
         className={`
           px-4 py-3 bg-white border-2 rounded-xl min-w-[220px] relative transition-all duration-300
-          ${getStatusClasses(status, isExecuting)}
+          ${getStatusClasses(status, isExecuting, !!(data.result_metadata && Object.keys(data.result_metadata).length > 0))}
         `}
         onClick={(e) => e.stopPropagation()}
       >
@@ -559,12 +637,12 @@ const HttpRequestNode: React.FC<{ data: any }> = ({ data }) => {
           <div className="flex items-center gap-2">
             <div className={`w-8 h-8 rounded-lg flex items-center justify-center ${
               status === 'running' ? 'bg-blue-100' : 
-              status === 'success' ? 'bg-green-100' : 
+              isCompleted ? 'bg-green-100' : 
               status === 'error' ? 'bg-red-100' : 'bg-blue-100'
             }`}>
               <Globe className={`w-4 h-4 ${
                 status === 'running' ? 'text-blue-600' : 
-                status === 'success' ? 'text-green-600' : 
+                isCompleted ? 'text-green-600' : 
                 status === 'error' ? 'text-red-600' : 'text-blue-600'
               }`} />
             </div>
@@ -585,8 +663,8 @@ const HttpRequestNode: React.FC<{ data: any }> = ({ data }) => {
             </div>
           )}
         </div>
-        {status === 'success' && (
-          <div className="absolute -top-1 -right-1 w-4 h-4 bg-green-500 rounded-full flex items-center justify-center shadow-lg">
+        {(status === 'success' || status === 'completed' || (data.result_metadata && Object.keys(data.result_metadata).length > 0)) && (
+          <div className="absolute -top-1 -right-1 w-4 h-4 bg-green-500 rounded-full flex items-center justify-center shadow-lg z-10">
             <CheckCircle2 className="w-3 h-3 text-white" />
           </div>
         )}
@@ -602,14 +680,16 @@ const HttpRequestNode: React.FC<{ data: any }> = ({ data }) => {
   );
 };
 
-const nodeTypes = {
+// Define nodeTypes outside component to ensure stable reference
+// Using Object.freeze to prevent accidental mutations
+const nodeTypes = Object.freeze({
   input_node: InputNode,
   rfdiffusion_node: RFdiffusionNode,
   proteinmpnn_node: ProteinMPNNNode,
   alphafold_node: AlphaFoldNode,
   message_input_node: MessageInputNode,
   http_request_node: HttpRequestNode,
-};
+});
 
 export const PipelineCanvas: React.FC = () => {
   const {
@@ -630,6 +710,9 @@ export const PipelineCanvas: React.FC = () => {
     isSaving,
     setCurrentPipeline,
   } = usePipelineStore();
+
+  // Memoize nodeTypes to ensure stable reference for React Flow
+  const memoizedNodeTypes = useMemo(() => nodeTypes, []);
 
   const [selectedNodeId, setSelectedNodeId] = React.useState<string | null>(null);
   const [showPalette, setShowPalette] = React.useState(false);
@@ -835,6 +918,7 @@ export const PipelineCanvas: React.FC = () => {
         config: node.config,
         status: node.status,
         error: node.error,
+        result_metadata: node.result_metadata,
         isExecuting,
         onUpdateLabel: (nodeId: string, newLabel: string) => {
           updateNode(nodeId, { label: newLabel });
@@ -863,7 +947,7 @@ export const PipelineCanvas: React.FC = () => {
       // Check if source node is running or complete
       const sourceNode = currentPipeline?.nodes.find(n => n.id === edge.source);
       const isSourceRunning = sourceNode?.status === 'running';
-      const isSourceComplete = sourceNode?.status === 'success';
+      const isSourceComplete = sourceNode?.status === 'success' || sourceNode?.status === 'completed';
       
       return {
         id: `e${edge.source}-${edge.target}`,
@@ -1182,7 +1266,7 @@ export const PipelineCanvas: React.FC = () => {
                   onConnect={onConnect}
                   onNodeClick={onNodeClick}
                   onNodeDoubleClick={onNodeDoubleClick}
-                  nodeTypes={nodeTypes}
+                  nodeTypes={memoizedNodeTypes}
                   fitView
                   className="bg-[#1a1a2e]"
                 >
@@ -1231,7 +1315,7 @@ export const PipelineCanvas: React.FC = () => {
                   onConnect={onConnect}
                   onNodeClick={onNodeClick}
                   onNodeDoubleClick={onNodeDoubleClick}
-                  nodeTypes={nodeTypes}
+                  nodeTypes={memoizedNodeTypes}
                   fitView
                   className="bg-[#1a1a2e]"
                   nodesDraggable={!isExecuting}

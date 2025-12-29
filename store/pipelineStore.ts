@@ -70,6 +70,7 @@ interface PipelineState {
   setCurrentPipeline: (pipeline: Pipeline | null) => void;
   setGhostBlueprint: (blueprint: PipelineBlueprint | null) => void;
   approveBlueprint: () => void;
+  approveBlueprintWithSelection: (selectedNodeIds: string[], nodeConfigs: Record<string, Record<string, any>>) => Pipeline | null;
   rejectBlueprint: () => void;
   addNode: (node: PipelineNode) => void;
   updateNode: (nodeId: string, updates: Partial<PipelineNode>) => void;
@@ -165,7 +166,10 @@ export const usePipelineStore = create<PipelineState>()(
       
       approveBlueprint: () => {
         const { ghostBlueprint } = get();
-        if (!ghostBlueprint) return;
+        if (!ghostBlueprint) {
+          console.warn('[PipelineStore] approveBlueprint called but ghostBlueprint is null');
+          return;
+        }
         
         const nodes: PipelineNode[] = ghostBlueprint.nodes.map((node, index) => ({
           ...node,
@@ -184,13 +188,71 @@ export const usePipelineStore = create<PipelineState>()(
         };
         
         const { savedPipelines } = get();
-        // Add to saved pipelines list (but won't be persisted)
+        // Add to saved pipelines list (will be persisted via persist middleware)
+        const updatedSavedPipelines = [...savedPipelines, pipeline];
+        console.log('[PipelineStore] approveBlueprint: Adding pipeline to savedPipelines', {
+          pipelineId: pipeline.id,
+          pipelineName: pipeline.name,
+          nodeCount: pipeline.nodes.length,
+          currentSavedCount: savedPipelines.length,
+          newSavedCount: updatedSavedPipelines.length,
+        });
         set({ 
           currentPipeline: pipeline,
           ghostBlueprint: null,
-          savedPipelines: [...savedPipelines, pipeline],
+          savedPipelines: updatedSavedPipelines,
         });
         debouncedAutoSave(get, set);
+      },
+      
+      approveBlueprintWithSelection: (selectedNodeIds: string[], nodeConfigs: Record<string, Record<string, any>>) => {
+        const { ghostBlueprint } = get();
+        if (!ghostBlueprint) {
+          console.warn('[PipelineStore] approveBlueprintWithSelection called but ghostBlueprint is null');
+          return null;
+        }
+        
+        // Filter nodes to only selected ones
+        const selectedNodes = ghostBlueprint.nodes.filter(node => selectedNodeIds.includes(node.id));
+        
+        // Create nodes with updated configs
+        const nodes: PipelineNode[] = selectedNodes.map((node, index) => ({
+          ...node,
+          config: { ...node.config, ...(nodeConfigs[node.id] || {}) },
+          status: 'idle' as NodeStatus,
+          position: { x: 100 + (index % 3) * 300, y: 100 + Math.floor(index / 3) * 200 },
+        }));
+        
+        // Filter edges to only include edges between selected nodes
+        const selectedNodeIdSet = new Set(selectedNodeIds);
+        const edges = ghostBlueprint.edges.filter(
+          edge => selectedNodeIdSet.has(edge.source) && selectedNodeIdSet.has(edge.target)
+        );
+        
+        const pipeline: Pipeline = {
+          id: `pipeline_${Date.now()}`,
+          name: UNNAMED_PIPELINE_NAME,
+          nodes,
+          edges,
+          createdAt: new Date(),
+          updatedAt: new Date(),
+          status: 'draft',
+        };
+        
+        const { savedPipelines } = get();
+        const updatedSavedPipelines = [...savedPipelines, pipeline];
+        console.log('[PipelineStore] approveBlueprintWithSelection: Adding pipeline', {
+          pipelineId: pipeline.id,
+          selectedNodeCount: nodes.length,
+          totalNodeCount: ghostBlueprint.nodes.length,
+        });
+        set({ 
+          currentPipeline: pipeline,
+          ghostBlueprint: null,
+          savedPipelines: updatedSavedPipelines,
+        });
+        debouncedAutoSave(get, set);
+        return pipeline;
       },
       
       rejectBlueprint: () => set({ ghostBlueprint: null }),
@@ -466,7 +528,7 @@ export const usePipelineStore = create<PipelineState>()(
             status: 'running',
             nodes: currentPipeline.nodes.map((node) => ({
               ...node,
-              status: node.status === 'success' ? 'success' : 'pending',
+              status: (node.status === 'success' || node.status === 'completed') ? node.status : 'pending',
             })),
           },
         });
@@ -571,41 +633,32 @@ export const usePipelineStore = create<PipelineState>()(
         if (error) {
           updates.error = error;
         }
-        if (status === 'success') {
+        // Don't overwrite result_metadata if it already exists - it will be updated separately
+        // Only initialize it if it doesn't exist and status is completed/success
+        if ((status === 'success' || status === 'completed') && !node?.result_metadata) {
           updates.result_metadata = {}; // Will be populated by execution
         }
         
-        // Update execution logs
+        // Always update execution logs to keep them in sync with node status
+        // This ensures the execution panel reflects real-time node execution status
         if (currentExecution && node) {
           const existingLogIndex = currentExecution.logs.findIndex(l => l.nodeId === nodeId);
           const now = new Date();
           
-          if (status === 'running' && existingLogIndex === -1) {
-            // Add new running log
-            const newLog: ExecutionLogEntry = {
-              nodeId,
-              nodeLabel: node.label,
-              nodeType: node.type,
-              status: 'running',
-              startedAt: now,
-            };
-            set({
-              currentExecution: {
-                ...currentExecution,
-                logs: [...currentExecution.logs, newLog],
-              },
-            });
-          } else if (existingLogIndex >= 0) {
-            // Update existing log
+          if (existingLogIndex >= 0) {
+            // Update existing log - preserve all existing fields (request, response, input, output, etc.)
+            // and only update status-related fields
             const existingLog = currentExecution.logs[existingLogIndex];
             const updatedLog: ExecutionLogEntry = {
-              ...existingLog,
+              ...existingLog, // Preserve all existing fields (request, response, input, output, etc.)
               status,
-              error,
-              completedAt: (status === 'success' || status === 'error') ? now : undefined,
-              duration: existingLog.startedAt && (status === 'success' || status === 'error')
-                ? now.getTime() - new Date(existingLog.startedAt).getTime()
+              error: error || existingLog.error, // Update error if provided, otherwise keep existing
+              completedAt: (status === 'success' || status === 'error') 
+                ? (existingLog.completedAt || now) // Preserve existing completedAt if already set
                 : undefined,
+              duration: existingLog.startedAt && (status === 'success' || status === 'error')
+                ? (existingLog.duration || now.getTime() - new Date(existingLog.startedAt).getTime())
+                : existingLog.duration, // Preserve existing duration if not completed
             };
             const updatedLogs = [...currentExecution.logs];
             updatedLogs[existingLogIndex] = updatedLog;
@@ -613,6 +666,21 @@ export const usePipelineStore = create<PipelineState>()(
               currentExecution: {
                 ...currentExecution,
                 logs: updatedLogs,
+              },
+            });
+          } else if (status === 'running' || status === 'pending') {
+            // Add new log if it doesn't exist and node is starting execution
+            const newLog: ExecutionLogEntry = {
+              nodeId,
+              nodeLabel: node.label,
+              nodeType: node.type,
+              status,
+              startedAt: now,
+            };
+            set({
+              currentExecution: {
+                ...currentExecution,
+                logs: [...currentExecution.logs, newLog],
               },
             });
           }

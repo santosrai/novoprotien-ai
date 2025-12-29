@@ -1573,7 +1573,7 @@ return {
                       <div className="flex items-center justify-between mb-2">
                         <span className="text-xs font-medium text-gray-400">Status</span>
                         <span className={`text-xs font-semibold ${
-                          nodeLog.status === 'success' ? 'text-green-400' :
+                          (nodeLog.status === 'success' || nodeLog.status === 'completed') ? 'text-green-400' :
                           nodeLog.status === 'error' ? 'text-red-400' :
                           nodeLog.status === 'running' ? 'text-blue-400' :
                           'text-gray-400'
@@ -1886,7 +1886,7 @@ return {
           <div className="px-4 py-3 border-b border-gray-700/50 bg-[#1e1e32] flex items-center justify-between">
             <div className="flex items-center gap-2">
               <h3 className="text-sm font-semibold text-gray-200">OUTPUT</h3>
-              {nodeLog && nodeLog.status === 'success' && (
+              {nodeLog && (nodeLog.status === 'success' || nodeLog.status === 'completed') && (
                 <>
                   <div className="w-4 h-4 rounded-full bg-green-500 flex items-center justify-center">
                     <CheckCircle2 className="w-3 h-3 text-white" />

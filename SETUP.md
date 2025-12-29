@@ -114,3 +114,4 @@ Check that `dist/` folder is created with:
 - `.d.ts` files (TypeScript declarations)
 - `style.css` file
 
+

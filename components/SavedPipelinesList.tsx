@@ -1,12 +1,20 @@
 import React, { useState } from 'react';
 import { usePipelineStore } from '../store/pipelineStore';
 import { Pipeline } from '../types/index';
-import { Trash2, Play, Edit2, FolderOpen, Clock, Plus } from 'lucide-react';
+import { Trash2, Edit2, FolderOpen, Plus } from 'lucide-react';
 
 export const SavedPipelinesList: React.FC = () => {
   const { savedPipelines, loadPipeline, deletePipeline, currentPipeline, setCurrentPipeline } = usePipelineStore();
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editName, setEditName] = useState('');
+
+  // Debug: Log when savedPipelines changes
+  React.useEffect(() => {
+    console.log('[SavedPipelinesList] savedPipelines updated:', {
+      count: savedPipelines.length,
+      pipelines: savedPipelines.map(p => ({ id: p.id, name: p.name })),
+    });
+  }, [savedPipelines]);
 
   const handleLoad = (pipeline: Pipeline) => {
     loadPipeline(pipeline.id);
@@ -60,19 +68,6 @@ export const SavedPipelinesList: React.FC = () => {
     e.stopPropagation();
     setEditingId(null);
     setEditName('');
-  };
-
-  const getStatusColor = (status: Pipeline['status']) => {
-    switch (status) {
-      case 'running':
-        return 'bg-blue-500/20 text-blue-400 border-blue-500/30';
-      case 'completed':
-        return 'bg-green-500/20 text-green-400 border-green-500/30';
-      case 'failed':
-        return 'bg-red-500/20 text-red-400 border-red-500/30';
-      default:
-        return 'bg-gray-500/20 text-gray-400 border-gray-500/30';
-    }
   };
 
   return (
