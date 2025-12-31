@@ -433,7 +433,7 @@ export const PipelineExecution: React.FC<PipelineExecutionProps> = ({ apiClient 
         if (currentPipeline) {
           const updatedPipeline = {
             ...currentPipeline,
-            status: 'completed',
+            status: 'completed' as const,
           };
           usePipelineStore.getState().setCurrentPipeline(updatedPipeline);
           

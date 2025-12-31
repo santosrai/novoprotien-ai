@@ -532,6 +532,19 @@ export const usePipelineStore = create<PipelineState>()(
             })),
           },
         });
+        
+        // Emit pipeline started event so ChatPanel can create initial progress message
+        window.dispatchEvent(new CustomEvent('pipeline-started', {
+          detail: {
+            pipelineId: currentPipeline.id,
+            status: 'running',
+            nodes: currentPipeline.nodes.map(node => ({
+              id: node.id,
+              label: node.label,
+              status: (node.status === 'success' || node.status === 'completed') ? node.status : 'pending',
+            })),
+          }
+        }));
       },
       
       executeSingleNode: (nodeId: string) => {
