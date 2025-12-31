@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { ErrorDisplay } from './ErrorDisplay';
 import { RFdiffusionErrorHandler } from '../utils/errorHandler';
-import { PDBFileUpload } from './PDBFileUpload';
+import { AttachmentMenu } from './AttachmentMenu';
 import { useAppStore } from '../stores/appStore';
 import { useChatHistoryStore } from '../stores/chatHistoryStore';
 
@@ -435,7 +435,7 @@ export const RFdiffusionDialog: React.FC<RFdiffusionDialogProps> = ({
             <label className="block text-sm font-medium text-gray-700 mb-2">
               Or Upload PDB File
             </label>
-            <PDBFileUpload
+            <AttachmentMenu
               onFileUploaded={handleFileUploaded}
               onError={setUploadError}
               currentFile={uploadedFile ? {

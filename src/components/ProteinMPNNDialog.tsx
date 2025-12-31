@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { Loader2, AlertCircle, UploadCloud, FileText } from 'lucide-react';
 import { api } from '../utils/api';
-import { PDBFileUpload } from './PDBFileUpload';
+import { AttachmentMenu } from './AttachmentMenu';
 import { useChatHistoryStore } from '../stores/chatHistoryStore';
 
 interface ProteinMPNNParameters {
@@ -297,7 +297,7 @@ export const ProteinMPNNDialog: React.FC<ProteinMPNNDialogProps> = ({
               {sourceType === 'upload' && (
                 <div className="space-y-4">
                   <div className="flex items-center space-x-3">
-                    <PDBFileUpload
+                    <AttachmentMenu
                       onFileUploaded={handleFileUploaded}
                       onError={setUploadError}
                       currentFile={selectedUpload ? {

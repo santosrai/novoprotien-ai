@@ -16,13 +16,18 @@ import { AgentSelector } from './AgentSelector';
 import { ModelSelector } from './ModelSelector';
 import { useAgentSettings } from '../stores/settingsStore';
 import { ThinkingProcessDisplay } from './ThinkingProcessDisplay';
-import { PDBFileUpload } from './PDBFileUpload';
+import { AttachmentMenu } from './AttachmentMenu';
+import { PipelineSelectionModal } from './PipelineSelectionModal';
+import { PipelineEditDialog } from './PipelineEditDialog';
 import ReactMarkdown from 'react-markdown';
 import { generatePDBSummary } from '../utils/pdbUtils';
 import { usePipelineStore, PipelineBlueprint } from '../components/pipeline-canvas';
 import { PipelineBlueprintDisplay } from './PipelineBlueprintDisplay';
 import { PipelineProgressDisplay } from './PipelineProgressDisplay';
 import { NodeParameterConfig } from './NodeParameterConfig';
+import { Pipeline } from './pipeline-canvas/types';
+import { PipelineContextPill } from './PipelineContextPill';
+import { extractStructureMetadata } from '../utils/structureMetadata';
 
 // Extended message metadata for structured agent results
 // Note: Message interface now includes thinkingProcess and uploadedFile, so ExtendedMessage is mainly for type compatibility
@@ -70,7 +75,7 @@ interface ExtendedMessage extends Message {
       status: any;
       result?: any;
     }>;
-    progress: { completed: number; total: number };
+    progress: { completed: number; total: number; percent: number };
     pipelineLink?: string;
   };
 }
@@ -258,7 +263,7 @@ const createProteinMPNNError = (
 
 export const ChatPanel: React.FC = () => {
   const { plugin, currentCode, setCurrentCode, setIsExecuting, setActivePane, setPendingCodeToRun, setViewerVisible, setCurrentStructureOrigin, currentStructureOrigin } = useAppStore();
-  const { setGhostBlueprint, approveBlueprintWithSelection, startExecution } = usePipelineStore();
+  const { setGhostBlueprint, approveBlueprintWithSelection, startExecution, currentPipeline } = usePipelineStore();
   const lastLoadedPdb = useAppStore(state => state.lastLoadedPdb);
   const selections = useAppStore(state => state.selections);
   const removeSelection = useAppStore(state => state.removeSelection);
@@ -457,8 +462,80 @@ export const ChatPanel: React.FC = () => {
 
   // Listen for pipeline execution events
   useEffect(() => {
+    const handlePipelineStarted = (event: CustomEvent) => {
+      const { pipelineId } = event.detail;
+      console.log('[Pipeline] Pipeline started:', { pipelineId });
+      
+      // Create initial pipeline result message when execution starts
+      // This ensures the message exists before any node completion events fire
+      if (activeSession) {
+        const existingMsgIndex = activeSession.messages.findIndex(
+          (msg: ExtendedMessage) => 
+            msg.pipelineResult?.pipelineId === pipelineId
+        );
+        
+        // Only create if message doesn't already exist
+        if (existingMsgIndex < 0) {
+          const { currentPipeline } = usePipelineStore.getState();
+          if (currentPipeline && currentPipeline.id === pipelineId) {
+            const initialNodes = currentPipeline.nodes.map(node => ({
+              id: node.id,
+              label: node.label,
+              status: node.status,
+              result: node.result_metadata,
+              error: node.error,
+            }));
+            
+            const progress = {
+              completed: 0,
+              total: initialNodes.length,
+              percent: 0,
+            };
+            
+            const pipelineResult = {
+              pipelineId,
+              status: 'running' as const,
+              nodes: initialNodes,
+              progress,
+              pipelineLink: `/pipeline?pipelineId=${pipelineId}`,
+            };
+            
+            // Try to find the blueprint message that triggered this execution
+            // and append the result to it, otherwise create a new message
+            const blueprintMsgIndex = activeSession.messages.findIndex(
+              (msg: ExtendedMessage) => 
+                msg.pipelineBlueprint && 
+                msg.pipelineBlueprint.nodes.some(n => 
+                  currentPipeline.nodes.some(cp => cp.id === n.id)
+                )
+            );
+            
+            if (blueprintMsgIndex >= 0) {
+              // Append pipeline result to the blueprint message
+              const updatedMessages = activeSession.messages.map((msg, idx) =>
+                idx === blueprintMsgIndex
+                  ? { ...msg, pipelineResult } as ExtendedMessage
+                  : msg
+              );
+              updateMessages(updatedMessages);
+            } else {
+              // Create new message if no blueprint message found
+              const newMsg: ExtendedMessage = {
+                id: uuidv4(),
+                content: `Pipeline execution started: ${progress.total} node(s)`,
+                type: 'ai',
+                timestamp: new Date(),
+                pipelineResult,
+              };
+              addMessage(newMsg);
+            }
+          }
+        }
+      }
+    };
+
     const handlePipelineNodeCompleted = (event: CustomEvent) => {
-      const { pipelineId, nodeId, status, result } = event.detail;
+      const { pipelineId, nodeId, status } = event.detail;
       console.log('[Pipeline] Node completed:', { pipelineId, nodeId, status });
       
       // Find or create pipeline result message
@@ -501,6 +578,7 @@ export const ChatPanel: React.FC = () => {
             );
             updateMessages(updatedMessages);
           } else {
+            // Fallback: create message if it doesn't exist (shouldn't happen if pipeline-started worked)
             const newMsg: ExtendedMessage = {
               id: uuidv4(),
               content: `Pipeline execution progress: ${progress.completed}/${progress.total} nodes completed`,
@@ -558,10 +636,12 @@ export const ChatPanel: React.FC = () => {
       }
     };
 
+    window.addEventListener('pipeline-started', handlePipelineStarted as EventListener);
     window.addEventListener('pipeline-node-completed', handlePipelineNodeCompleted as EventListener);
     window.addEventListener('pipeline-completed', handlePipelineCompleted as EventListener);
 
     return () => {
+      window.removeEventListener('pipeline-started', handlePipelineStarted as EventListener);
       window.removeEventListener('pipeline-node-completed', handlePipelineNodeCompleted as EventListener);
       window.removeEventListener('pipeline-completed', handlePipelineCompleted as EventListener);
     };
@@ -585,6 +665,15 @@ export const ChatPanel: React.FC = () => {
   const [showRFdiffusionDialog, setShowRFdiffusionDialog] = useState(false);
   const [rfdiffusionData, setRfdiffusionData] = useState<any>(null);
   const rfdiffusionProgress = useRFdiffusionProgress();
+
+  // Pipeline selection modal state
+  const [showPipelineSelectionModal, setShowPipelineSelectionModal] = useState(false);
+  
+  // Pipeline edit state
+  const [showPipelineEditDialog, setShowPipelineEditDialog] = useState(false);
+  const [editingPipeline, setEditingPipeline] = useState<Pipeline | null>(null);
+  const [editingNodeId, setEditingNodeId] = useState<string | null>(null);
+  const [isEditingFromPipeline, setIsEditingFromPipeline] = useState(false);
 
   // Agent and model selection state
   const [agents, setAgents] = useState<Agent[]>([]);
@@ -1424,7 +1513,7 @@ try {
   const handleBlueprintApprove = (messageId: string, selectedNodeIds: string[]) => {
     if (!activeSession) return;
     
-    const message = activeSession.messages.find(m => m.id === messageId);
+    const message = activeSession.messages.find(m => m.id === messageId) as ExtendedMessage | undefined;
     if (!message || !message.pipelineBlueprint) return;
     
     // Set ghost blueprint in store (needed for approveBlueprintWithSelection)
@@ -1432,8 +1521,8 @@ try {
     
     // Sort selected node IDs so input nodes come first
     const sortedNodeIds = [...selectedNodeIds].sort((a, b) => {
-      const nodeA = message.pipelineBlueprint.nodes.find(n => n.id === a);
-      const nodeB = message.pipelineBlueprint.nodes.find(n => n.id === b);
+      const nodeA = message.pipelineBlueprint!.nodes.find((n: any) => n.id === a);
+      const nodeB = message.pipelineBlueprint!.nodes.find((n: any) => n.id === b);
       if (nodeA?.type === 'input_node' && nodeB?.type !== 'input_node') return -1;
       if (nodeA?.type !== 'input_node' && nodeB?.type === 'input_node') return 1;
       return 0;
@@ -1493,10 +1582,10 @@ try {
     updateMessages(updatedMessages);
     
     // Check if all nodes are configured
-    const message = activeSession.messages.find(m => m.id === messageId);
+    const message = activeSession.messages.find(m => m.id === messageId) as ExtendedMessage | undefined;
     if (message && message.pipelineBlueprint) {
       const selectedNodes = message.pipelineBlueprint.nodes.filter(
-        n => configState.selectedNodeIds.includes(n.id)
+        (n: any) => configState.selectedNodeIds.includes(n.id)
       );
       
       if (nextNodeIndex >= selectedNodes.length) {
@@ -1514,6 +1603,55 @@ try {
   
   const handleRFdiffusionConfirm = async (parameters: any) => {
     setShowRFdiffusionDialog(false);
+    
+    // Check if we're editing a pipeline node
+    if (isEditingFromPipeline && editingNodeId && editingPipeline) {
+      console.log('[Pipeline Edit] Updating RFdiffusion node config:', editingNodeId);
+      
+      // Update the node config in the pipeline
+      const updatedConfig = {
+        contigs: parameters.contigs,
+        hotspot_res: Array.isArray(parameters.hotspot_res) 
+          ? parameters.hotspot_res.join(', ')
+          : parameters.hotspot_res,
+        diffusion_steps: parameters.diffusion_steps,
+        design_mode: parameters.design_mode,
+        pdb_id: parameters.pdb_id || '',
+        uploadId: parameters.uploadId,
+        file_id: parameters.uploadId,
+      };
+      
+      // Update node in pipeline store
+      usePipelineStore.getState().updateNode(editingNodeId, {
+        config: updatedConfig,
+      });
+      
+      // Reset editing state
+      setEditingNodeId(null);
+      setIsEditingFromPipeline(false);
+      
+      // Ask user to run execution
+      const executionMessage: ExtendedMessage = {
+        id: uuidv4(),
+        content: `✅ Updated RFdiffusion node parameters in pipeline "${editingPipeline.name}".\n\nWould you like to run the pipeline now?`,
+        type: 'ai',
+        timestamp: new Date(),
+      };
+      addMessage(executionMessage);
+      
+      // Add a follow-up message with instructions to run
+      setTimeout(() => {
+        const followUpMessage: ExtendedMessage = {
+          id: uuidv4(),
+          content: '✅ Pipeline updated! You can run it by:\n\n1. **Type "run pipeline"** in the chat\n2. Or open the pipeline editor and click "Run All"\n\nWould you like to run it now?',
+          type: 'ai',
+          timestamp: new Date(),
+        };
+        addMessage(followUpMessage);
+      }, 500);
+      
+      return; // Exit early, don't create a new job
+    }
     
     const jobId = `rf_${Date.now()}`;
     console.log('🚀 [RFdiffusion] User confirmed design request');
@@ -1793,6 +1931,51 @@ try {
     e.preventDefault();
     if (!input.trim() || isLoading) return;
 
+    // Check for pipeline execution commands
+    const lowerInput = input.toLowerCase().trim();
+    if (lowerInput === 'run pipeline' || lowerInput === 'execute pipeline' || lowerInput === 'run' || lowerInput.startsWith('run pipeline')) {
+      const { currentPipeline, startExecution } = usePipelineStore.getState();
+      if (currentPipeline) {
+        // Add user message
+        addMessage({
+          type: 'user',
+          content: input,
+          id: uuidv4(),
+          timestamp: new Date(),
+        });
+        
+        // Start execution
+        startExecution();
+        
+        // Add confirmation message
+        addMessage({
+          type: 'ai',
+          content: `🚀 Starting pipeline execution: "${currentPipeline.name}"\n\nExecution has begun. You can monitor progress in the pipeline editor.`,
+          id: uuidv4(),
+          timestamp: new Date(),
+        });
+        
+        setInput('');
+        return;
+      } else {
+        // No pipeline to run
+        addMessage({
+          type: 'user',
+          content: input,
+          id: uuidv4(),
+          timestamp: new Date(),
+        });
+        addMessage({
+          type: 'ai',
+          content: 'No pipeline is currently loaded. Please select or create a pipeline first.',
+          id: uuidv4(),
+          timestamp: new Date(),
+        });
+        setInput('');
+        return;
+      }
+    }
+
     // Upload pending file if one exists
     let fileUploadResult: { file_id: string } | null = null;
     let uploadedFileInfo: {
@@ -1957,10 +2140,31 @@ try {
       let thinkingProcess: ExtendedMessage['thinkingProcess'] | undefined = undefined;
       let messageAlreadyUpdated = false; // Track if message was updated during streaming
       
+      // Extract structure metadata if viewer is visible and has structure
+      let structureMetadata = null;
+      if (plugin && isViewerVisible) {
+        try {
+          structureMetadata = await extractStructureMetadata(plugin);
+          console.log('[ChatPanel] Extracted structure metadata:', structureMetadata);
+        } catch (error) {
+          console.warn('[ChatPanel] Failed to extract structure metadata:', error);
+        }
+      }
+      
+      // Get current pipeline for context
+      const currentPipelineForContext = usePipelineStore.getState().currentPipeline;
+      console.log('[ChatPanel] Pipeline context check:', {
+        hasPipeline: !!currentPipelineForContext,
+        pipelineId: currentPipelineForContext?.id,
+        pipelineName: currentPipelineForContext?.name,
+        nodeCount: currentPipelineForContext?.nodes?.length
+      });
+      
       const payload = {
         input: text,
         currentCode,
         currentStructureOrigin: currentStructureOrigin || undefined, // Include structure origin context
+        structureMetadata: structureMetadata, // Include structure metadata for biological context
         history: messages.slice(-6).map(m => {
           const base: any = { type: m.type, content: m.content };
           
@@ -1990,6 +2194,23 @@ try {
         agentId: agentSettings.selectedAgentId || undefined, // Only send if manually selected
         model: agentSettings.selectedModel || undefined, // Only send if manually selected
         uploadedFileId: fileUploadResult?.file_id || undefined, // Only include file ID when file is uploaded with this message
+        // Include pipeline context if pipeline is active
+        pipelineId: currentPipelineForContext?.id || undefined,
+        pipelineContext: currentPipelineForContext ? {
+          id: currentPipelineForContext.id,
+          name: currentPipelineForContext.name,
+          nodeCount: currentPipelineForContext.nodes.length,
+          edgeCount: currentPipelineForContext.edges.length,
+          status: currentPipelineForContext.status,
+          nodes: currentPipelineForContext.nodes.map(node => ({
+            id: node.id,
+            type: node.type,
+            label: node.label,
+            status: node.status,
+            config: node.config,
+          })),
+          edges: currentPipelineForContext.edges,
+        } : undefined,
       };
       console.log('[AI] route:request', payload);
       console.log('[DEBUG] currentCode length:', currentCode?.length || 0);
@@ -2921,6 +3142,13 @@ try {
             </div>
           )}
           
+          {/* Pipeline Context Pill */}
+          {currentPipeline && (
+            <div className="px-3 py-2">
+              <PipelineContextPill />
+            </div>
+          )}
+          
           {/* Large text input area */}
           <div className="relative">
             <textarea
@@ -2961,8 +3189,8 @@ try {
               <div className="flex-1" />
               
               <div className="flex items-center gap-2 pointer-events-auto">
-                {/* Upload PDB file button */}
-                <PDBFileUpload
+                {/* Attachment menu button */}
+                <AttachmentMenu
                   onFileSelected={(file) => {
                     // Store file locally, don't upload yet
                     setPendingFile(file);
@@ -2978,6 +3206,9 @@ try {
                   disabled={isLoading}
                   pendingFile={pendingFile}
                   sessionId={activeSessionId}
+                  onPipelineSelect={() => {
+                    setShowPipelineSelectionModal(true);
+                  }}
                 />
                 
                 {/* Microphone button */}
@@ -3072,6 +3303,100 @@ try {
         onConfirm={handleProteinMPNNConfirm}
         initialData={proteinmpnnData}
       />
+
+      <PipelineSelectionModal
+        isOpen={showPipelineSelectionModal}
+        onClose={() => setShowPipelineSelectionModal(false)}
+        onPipelineSelect={(pipelineId) => {
+          console.log('[ChatPanel] Pipeline selected for editing:', pipelineId);
+          const { savedPipelines } = usePipelineStore.getState();
+          const pipeline = savedPipelines.find(p => p.id === pipelineId);
+          if (pipeline) {
+            setEditingPipeline(pipeline);
+            setShowPipelineEditDialog(true);
+            setIsEditingFromPipeline(true);
+            // Load pipeline to canvas
+            usePipelineStore.getState().loadPipeline(pipelineId);
+          }
+        }}
+      />
+      
+      {/* Pipeline Edit Dialog */}
+      {editingPipeline && (
+        <PipelineEditDialog
+          isOpen={showPipelineEditDialog}
+          onClose={() => {
+            setShowPipelineEditDialog(false);
+            setEditingPipeline(null);
+            setIsEditingFromPipeline(false);
+          }}
+          pipeline={editingPipeline}
+          onNodeSelected={(nodeId, nodeType) => {
+            console.log('[ChatPanel] Node selected for editing:', nodeId, nodeType);
+            setEditingNodeId(nodeId);
+            
+            // Find the node in the pipeline
+            const node = editingPipeline.nodes.find(n => n.id === nodeId);
+            if (!node) return;
+            
+            // Show appropriate dialog based on node type
+            if (nodeType === 'rfdiffusion_node') {
+              // Extract current config from node
+              const currentConfig = node.config || {};
+              const rfdiffusionParams = {
+                contigs: currentConfig.contigs || 'A50-150',
+                hotspot_res: typeof currentConfig.hotspot_res === 'string' 
+                  ? currentConfig.hotspot_res.split(',').map(h => h.trim()).filter(h => h)
+                  : (currentConfig.hotspot_res || []),
+                diffusion_steps: currentConfig.diffusion_steps || 15,
+                design_mode: currentConfig.design_mode || 'unconditional',
+                pdb_id: currentConfig.pdb_id || '',
+                uploadId: currentConfig.uploadId || currentConfig.file_id,
+              };
+              
+              setRfdiffusionData({
+                parameters: rfdiffusionParams,
+                design_info: {
+                  mode: rfdiffusionParams.design_mode,
+                  template: rfdiffusionParams.pdb_id || 'None',
+                  contigs: rfdiffusionParams.contigs,
+                  hotspots: rfdiffusionParams.hotspot_res.length,
+                  complexity: rfdiffusionParams.diffusion_steps <= 10 ? 'simple' : rfdiffusionParams.diffusion_steps <= 15 ? 'medium' : 'complex',
+                },
+                message: 'Edit RFdiffusion parameters',
+              });
+              setShowRFdiffusionDialog(true);
+            } else if (nodeType === 'input_node') {
+              // For input node, we could show a file selector or just update directly
+              // For now, let's show a simple message asking what to change
+              const message = `What would you like to change about the input node "${node.label}"?\n\nCurrent file: ${node.config?.filename || 'None'}`;
+              // Add user message
+              addMessage({
+                type: 'user',
+                content: `Edit input node in pipeline ${editingPipeline.name}`,
+                id: uuidv4(),
+                timestamp: new Date(),
+              });
+              // Add assistant response
+              addMessage({
+                type: 'ai',
+                content: message,
+                id: uuidv4(),
+                timestamp: new Date(),
+              });
+            } else {
+              // For other node types, show a message
+              const message = `Editing ${nodeType} node "${node.label}". Parameter editing for this node type will be available soon.`;
+              addMessage({
+                type: 'ai',
+                content: message,
+                id: uuidv4(),
+                timestamp: new Date(),
+              });
+            }
+          }}
+        />
+      )}
     </div>
   );
 };

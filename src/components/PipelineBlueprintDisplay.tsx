@@ -104,7 +104,7 @@ export const PipelineBlueprintDisplay: React.FC<PipelineBlueprintDisplayProps> =
               if (a.type !== 'input_node' && b.type === 'input_node') return 1;
               return 0;
             })
-            .map((node, index) => {
+            .map((node) => {
             const isSelected = selectedNodes.has(node.id);
             return (
               <div

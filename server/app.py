@@ -51,12 +51,12 @@ try:
     from .agents import agents, list_agents
     from .router_graph import init_router, routerGraph
     from .runner import run_agent, run_agent_stream
-    from .utils import log_line, spell_fix
-    from .alphafold_handler import alphafold_handler
-    from .rfdiffusion_handler import rfdiffusion_handler
-    from .proteinmpnn_handler import proteinmpnn_handler
-    from .pdb_storage import save_uploaded_pdb, get_uploaded_pdb
-    from .session_file_tracker import associate_file_with_session, get_session_files
+    from .infrastructure.utils import log_line, spell_fix
+    from .agents.handlers.alphafold import alphafold_handler
+    from .agents.handlers.rfdiffusion import rfdiffusion_handler
+    from .agents.handlers.proteinmpnn import proteinmpnn_handler
+    from .domain.storage.pdb_storage import save_uploaded_pdb, get_uploaded_pdb
+    from .domain.storage.session_tracker import associate_file_with_session, get_session_files
 except ImportError:
     # When running directly (not as module)
     import sys
@@ -66,12 +66,12 @@ except ImportError:
     from agents import agents, list_agents
     from router_graph import init_router, routerGraph
     from runner import run_agent, run_agent_stream
-    from utils import log_line, spell_fix
-    from alphafold_handler import alphafold_handler
-    from rfdiffusion_handler import rfdiffusion_handler
-    from proteinmpnn_handler import proteinmpnn_handler
-    from pdb_storage import save_uploaded_pdb, get_uploaded_pdb
-    from session_file_tracker import associate_file_with_session, get_session_files
+    from infrastructure.utils import log_line, spell_fix
+    from agents.handlers.alphafold import alphafold_handler
+    from agents.handlers.rfdiffusion import rfdiffusion_handler
+    from agents.handlers.proteinmpnn import proteinmpnn_handler
+    from domain.storage.pdb_storage import save_uploaded_pdb, get_uploaded_pdb
+    from domain.storage.session_tracker import associate_file_with_session, get_session_files
 
 DEBUG_API = os.getenv("DEBUG_API", "0") == "1"
 
@@ -188,6 +188,7 @@ async def invoke(request: Request):
             history=body.get("history"),
             selection=body.get("selection"),
             selections=body.get("selections"),
+            pipeline_context=body.get("pipelineContext"),
         )
         return {"agentId": agent_id, **res}
     except Exception as e:
@@ -218,6 +219,8 @@ async def route(request: Request):
             "input_length": len(input_text),
             "has_selection": bool(body.get("selection")),
             "has_code": bool(body.get("currentCode")),
+            "has_pipeline_context": bool(body.get("pipelineContext")),
+            "pipeline_id": body.get("pipelineContext", {}).get("id") if body.get("pipelineContext") else None,
             "manual_agent": manual_agent_id,
             "model_override": model_override
         })
@@ -238,6 +241,7 @@ async def route(request: Request):
                     "currentCode": body.get("currentCode"),
                     "history": body.get("history"),
                     "uploadedFileId": body.get("uploadedFileId"),
+                    "pipelineContext": body.get("pipelineContext"),
                 }
             )
             agent_id = routed.get("routedAgentId")
@@ -293,6 +297,8 @@ async def route(request: Request):
             current_structure_origin=body.get("currentStructureOrigin"),
             uploaded_file_context=uploaded_file_context,
             model_override=model_override,
+            pipeline_context=body.get("pipelineContext"),
+            structure_metadata=body.get("structureMetadata"),
         )
         
         log_line("agent_completed", {
@@ -353,6 +359,7 @@ async def route_stream(request: Request):
                     "currentCode": body.get("currentCode"),
                     "history": body.get("history"),
                     "uploadedFileId": body.get("uploadedFileId"),
+                    "pipelineContext": body.get("pipelineContext"),
                 }
             )
             agent_id = routed.get("routedAgentId")
@@ -409,6 +416,8 @@ async def route_stream(request: Request):
                     current_structure_origin=body.get("currentStructureOrigin"),
                     uploaded_file_context=uploaded_file_context,
                     model_override=model_override,
+                    pipeline_context=body.get("pipelineContext"),
+                    structure_metadata=body.get("structureMetadata"),
                 ):
                     # Format chunk as JSON line
                     chunk_data = {

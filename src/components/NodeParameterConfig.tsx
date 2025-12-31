@@ -21,7 +21,7 @@ export const NodeParameterConfig: React.FC<NodeParameterConfigProps> = ({
   onSkip,
 }) => {
   const { activeSessionId } = useChatHistoryStore();
-  const { plugin, setCurrentCode, setIsExecuting, setViewerVisible, setActivePane, setCurrentStructureOrigin } = useAppStore();
+  const { plugin, setCurrentCode, setViewerVisible, setActivePane, setCurrentStructureOrigin } = useAppStore();
   const [config, setConfig] = useState<Record<string, any>>(node.config || {});
   const [pendingFile, setPendingFile] = useState<File | null>(null);
   const [isUploading, setIsUploading] = useState(false);
@@ -294,8 +294,9 @@ try {
       
       // Set structure origin
       setCurrentStructureOrigin({
-        type: 'pipeline_input',
+        type: isUrl ? 'upload' : 'pdb',
         filename: filename || urlOrPdbId,
+        pdbId: isUrl ? undefined : urlOrPdbId,
         metadata: { source: isUrl ? 'upload' : 'pdb_id' }
       });
     } catch (error) {
@@ -546,50 +547,56 @@ try {
         )}
         
         {/* Regular fields for other node types */}
-        {fields.map((field) => (
-          <div key={field.key} className="bg-white p-3 rounded border border-gray-200">
-            <label className="block text-sm font-medium text-gray-700 mb-1">
-              {field.label}
-              {field.required && <span className="text-red-500 ml-1">*</span>}
-            </label>
-            {field.helpText && (
-              <p className="text-xs text-gray-500 mb-2">{field.helpText}</p>
-            )}
-            {field.type === 'string' && (
-              <input
-                type="text"
-                value={config[field.key] || ''}
-                onChange={(e) => handleFieldChange(field.key, e.target.value)}
-                placeholder={field.placeholder}
-                className="w-full px-3 py-2 border border-gray-300 rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-              />
-            )}
-            {field.type === 'number' && (
-              <input
-                type="number"
-                value={config[field.key] ?? field.default ?? ''}
-                onChange={(e) => handleFieldChange(field.key, parseFloat(e.target.value) || 0)}
-                min={field.min}
-                max={field.max}
-                step={field.step || 1}
-                className="w-full px-3 py-2 border border-gray-300 rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-              />
-            )}
-            {field.type === 'select' && (
-              <select
-                value={config[field.key] || field.default || ''}
-                onChange={(e) => handleFieldChange(field.key, e.target.value)}
-                className="w-full px-3 py-2 border border-gray-300 rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-              >
-                {field.options?.map((opt) => (
-                  <option key={opt.value} value={opt.value}>
-                    {opt.label}
-                  </option>
-                ))}
-              </select>
-            )}
-          </div>
-        ))}
+        {fields.map((field) => {
+          const isStringField = field.type === 'string';
+          const isNumberField = field.type === 'number';
+          const isSelectField = field.type === 'select';
+          
+          return (
+            <div key={field.key} className="bg-white p-3 rounded border border-gray-200">
+              <label className="block text-sm font-medium text-gray-700 mb-1">
+                {field.label}
+                {'required' in field && field.required && <span className="text-red-500 ml-1">*</span>}
+              </label>
+              {'helpText' in field && field.helpText && (
+                <p className="text-xs text-gray-500 mb-2">{field.helpText}</p>
+              )}
+              {isStringField && 'placeholder' in field && (
+                <input
+                  type="text"
+                  value={config[field.key] || ''}
+                  onChange={(e) => handleFieldChange(field.key, e.target.value)}
+                  placeholder={field.placeholder}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                />
+              )}
+              {isNumberField && (
+                <input
+                  type="number"
+                  value={config[field.key] ?? ('default' in field ? field.default : undefined) ?? ''}
+                  onChange={(e) => handleFieldChange(field.key, parseFloat(e.target.value) || 0)}
+                  min={'min' in field ? field.min : undefined}
+                  max={'max' in field ? field.max : undefined}
+                  step={'step' in field ? field.step : 1}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                />
+              )}
+              {isSelectField && 'options' in field && (
+                <select
+                  value={config[field.key] || ('default' in field ? field.default : '') || ''}
+                  onChange={(e) => handleFieldChange(field.key, e.target.value)}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                >
+                  {field.options?.map((opt: { value: string; label: string }) => (
+                    <option key={opt.value} value={opt.value}>
+                      {opt.label}
+                    </option>
+                  ))}
+                </select>
+              )}
+            </div>
+          );
+        })}
       </div>
 
       <div className="flex items-center space-x-2">

@@ -649,5 +649,25 @@
         ]
       }
     }
+  ],
+  "53cc4d01-587d-46c4-9a1a-9996d589c0fd": [
+    {
+      "file_id": "9e0aa97b11c74334b6508d58afe94a0f",
+      "type": "upload",
+      "file_path": "uploads/pdb/9e0aa97b11c74334b6508d58afe94a0f.pdb",
+      "filename": "1R42.pdb",
+      "size": 504711,
+      "job_id": null,
+      "metadata": {
+        "atoms": 5511,
+        "chains": [
+          "A",
+          "B",
+          "C",
+          "D",
+          "E"
+        ]
+      }
+    }
   ]
 }

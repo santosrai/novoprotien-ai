@@ -20,14 +20,14 @@ if _server_dir not in sys.path:
 # Import sequence_utils and nims_client
 try:
     # Try relative import first (when running as module)
-    from .sequence_utils import SequenceExtractor
-    from .nims_client import NIMSClient
-    from .session_file_tracker import associate_file_with_session
+    from ...domain.protein.sequence import SequenceExtractor
+    from ...tools.nvidia.client import NIMSClient
+    from ...domain.storage.session_tracker import associate_file_with_session
 except ImportError:
     # Fallback to absolute import (when running directly)
-    from sequence_utils import SequenceExtractor
-    from nims_client import NIMSClient
-    from session_file_tracker import associate_file_with_session
+    from domain.protein.sequence import SequenceExtractor
+    from tools.nvidia.client import NIMSClient
+    from domain.storage.session_tracker import associate_file_with_session
 
 # Set up file logging for AlphaFold API
 def setup_alphafold_logging():

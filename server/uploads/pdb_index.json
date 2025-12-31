@@ -678,5 +678,24 @@
     },
     "total_residues": 597,
     "suggested_contigs": "A149-249"
+  },
+  "9e0aa97b11c74334b6508d58afe94a0f": {
+    "file_id": "9e0aa97b11c74334b6508d58afe94a0f",
+    "filename": "1R42.pdb",
+    "stored_path": "uploads/pdb/9e0aa97b11c74334b6508d58afe94a0f.pdb",
+    "size": 504711,
+    "atoms": 5511,
+    "chains": [
+      "A",
+      "B",
+      "C",
+      "D",
+      "E"
+    ],
+    "chain_residue_counts": {
+      "A": 597
+    },
+    "total_residues": 597,
+    "suggested_contigs": "A149-249"
   }
 }

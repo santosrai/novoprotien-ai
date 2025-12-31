@@ -21,16 +21,16 @@ if _server_dir not in sys.path:
 # Import dependencies
 try:
     # Try relative import first (when imported as module)
-    from .rfdiffusion_client import RFdiffusionClient
-    from .sequence_utils import SequenceExtractor
-    from .pdb_storage import get_uploaded_pdb
-    from .session_file_tracker import associate_file_with_session
+    from ...tools.nvidia.rfdiffusion import RFdiffusionClient
+    from ...domain.protein.sequence import SequenceExtractor
+    from ...domain.storage.pdb_storage import get_uploaded_pdb
+    from ...domain.storage.session_tracker import associate_file_with_session
 except ImportError:
     # Fallback to absolute import (when running directly)
-    from rfdiffusion_client import RFdiffusionClient
-    from sequence_utils import SequenceExtractor
-    from pdb_storage import get_uploaded_pdb
-    from session_file_tracker import associate_file_with_session
+    from tools.nvidia.rfdiffusion import RFdiffusionClient
+    from domain.protein.sequence import SequenceExtractor
+    from domain.storage.pdb_storage import get_uploaded_pdb
+    from domain.storage.session_tracker import associate_file_with_session
 
 logger = logging.getLogger(__name__)
 

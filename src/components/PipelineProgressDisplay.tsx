@@ -1,5 +1,5 @@
-import React, { useState, useEffect } from 'react';
-import { Loader2, CheckCircle2, XCircle, AlertCircle, ExternalLink, Workflow, Download, File, Clock, Info } from 'lucide-react';
+import React, { useState } from 'react';
+import { Loader2, CheckCircle2, XCircle, ExternalLink, Workflow, Download, File, Clock, Info } from 'lucide-react';
 import { NodeStatus } from '../components/pipeline-canvas';
 import { usePipelineStore } from '../components/pipeline-canvas';
 
@@ -43,7 +43,7 @@ const getStatusIcon = (status: NodeStatus) => {
 };
 
 export const PipelineProgressDisplay: React.FC<PipelineProgressDisplayProps> = ({
-  pipelineId,
+  pipelineId: _pipelineId,
   pipelineName,
   status,
   nodes,

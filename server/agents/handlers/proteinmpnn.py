@@ -16,13 +16,13 @@ if _server_dir not in sys.path:
     sys.path.insert(0, _server_dir)
 
 try:
-    from .utils import log_line
-    from .proteinmpnn_client import get_proteinmpnn_client, ProteinMPNNClient
-    from .pdb_storage import get_uploaded_pdb, list_uploaded_pdbs
+    from ...infrastructure.utils import log_line
+    from ...tools.nvidia.proteinmpnn import get_proteinmpnn_client, ProteinMPNNClient
+    from ...domain.storage.pdb_storage import get_uploaded_pdb, list_uploaded_pdbs
 except ImportError:
-    from utils import log_line
-    from proteinmpnn_client import get_proteinmpnn_client, ProteinMPNNClient
-    from pdb_storage import get_uploaded_pdb, list_uploaded_pdbs
+    from infrastructure.utils import log_line
+    from tools.nvidia.proteinmpnn import get_proteinmpnn_client, ProteinMPNNClient
+    from domain.storage.pdb_storage import get_uploaded_pdb, list_uploaded_pdbs
 
 logger = logging.getLogger(__name__)
 
