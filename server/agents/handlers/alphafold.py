@@ -23,6 +23,7 @@ try:
     from ...domain.protein.sequence import SequenceExtractor
     from ...tools.nvidia.client import NIMSClient
     from ...domain.storage.session_tracker import associate_file_with_session
+    from ...domain.storage.file_access import save_result_file
 except ImportError:
     # Fallback to absolute import (when running directly)
     from domain.protein.sequence import SequenceExtractor
@@ -310,19 +311,36 @@ class AlphaFoldHandler:
                 pdb_content = nims_client.extract_pdb_from_result(result["data"])
 
                 if pdb_content:
-                    # Save PDB file
+                    # Save PDB file using user-scoped storage
+                    user_id = job_data.get("userId")
+                    if not user_id:
+                        logger.warning("[AlphaFold Handler] No userId provided, cannot save file with user isolation")
+                        user_id = "system"  # Fallback for backward compatibility
+                    
                     filename = f"alphafold_{job_id}.pdb"
-                    filepath = nims_client.save_pdb_file(pdb_content, filename)
+                    filepath = save_result_file(
+                        user_id=user_id,
+                        file_id=job_id,
+                        file_type="alphafold",
+                        filename=filename,
+                        content=pdb_content.encode("utf-8"),
+                        job_id=job_id,
+                        metadata={
+                            "sequence_length": len(sequence),
+                            "parameters": parameters,
+                        },
+                    )
                     
                     # Associate file with session if session_id provided
                     session_id = job_data.get("sessionId")
-                    if session_id:
+                    if session_id and user_id:
                         try:
                             associate_file_with_session(
                                 session_id=str(session_id),
-                                file_id=job_id,  # Use job_id as file_id for generated files
+                                file_id=job_id,
+                                user_id=user_id,
                                 file_type="alphafold",
-                                file_path=str(filepath),
+                                file_path=filepath,
                                 filename=filename,
                                 size=len(pdb_content),
                                 job_id=job_id,

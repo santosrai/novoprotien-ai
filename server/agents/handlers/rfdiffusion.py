@@ -25,6 +25,7 @@ try:
     from ...domain.protein.sequence import SequenceExtractor
     from ...domain.storage.pdb_storage import get_uploaded_pdb
     from ...domain.storage.session_tracker import associate_file_with_session
+    from ...domain.storage.file_access import save_result_file
 except ImportError:
     # Fallback to absolute import (when running directly)
     from tools.nvidia.rfdiffusion import RFdiffusionClient
@@ -451,21 +452,38 @@ class RFdiffusionHandler:
                 pdb_content = rfdiffusion_client.extract_pdb_from_result(result["data"])
                 
                 if pdb_content:
-                    # Save PDB file
+                    # Save PDB file using user-scoped storage
+                    user_id = job_data.get("userId")
+                    if not user_id:
+                        logger.warning("[RFdiffusion Handler] No userId provided, cannot save file with user isolation")
+                        user_id = "system"  # Fallback for backward compatibility
+                    
                     filename = f"rfdiffusion_{job_id}.pdb"
-                    filepath = rfdiffusion_client.save_pdb_file(pdb_content, filename)
+                    filepath = save_result_file(
+                        user_id=user_id,
+                        file_id=job_id,
+                        file_type="rfdiffusion",
+                        filename=filename,
+                        content=pdb_content.encode("utf-8"),
+                        job_id=job_id,
+                        metadata={
+                            "parameters": parameters,
+                            "design_mode": parameters.get("design_mode", "unknown"),
+                        },
+                    )
                     
                     # Associate file with session if session_id provided
                     session_id = job_data.get("sessionId")
                     logger.info(f"[RFdiffusion Handler] Session ID from job_data: {session_id} (type: {type(session_id).__name__})")
-                    if session_id:
+                    if session_id and user_id:
                         try:
                             logger.info(f"[RFdiffusion Handler] Associating file with session: session_id={session_id}, file_id={job_id}, filepath={filepath}")
                             associate_file_with_session(
                                 session_id=str(session_id),
-                                file_id=job_id,  # Use job_id as file_id for generated files
+                                file_id=job_id,
+                                user_id=user_id,
                                 file_type="rfdiffusion",
-                                file_path=str(filepath),
+                                file_path=filepath,
                                 filename=filename,
                                 size=len(pdb_content),
                                 job_id=job_id,
@@ -478,7 +496,7 @@ class RFdiffusionHandler:
                         except Exception as e:
                             logger.error(f"Failed to associate RFdiffusion file with session: {e}", exc_info=True)
                     else:
-                        logger.warning(f"[RFdiffusion Handler] No session_id provided, file {job_id} will not be associated with any session")
+                        logger.warning(f"[RFdiffusion Handler] No session_id or userId provided, file {job_id} will not be associated with any session")
                     
                     self.active_jobs[job_id] = "completed"
                     

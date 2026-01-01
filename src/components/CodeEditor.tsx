@@ -1,28 +1,23 @@
-import React, { useRef, useEffect } from 'react';
+import React, { useRef } from 'react';
 import Editor from '@monaco-editor/react';
 import { Play, RotateCcw, Copy, FileText, Save } from 'lucide-react';
 import { useAppStore } from '../stores/appStore';
 import { useChatHistoryStore } from '../stores/chatHistoryStore';
 import { CodeExecutor } from '../utils/codeExecutor';
 
-const defaultCode = `// Default: Cartoon view of PDB 1CBS
-try {
-  await builder.loadStructure('1CBS');
-  await builder.addCartoonRepresentation({ color: 'secondary-structure' });
-  builder.focusView();
-  console.log('Loaded 1CBS');
-} catch (e) {
-  console.error('Failed to load 1CBS', e);
-}`;
+const defaultCode = `// Molstar Code Editor
+// Your code will appear here when you interact with the viewer
+// Example: await builder.loadStructure('1ABC');`;
 
 export const CodeEditor: React.FC = () => {
   const { plugin, currentCode, setCurrentCode, isExecuting, setIsExecuting } = useAppStore();
   const { activeSessionId, saveVisualizationCode } = useChatHistoryStore();
   const editorRef = useRef<any>(null);
 
-  useEffect(() => {
-    if (!currentCode) setCurrentCode(defaultCode);
-  }, [currentCode, setCurrentCode]);
+  // Removed automatic default code setting - editor starts empty
+  // useEffect(() => {
+  //   if (!currentCode) setCurrentCode(defaultCode);
+  // }, [currentCode, setCurrentCode]);
 
   const handleEditorDidMount = (editor: any) => {
     editorRef.current = editor;

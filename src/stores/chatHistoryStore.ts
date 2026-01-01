@@ -3,6 +3,7 @@ import { persist, createJSONStorage } from 'zustand/middleware';
 import { v4 as uuidv4 } from 'uuid';
 import { api } from '../utils/api';
 import { ErrorDetails } from '../utils/errorHandler';
+import { useAuthStore } from './authStore';
 
 export interface ThinkingStep {
   id: string;
@@ -91,12 +92,14 @@ interface ChatHistoryState {
   selectedSessionIds: string[]; // For bulk operations
   
   // Core Session Actions
-  createSession: (title?: string, messages?: Message[]) => string;
+  createSession: (title?: string, messages?: Message[]) => Promise<string>; // Already async
   switchToSession: (sessionId: string) => void;
-  deleteSession: (sessionId: string) => void;
-  deleteSessions: (sessionIds: string[]) => void;
-  addMessageToSession: (sessionId: string, message: Message) => void;
+  deleteSession: (sessionId: string) => Promise<void>;
+  deleteSessions: (sessionIds: string[]) => Promise<void>;
+  addMessageToSession: (sessionId: string, message: Message) => Promise<void>;
   updateSessionMessages: (sessionId: string, messages: Message[]) => void;
+  syncSessions: () => Promise<void>;
+  syncSessionMessages: (sessionId: string) => Promise<void>;
   
   // Session Management
   updateSessionTitle: (sessionId: string, title: string) => void;
@@ -199,7 +202,7 @@ export const useChatHistoryStore = create<ChatHistoryState>()(
       searchQuery: '',
       selectedSessionIds: [],
       
-      createSession: (title, messages = []) => {
+      createSession: async (title, messages = []) => {
         const sessionId = uuidv4();
         const now = new Date();
         
@@ -208,6 +211,71 @@ export const useChatHistoryStore = create<ChatHistoryState>()(
         
         const sessionTitle = title || generateSessionTitle(initialMessages) || 'New Chat';
         
+        // Check if user is authenticated and create session in backend FIRST
+        const user = useAuthStore.getState().user;
+        if (user) {
+          try {
+            const response = await api.post('/chat/sessions', { title: sessionTitle });
+            // Use the session_id from backend if provided, otherwise use generated one
+            const backendSessionId = response.data.session_id || sessionId;
+            console.log('Session created on backend:', backendSessionId);
+            
+            // Use backend session ID if different
+            const finalSessionId = backendSessionId !== sessionId ? backendSessionId : sessionId;
+            
+            const newSession: ChatSession = {
+              id: finalSessionId,
+              title: sessionTitle,
+              createdAt: now,
+              lastModified: now,
+              messages: initialMessages,
+              metadata: {
+                messageCount: initialMessages.length,
+                lastActivity: now,
+                starred: false,
+                tags: [],
+              }
+            };
+            
+            set((state) => {
+              const updatedRecentIds = [finalSessionId, ...state.recentSessionIds.filter(id => id !== finalSessionId)].slice(0, 5);
+              return {
+                sessions: [newSession, ...state.sessions],
+                activeSessionId: finalSessionId,
+                recentSessionIds: updatedRecentIds,
+              };
+            });
+            
+            // Save initial messages to backend if any
+            if (initialMessages.length > 0) {
+              for (const message of initialMessages) {
+                try {
+                  await api.post(`/chat/sessions/${finalSessionId}/messages`, {
+                    content: message.content,
+                    type: message.type,
+                    role: message.type === 'user' ? 'user' : 'assistant',
+                    metadata: {
+                      jobId: message.jobId,
+                      jobType: message.jobType,
+                      thinkingProcess: message.thinkingProcess,
+                      alphafoldResult: message.alphafoldResult,
+                      proteinmpnnResult: message.proteinmpnnResult,
+                    },
+                  });
+                } catch (error) {
+                  console.error('Failed to save initial message to backend:', error);
+                }
+              }
+            }
+            
+            return finalSessionId;
+          } catch (error: any) {
+            console.error('Failed to create session on backend:', error);
+            // Fall through to local-only creation
+          }
+        }
+        
+        // Local-only creation (if not authenticated or backend failed)
         const newSession: ChatSession = {
           id: sessionId,
           title: sessionTitle,
@@ -309,7 +377,19 @@ export const useChatHistoryStore = create<ChatHistoryState>()(
         };
       },
       
-      deleteSession: (sessionId) => {
+      deleteSession: async (sessionId) => {
+        // Check if user is authenticated and delete from backend
+        const user = useAuthStore.getState().user;
+        if (user) {
+          try {
+            await api.delete(`/chat/sessions/${sessionId}`);
+            console.log('Session deleted from backend');
+          } catch (error: any) {
+            console.warn('Failed to delete session from backend:', error);
+            // Continue with local delete even if backend fails
+          }
+        }
+        
         set((state) => {
           const updatedSessions = state.sessions.filter(s => s.id !== sessionId);
           const updatedRecentIds = state.recentSessionIds.filter(id => id !== sessionId);
@@ -334,12 +414,59 @@ export const useChatHistoryStore = create<ChatHistoryState>()(
         });
       },
       
-      deleteSessions: (sessionIds) => {
-        sessionIds.forEach(id => get().deleteSession(id));
+      deleteSessions: async (sessionIds) => {
+        await Promise.all(sessionIds.map(id => get().deleteSession(id)));
         set({ selectedSessionIds: [] });
       },
       
-      addMessageToSession: (sessionId, message) => {
+      addMessageToSession: async (sessionId, message) => {
+        // Check if user is authenticated and save message to backend
+        const user = useAuthStore.getState().user;
+        if (user) {
+          // First, ensure session exists in backend (create if it doesn't)
+          const { sessions } = get();
+          const session = sessions.find(s => s.id === sessionId);
+          if (session) {
+            // Check if session exists in backend, create if not
+            try {
+              await api.get(`/chat/sessions/${sessionId}`);
+            } catch (error: any) {
+              // Session doesn't exist in backend, create it
+              if (error.response?.status === 404) {
+                try {
+                  await api.post('/chat/sessions', { 
+                    id: sessionId,
+                    title: session.title || 'New Chat' 
+                  });
+                  console.log('Session created in backend:', sessionId);
+                } catch (createError) {
+                  console.error('Failed to create session in backend:', createError);
+                }
+              }
+            }
+          }
+          
+          // Now save the message
+          try {
+            await api.post(`/chat/sessions/${sessionId}/messages`, {
+              content: message.content,
+              type: message.type,
+              role: message.type === 'user' ? 'user' : 'assistant',
+              metadata: {
+                jobId: message.jobId,
+                jobType: message.jobType,
+                thinkingProcess: message.thinkingProcess,
+                alphafoldResult: message.alphafoldResult,
+                proteinmpnnResult: message.proteinmpnnResult,
+              },
+            });
+            console.log('Message saved to backend');
+          } catch (error: any) {
+            console.error('Failed to save message to backend:', error);
+            // Continue with local save even if backend fails
+          }
+        }
+        
         set((state) => {
           const updatedSessions = state.sessions.map(session => {
             if (session.id === sessionId) {
@@ -634,11 +761,153 @@ export const useChatHistoryStore = create<ChatHistoryState>()(
           estimatedSize,
         };
       },
+      
+      syncSessions: async () => {
+        const user = useAuthStore.getState().user;
+        
+        // IMMEDIATELY clear sessions to prevent duplicates during sync
+        set({ 
+          sessions: [], 
+          activeSessionId: null, 
+          recentSessionIds: [],
+          selectedSessionIds: [],
+        });
+        
+        if (!user) {
+          console.log('User not authenticated, sessions cleared');
+          return;
+        }
+        
+        try {
+          const response = await api.get('/chat/sessions');
+          const backendSessions = response.data.sessions || [];
+          
+          // If no sessions in backend, keep empty array (already cleared above)
+          if (backendSessions.length === 0) {
+            console.log('No sessions found in backend, initializing with empty chat history');
+            return;
+          }
+          
+          // Convert dates and ensure unique IDs
+          const sessionMap = new Map<string, ChatSession>();
+          backendSessions.forEach((bs: any) => {
+            // Skip if duplicate ID (shouldn't happen, but safety check)
+            if (sessionMap.has(bs.id)) {
+              console.warn(`Duplicate session ID found: ${bs.id}, skipping`);
+              return;
+            }
+            
+            sessionMap.set(bs.id, {
+              id: bs.id,
+              title: bs.title || 'New Chat',
+              createdAt: new Date(bs.created_at),
+              lastModified: new Date(bs.updated_at || bs.created_at),
+              messages: [], // Messages will be loaded separately
+              metadata: {
+                messageCount: 0,
+                lastActivity: new Date(bs.updated_at || bs.created_at),
+                starred: false,
+                tags: [],
+              },
+            });
+          });
+          
+          // Convert map to array (ensures unique IDs)
+          const sessions = Array.from(sessionMap.values());
+          
+          // REPLACE all sessions (don't merge) - already cleared above, but set again to be explicit
+          set({ 
+            sessions, 
+            activeSessionId: sessions.length > 0 ? sessions[0].id : null,
+            recentSessionIds: sessions.slice(0, 5).map(s => s.id),
+            selectedSessionIds: [],
+          });
+          console.log(`Synced ${sessions.length} unique sessions from backend for user ${user.id}`);
+        } catch (error: any) {
+          console.error('Failed to sync sessions from backend:', error);
+          // On error, ensure sessions are cleared (already cleared above, but be explicit)
+          set({ 
+            sessions: [], 
+            activeSessionId: null, 
+            recentSessionIds: [],
+            selectedSessionIds: [],
+          });
+        }
+      },
+      
+      syncSessionMessages: async (sessionId: string) => {
+        const user = useAuthStore.getState().user;
+        if (!user) {
+          console.log('User not authenticated, skipping message sync');
+          return;
+        }
+        
+        try {
+          const response = await api.get(`/chat/sessions/${sessionId}/messages`);
+          const backendMessages = response.data.messages || [];
+          
+          // Convert backend messages to frontend Message format
+          const messages: Message[] = backendMessages.map((bm: any) => ({
+            id: bm.id,
+            content: bm.content,
+            type: bm.message_type === 'user' ? 'user' : 'ai',
+            timestamp: new Date(bm.created_at),
+            ...(bm.metadata || {}),
+          }));
+          
+          // Update session with messages
+          set((state) => {
+            const updatedSessions = state.sessions.map(session => {
+              if (session.id === sessionId) {
+                return {
+                  ...session,
+                  messages,
+                  lastModified: new Date(),
+                  metadata: {
+                    ...session.metadata,
+                    messageCount: messages.length,
+                    lastActivity: messages.length > 0 ? messages[messages.length - 1].timestamp : session.lastModified,
+                  },
+                };
+              }
+              return session;
+            });
+            
+            return { sessions: updatedSessions };
+          });
+          
+          console.log(`Synced ${messages.length} messages for session ${sessionId}`);
+        } catch (error: any) {
+          console.error(`Failed to sync messages for session ${sessionId}:`, error);
+        }
+      },
     }),
     {
-      name: 'novoprotein-chat-history-storage',
+      name: 'novoprotein-chat-history-storage', // Base name, will be user-scoped
       version: 1,
-      storage: createJSONStorage(() => localStorage),
+      storage: createJSONStorage(() => {
+        // Create user-scoped storage adapter
+        return {
+          getItem: (key: string) => {
+            const user = useAuthStore.getState().user;
+            const userId = user?.id || 'anonymous';
+            const userKey = `novoprotein-chat-history-${userId}`;
+            return localStorage.getItem(userKey);
+          },
+          setItem: (key: string, value: string) => {
+            const user = useAuthStore.getState().user;
+            const userId = user?.id || 'anonymous';
+            const userKey = `novoprotein-chat-history-${userId}`;
+            localStorage.setItem(userKey, value);
+          },
+          removeItem: (key: string) => {
+            const user = useAuthStore.getState().user;
+            const userId = user?.id || 'anonymous';
+            const userKey = `novoprotein-chat-history-${userId}`;
+            localStorage.removeItem(userKey);
+          },
+        };
+      }),
       partialize: (state) => ({
         sessions: state.sessions,
         activeSessionId: state.activeSessionId,
@@ -662,6 +931,18 @@ export const useChatHistoryStore = create<ChatHistoryState>()(
           }
           return value;
         });
+        
+        // Check if user is authenticated - if not, return empty state
+        const user = useAuthStore.getState().user;
+        if (!user) {
+          console.log('No user authenticated, returning empty chat history');
+          return {
+            sessions: [],
+            activeSessionId: null,
+            recentSessionIds: [],
+            isSidebarCollapsed: parsed.isSidebarCollapsed || false,
+          };
+        }
         
         // Ensure all dates in sessions are properly converted
         if (parsed.sessions) {
@@ -701,6 +982,23 @@ export const useChatHistoryStore = create<ChatHistoryState>()(
         }
         
         return parsed;
+      },
+      onRehydrateStorage: () => (state) => {
+        if (state) {
+          // Always sync with backend after rehydration to ensure user-specific data
+          setTimeout(async () => {
+            const user = useAuthStore.getState().user;
+            if (user && state.syncSessions) {
+              // Clear local sessions first, then sync from backend
+              // This ensures we start fresh and get only the current user's sessions
+              state.clearAllSessions();
+              await state.syncSessions();
+            } else if (!user) {
+              // If no user, clear all sessions
+              state.clearAllSessions();
+            }
+          }, 1000); // Delay to ensure auth is loaded
+        }
       },
     }
   )

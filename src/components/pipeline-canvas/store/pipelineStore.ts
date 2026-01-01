@@ -2,6 +2,8 @@ import { create } from 'zustand';
 import { persist, createJSONStorage } from 'zustand/middleware';
 import { Pipeline, PipelineNode, PipelineBlueprint, NodeStatus } from '../types/index';
 import { topologicalSort } from '../utils/topologicalSort';
+import { api } from '../../../utils/api';
+import { useAuthStore } from '../../../stores/authStore';
 
 // Execution log entry for tracking node execution history
 export interface ExecutionLogEntry {
@@ -77,9 +79,10 @@ interface PipelineState {
   deleteNode: (nodeId: string) => void;
   addEdge: (source: string, target: string) => void;
   deleteEdge: (source: string, target: string) => void;
-  savePipeline: (name: string) => void;
-  loadPipeline: (pipelineId: string) => void;
-  deletePipeline: (pipelineId: string) => void;
+  savePipeline: (name: string) => Promise<void>;
+  loadPipeline: (pipelineId: string) => Promise<void>;
+  deletePipeline: (pipelineId: string) => Promise<void>;
+  syncPipelines: () => Promise<void>;
   startExecution: () => void;
   executeSingleNode: (nodeId: string) => void;
   stopExecution: () => void;
@@ -421,7 +424,7 @@ export const usePipelineStore = create<PipelineState>()(
         debouncedAutoSave(get, set);
       },
       
-      savePipeline: (name) => {
+      savePipeline: async (name) => {
         const { currentPipeline, savedPipelines } = get();
         if (!currentPipeline) return;
         
@@ -430,6 +433,18 @@ export const usePipelineStore = create<PipelineState>()(
           name,
           updatedAt: new Date(),
         };
+        
+        // Check if user is authenticated and save to backend
+        const user = useAuthStore.getState().user;
+        if (user) {
+          try {
+            await api.post('/pipelines', pipelineToSave);
+            console.log('Pipeline saved to backend');
+          } catch (error: any) {
+            console.error('Failed to save pipeline to backend:', error);
+            // Continue with local save even if backend fails
+          }
+        }
         
         const existingIndex = savedPipelines.findIndex((p) => p.id === pipelineToSave.id);
         
@@ -457,8 +472,46 @@ export const usePipelineStore = create<PipelineState>()(
         }
       },
       
-      loadPipeline: (pipelineId) => {
+      loadPipeline: async (pipelineId) => {
         const { savedPipelines } = get();
+        
+        // Check if user is authenticated and try to load from backend
+        const user = useAuthStore.getState().user;
+        if (user) {
+          try {
+            const response = await api.get(`/pipelines/${pipelineId}`);
+            const backendPipeline = response.data.pipeline;
+            
+            // Convert dates
+            if (backendPipeline.createdAt) {
+              backendPipeline.createdAt = new Date(backendPipeline.createdAt);
+            }
+            if (backendPipeline.updatedAt) {
+              backendPipeline.updatedAt = new Date(backendPipeline.updatedAt);
+            }
+            
+            // Update local storage
+            const existingIndex = savedPipelines.findIndex((p) => p.id === pipelineId);
+            if (existingIndex >= 0) {
+              const updated = [...savedPipelines];
+              updated[existingIndex] = backendPipeline;
+              set({ savedPipelines: updated });
+            } else {
+              set({ savedPipelines: [...savedPipelines, backendPipeline] });
+            }
+            
+            set({ 
+              currentPipeline: { ...backendPipeline },
+              lastSavedAt: backendPipeline.updatedAt || new Date(),
+            });
+            return;
+          } catch (error: any) {
+            console.warn('Failed to load pipeline from backend, using local:', error);
+            // Fall through to local load
+          }
+        }
+        
+        // Fallback to local storage
         const pipeline = savedPipelines.find((p) => p.id === pipelineId);
         if (pipeline) {
           // Convert updatedAt to Date if it's a string (from localStorage)
@@ -473,12 +526,69 @@ export const usePipelineStore = create<PipelineState>()(
         }
       },
       
-      deletePipeline: (pipelineId) => {
+      deletePipeline: async (pipelineId) => {
+        // Check if user is authenticated and delete from backend
+        const user = useAuthStore.getState().user;
+        if (user) {
+          try {
+            await api.delete(`/pipelines/${pipelineId}`);
+            console.log('Pipeline deleted from backend');
+          } catch (error: any) {
+            console.warn('Failed to delete pipeline from backend:', error);
+            // Continue with local delete even if backend fails
+          }
+        }
+        
         const { savedPipelines, currentPipeline } = get();
         set({
           savedPipelines: savedPipelines.filter((p) => p.id !== pipelineId),
           currentPipeline: currentPipeline?.id === pipelineId ? null : currentPipeline,
         });
+      },
+      
+      syncPipelines: async () => {
+        const user = useAuthStore.getState().user;
+        if (!user) {
+          console.log('User not authenticated, skipping pipeline sync');
+          return;
+        }
+        
+        try {
+          const response = await api.get('/pipelines');
+          const backendPipelines = response.data.pipelines || [];
+          
+          // Convert dates and parse pipeline_json
+          const pipelines: Pipeline[] = await Promise.all(
+            backendPipelines.map(async (bp: any) => {
+              try {
+                // Fetch full pipeline data
+                const fullResponse = await api.get(`/pipelines/${bp.id}`);
+                const fullPipeline = fullResponse.data.pipeline;
+                
+                // Convert dates
+                if (fullPipeline.createdAt) {
+                  fullPipeline.createdAt = new Date(fullPipeline.createdAt);
+                }
+                if (fullPipeline.updatedAt) {
+                  fullPipeline.updatedAt = new Date(fullPipeline.updatedAt);
+                }
+                
+                return fullPipeline;
+              } catch (error) {
+                console.error(`Failed to load full pipeline ${bp.id}:`, error);
+                return null;
+              }
+            })
+          );
+          
+          // Filter out nulls
+          const validPipelines = pipelines.filter((p): p is Pipeline => p !== null);
+          
+          set({ savedPipelines: validPipelines });
+          console.log(`Synced ${validPipelines.length} pipelines from backend`);
+        } catch (error: any) {
+          console.error('Failed to sync pipelines from backend:', error);
+        }
       },
       
       startExecution: () => {
@@ -806,9 +916,17 @@ export const usePipelineStore = create<PipelineState>()(
                 state.lastSavedAt = new Date();
               }
             }
-          } catch (error) {
+            } catch (error) {
             console.error('Failed to load draft:', error);
           }
+          
+          // Sync with backend after rehydration (if user is authenticated)
+          setTimeout(() => {
+            const user = useAuthStore.getState().user;
+            if (user && state.syncPipelines) {
+              state.syncPipelines().catch(console.error);
+            }
+          }, 1000); // Delay to ensure auth is loaded
         }
       },
     }

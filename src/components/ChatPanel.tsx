@@ -301,7 +301,7 @@ export const ChatPanel: React.FC = () => {
   // Initialize session if none exists
   useEffect(() => {
     if (!activeSessionId) {
-      createSession();
+      createSession().catch(console.error);
     }
   }, [activeSessionId, createSession]);
 

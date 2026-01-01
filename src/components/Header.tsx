@@ -1,11 +1,10 @@
-import React, { useEffect } from 'react';
-import { Atom, Settings, HelpCircle, Box, Workflow } from 'lucide-react';
-import { useSettingsStore } from '../stores/settingsStore';
+import React from 'react';
+import { Atom, Box, Workflow } from 'lucide-react';
 import { useAppStore } from '../stores/appStore';
 import { useChatHistoryStore } from '../stores/chatHistoryStore';
+import { ProfileMenu } from './auth/ProfileMenu';
 
 export const Header: React.FC = () => {
-  const { setSettingsDialogOpen } = useSettingsStore();
   const { isViewerVisible, setViewerVisible, setActivePane } = useAppStore();
   const { activeSessionId, saveViewerVisibility } = useChatHistoryStore();
   
@@ -22,19 +21,6 @@ export const Header: React.FC = () => {
     // Open pipeline manager - will be handled by App component
     window.dispatchEvent(new CustomEvent('open-pipeline-manager'));
   };
-  
-  // Keyboard shortcuts
-  useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if ((e.ctrlKey || e.metaKey) && e.key === ',') {
-        e.preventDefault();
-        setSettingsDialogOpen(true);
-      }
-    };
-    
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [setSettingsDialogOpen]);
   
   const handleToggleViewer = () => {
     const newVisibility = !isViewerVisible;
@@ -97,18 +83,7 @@ export const Header: React.FC = () => {
           <span>Pipelines</span>
         </button>
         
-        <button className="flex items-center space-x-1 px-3 py-1 text-sm text-gray-600 hover:text-gray-900">
-          <HelpCircle className="w-4 h-4" />
-          <span>Help</span>
-        </button>
-        <button 
-          onClick={() => setSettingsDialogOpen(true)}
-          className="flex items-center space-x-1 px-3 py-1 text-sm text-gray-600 hover:text-gray-900 transition-colors"
-          title="Open Settings (Ctrl+,)"
-        >
-          <Settings className="w-4 h-4" />
-          <span>Settings</span>
-        </button>
+        <ProfileMenu />
       </div>
     </header>
   );

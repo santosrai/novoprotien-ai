@@ -34,17 +34,21 @@ class ProteinMPNNHandler:
         self._client: Optional[ProteinMPNNClient] = None
         self.active_jobs: Dict[str, str] = {}
         self.job_results: Dict[str, Dict[str, Any]] = {}
-        self.results_dir = Path(__file__).parent / "proteinmpnn_results"
-        self.results_dir.mkdir(exist_ok=True)
+        # Results directory will be user-scoped, set per job
+        self._base_dir = Path(__file__).parent.parent.parent
 
     def _get_client(self) -> ProteinMPNNClient:
         if self._client is None:
             self._client = get_proteinmpnn_client()
         return self._client
 
-    def _resolve_rfdiffusion_path(self, source_job_id: str) -> Path:
+    def _resolve_rfdiffusion_path(self, source_job_id: str, user_id: Optional[str] = None) -> Path:
         safe_id = source_job_id.replace("..", "").replace("/", "").strip()
-        base = Path(__file__).parent / "rfdiffusion_results"
+        if user_id:
+            base = self._base_dir / "storage" / user_id / "rfdiffusion_results"
+        else:
+            # Fallback to old location for backward compatibility
+            base = Path(__file__).parent / "rfdiffusion_results"
         candidate = base / f"rfdiffusion_{safe_id}.pdb"
         if not candidate.exists():
             raise FileNotFoundError(f"RFdiffusion result for job {source_job_id} not found")
@@ -115,8 +119,14 @@ class ProteinMPNNHandler:
             response.update(self.job_results[job_id])
         return response
 
-    def get_job_result(self, job_id: str) -> Optional[Dict[str, Any]]:
-        result_dir = self.results_dir / job_id
+    def get_job_result(self, job_id: str, user_id: Optional[str] = None) -> Optional[Dict[str, Any]]:
+        # Try user-scoped directory first, then fallback to old location
+        if user_id:
+            result_dir = self._base_dir / "storage" / user_id / "proteinmpnn_results" / job_id
+        else:
+            # Fallback to old location for backward compatibility
+            result_dir = Path(__file__).parent / "proteinmpnn_results" / job_id
+        
         result_file = result_dir / "result.json"
         if not result_file.exists():
             return None
@@ -310,7 +320,10 @@ class ProteinMPNNHandler:
                 progress_callback=progress_callback,
             )
 
-            result_dir = self.results_dir / job_id
+            # Get user-scoped results directory
+            user_id = job_data.get("userId", "system")
+            results_dir = self._base_dir / "storage" / user_id / "proteinmpnn_results"
+            result_dir = results_dir / job_id
             result_dir.mkdir(parents=True, exist_ok=True)
             metadata = {
                 "job_id": job_id,

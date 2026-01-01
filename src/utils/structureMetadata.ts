@@ -1,5 +1,4 @@
 import { PluginUIContext } from 'molstar/lib/mol-plugin-ui/context';
-import { Structure, StructureProperties } from 'molstar/lib/mol-model/structure';
 import { getCurrentStructure } from './molstarSelections';
 
 export interface StructureMetadata {
@@ -65,6 +64,15 @@ export async function extractStructureMetadata(
     for (const unit of units) {
       if (unit.kind === 0) { // atomic unit
         const { elements } = unit;
+        const { model } = unit;
+        
+        // Access properties from model hierarchy
+        // Use atom properties since residue properties may not be directly accessible
+        const compIdProp = model.atomicHierarchy.atoms.label_comp_id;
+        const asymIdProp = model.atomicHierarchy.chains.label_asym_id;
+        const seqIdProp = model.atomicHierarchy.residues.label_seq_id;
+        const residueAtomSegments = model.atomicHierarchy.residueAtomSegments;
+        const chainAtomSegments = model.atomicHierarchy.chainAtomSegments;
         
         // Track residues per chain to build sequences
         const chainResidueMap = new Map<string, Map<number, string>>();
@@ -72,10 +80,15 @@ export async function extractStructureMetadata(
         for (let i = 0; i < elements.length; i++) {
           const element = elements[i];
           
+          // Get residue and chain indices from atom index
+          const residueIdx = residueAtomSegments.index[element];
+          const chainIdx = chainAtomSegments.index[element];
+          
           // Get residue and chain information
-          const compId = StructureProperties.residue.label_comp_id(unit, element);
-          const asymId = StructureProperties.chain.label_asym_id(unit, element);
-          const seqId = StructureProperties.residue.label_seq_id(unit, element);
+          // Use atom's comp_id (all atoms in a residue have the same comp_id)
+          const compId = compIdProp.value(element);
+          const asymId = asymIdProp.value(chainIdx);
+          const seqId = seqIdProp.value(residueIdx);
           
           if (!compId || !asymId || seqId === null || seqId === undefined) continue;
           

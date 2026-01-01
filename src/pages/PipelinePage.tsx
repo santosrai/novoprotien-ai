@@ -20,7 +20,7 @@ export function PipelinePage() {
       <div className="h-12 flex items-center justify-between px-4 bg-gray-900 border-b border-gray-800">
         <h1 className="text-white text-lg font-semibold">Pipeline Canvas</h1>
         <a 
-          href="/" 
+          href="/app" 
           className="text-gray-400 hover:text-white text-sm transition-colors"
         >
           ← Back to Main App

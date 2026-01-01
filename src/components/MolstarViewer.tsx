@@ -187,9 +187,9 @@ export const MolstarViewer: React.FC = () => {
           return;
         }
 
-        // Fallback: load default only when no code is present
-        await loadDefaultStructure(pluginInstance);
-        console.log('[Molstar] initViewer: default structure loaded');
+        // Viewer initialized empty - no default structure loaded
+        // await loadDefaultStructure(pluginInstance);
+        console.log('[Molstar] initViewer: viewer initialized (no default structure)');
         
       } catch (error) {
         console.error('[Molstar] initViewer: failed', error);
@@ -216,7 +216,10 @@ export const MolstarViewer: React.FC = () => {
     };
   }, [hasCheckedPersistedCode, activeSessionId]);
 
-  const loadDefaultStructure = async (pluginInstance: PluginUIContext) => {
+  // Unused function - kept for potential future use
+  // @ts-ignore - intentionally unused
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  const _loadDefaultStructure = async (pluginInstance: PluginUIContext) => {
     try {
       console.log('[Molstar] loadDefaultStructure: start');
       console.time('[Molstar] download');
