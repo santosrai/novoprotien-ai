@@ -5,7 +5,7 @@
 NovoProtein AI is a web-based molecular visualization and protein design platform that combines:
 - **Natural Language Interface**: Users interact via chat to control protein visualization and design
 - **3D Molecular Visualization**: Powered by Molstar for interactive protein structure viewing
-- **AI-Powered Code Generation**: Claude/Anthropic models generate visualization code from natural language
+- **AI-Powered Code Generation**: AI models via OpenRouter generate visualization code from natural language
 - **Protein Design Workflows**: AlphaFold2 (structure prediction), RFdiffusion (de novo design), and ProteinMPNN (sequence design) via NVIDIA NIMS API
 
 ## High-Level Architecture
@@ -232,7 +232,7 @@ A standalone, reusable library for visual DAG workflow design:
 ### Technology Stack
 - **Framework**: FastAPI (Python)
 - **Server**: Uvicorn (ASGI server)
-- **AI Models**: Anthropic Claude (via SDK or OpenRouter), configurable via `models_config.json`
+- **AI Models**: OpenRouter API (accessing Claude and other models), configurable via `models_config.json`
 - **Embeddings**: OpenAI embeddings (for semantic routing)
 - **External APIs**: NVIDIA NIMS (AlphaFold, RFdiffusion, ProteinMPNN)
 - **Model Configuration**: JSON-based model registry with provider, name, and capabilities
@@ -451,8 +451,7 @@ A standalone, reusable library for visual DAG workflow design:
 - Can be overridden via environment variable
 
 ### Backend (`.env` or `server/.env`)
-- `ANTHROPIC_API_KEY`: Claude API key (or OpenRouter key)
-- `OPENROUTER_API_KEY`: Alternative to Anthropic
+- `OPENROUTER_API_KEY`: OpenRouter API key (required for LLM features)
 - `OPENAI_API_KEY`: For semantic routing embeddings
 - `NVCF_RUN_KEY`: NVIDIA NIMS API key (shared by AlphaFold, RFdiffusion, ProteinMPNN)
 - `CLAUDE_CODE_MODEL`: Model for code generation agents (default: "claude-3-5-sonnet-20241022")

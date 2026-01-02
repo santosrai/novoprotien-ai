@@ -13,7 +13,6 @@
     "build:library": "cd src/components/pipeline-canvas && npm run build"
   },
   "dependencies": {
-    "@anthropic-ai/sdk": "^0.24.1",
     "@modelcontextprotocol/server-puppeteer": "^2025.5.12",
     "@monaco-editor/react": "^4.6.0",
     "@types/react-router-dom": "^5.3.3",

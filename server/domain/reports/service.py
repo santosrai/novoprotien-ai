@@ -4,7 +4,12 @@ from typing import List, Optional, Dict, Any
 from datetime import datetime
 import uuid
 
-from ...database.db import get_db
+try:
+    # Try relative import first (when running as module)
+    from ...database.db import get_db
+except ImportError:
+    # Fallback to absolute import (when running directly)
+    from database.db import get_db
 
 
 def create_report(

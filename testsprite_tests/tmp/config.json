@@ -2,18 +2,19 @@
   "status": "commited",
   "type": "frontend",
   "scope": "codebase",
-  "localEndpoint": "http://localhost:3000",
-  "backendAuthType": "basic token",
-  "backendUsername": "user1@gmail.com",
-  "backendPassword": "test12345",
+  "localEndpoint": "http://localhost:3000/signin",
+  "loginUser": "user1@gmail.com",
+  "loginPassword": "test12345",
   "executionArgs": {
     "projectName": "novoprotien-ai",
     "projectPath": "/Users/alizabista/Downloads/Dev-Folder/novoprotien-ai",
-    "testIds": [],
-    "additionalInstruction": "Please add comprehensive multi-user end-to-end tests for authentication and user isolation. Test the following scenarios:\n\n1. User1 (user1@gmail.com / test12345) login and session creation\n2. User2 (user2@gmail.com / test12345) login and session creation  \n3. Verify User1 cannot access User2's chat sessions\n4. Verify User2 cannot access User1's chat sessions\n5. Verify User1's messages are isolated from User2\n6. Verify User2's messages are isolated from User1\n7. Test concurrent sessions - both users logged in simultaneously\n8. Test that each user can create, read, update, and delete their own sessions\n9. Test that users cannot modify or delete other users' sessions\n10. Test file upload isolation - User1's files are not visible to User2 and vice versa\n\nThe login credentials are:\n- User1: email=user1@gmail.com, password=test12345\n- User2: email=user2@gmail.com, password=test12345\n\nPlease test the authentication endpoints (/api/auth/signin), chat session endpoints (/api/chat/sessions), and chat message endpoints (/api/chat/sessions/{session_id}/messages) to verify proper user isolation and multi-user functionality.",
+    "testIds": [
+      "TC_MU001"
+    ],
+    "additionalInstruction": "",
     "envs": {
       "API_KEY": "sk-user-zN5XFx6DHYIrwt9vnShwzeec2N-aOuhSW4Oko5v78mI3MZL3aJK0ZDPqYsLPUs1dSCVjXim3bcJDwkfKf2sWgPP-3gqwbNhOEJ7kdnpKcCx-WfQk46KYilhJ9td7n0GmHeY"
     }
   },
-  "proxy": "http://d8ac85eb-2cba-4077-857a-1001516c7a4e:ogKSvh37ooaJvA2UA8STGRURdIRitRTi@tun.testsprite.com:8080"
+  "proxy": "http://e69ed25f-0ef5-4a57-ab43-e7f287992d69:jA43sGMPQJuOMz9BLseMDNBGd65YsIH4@tun.testsprite.com:8080"
 }

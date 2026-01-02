@@ -29,7 +29,7 @@ def log_line(section: str, message: Any) -> None:
 
 
 def get_text_from_completion(completion: Any) -> str:
-    """Anthropic Python SDK returns message.content as a list of blocks.
+    """OpenRouter API returns message.content as a list of blocks.
     Join all text blocks into a single string.
     """
     try:
@@ -37,7 +37,7 @@ def get_text_from_completion(completion: Any) -> str:
         if hasattr(completion, 'choices') and completion.choices:
             return completion.choices[0].message.content or ""
 
-        # Anthropic response format
+        # OpenRouter API response format (for Anthropic models)
         content = completion.content or []
         parts = []
         for block in content:

@@ -5,7 +5,7 @@ This folder contains the Python API server used by the app. It exposes `/api/*` 
 ## Requirements
 - Python 3.10+ and pip
 - Optional: OpenAI API key (for semantic router embeddings)
-- Required to call LLMs: `ANTHROPIC_API_KEY`
+- Required to call LLMs: `OPENROUTER_API_KEY`
 
 ## Quick start (Windows PowerShell)
 ```powershell
@@ -21,7 +21,7 @@ if (Get-Command python -ErrorAction SilentlyContinue) { python -m venv .venv } e
 APP_ORIGIN=http://localhost:5173
 DEBUG_API=1
 # Required when invoking agents:
-# ANTHROPIC_API_KEY=sk-ant-...
+# OPENROUTER_API_KEY=sk-or-...
 # Optional for semantic routing (embeddings):
 # OPENAI_API_KEY=sk-openai-...
 # Optional model overrides:
@@ -41,7 +41,7 @@ python3 -m venv .venv
 cat > server/.env << 'EOF'
 APP_ORIGIN=http://localhost:5173
 DEBUG_API=1
-# ANTHROPIC_API_KEY=sk-ant-...
+# OPENROUTER_API_KEY=sk-or-...
 # OPENAI_API_KEY=sk-openai-...
 # CLAUDE_CODE_MODEL=claude-3-5-sonnet-20241022
 # CLAUDE_CHAT_MODEL=claude-3-5-sonnet-20241022
@@ -56,7 +56,7 @@ EOF
 - POST `/api/agents/invoke` – call a specific agent
 - Back-compat: POST `/api/generate`, POST `/api/chat`
 
-Note: LLM-backed endpoints require `ANTHROPIC_API_KEY`. Health and listing agents work without it.
+Note: LLM-backed endpoints require `OPENROUTER_API_KEY`. Health and listing agents work without it.
 
 ## Frontend integration
 The frontend reads `VITE_API_BASE`. For local dev, add this to a `.env` at the project root:

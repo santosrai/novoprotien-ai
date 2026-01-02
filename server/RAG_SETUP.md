@@ -10,7 +10,7 @@ Add these to your `.env` file in the server directory:
 
 ```bash
 # Existing (required)
-ANTHROPIC_API_KEY=your_anthropic_api_key_here
+OPENROUTER_API_KEY=your_openrouter_api_key_here
 
 # New for RAG (required)
 PINECONE_API_KEY=your_pinecone_api_key_here

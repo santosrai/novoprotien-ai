@@ -2,6 +2,9 @@ import React, { useState, useRef, useEffect } from 'react';
 import { Send, Sparkles, Download, Play, X, Copy, Paperclip, ChevronUp, ChevronDown } from 'lucide-react';
 import { useAppStore } from '../stores/appStore';
 import { useChatHistoryStore, useActiveSession, Message } from '../stores/chatHistoryStore';
+import { useAuthStore } from '../stores/authStore';
+// Import CodeExecutor - will be lazy loaded in practice via code splitting
+// But keep synchronous import for now to avoid breaking existing code
 import { CodeExecutor } from '../utils/codeExecutor';
 import { api, fetchAgents, fetchModels, Agent, Model, streamAgentRoute } from '../utils/api';
 import { v4 as uuidv4 } from 'uuid';
@@ -26,6 +29,7 @@ import { PipelineBlueprintDisplay } from './PipelineBlueprintDisplay';
 import { PipelineProgressDisplay } from './PipelineProgressDisplay';
 import { NodeParameterConfig } from './NodeParameterConfig';
 import { Pipeline } from './pipeline-canvas/types';
+import { MessageSaveNotification } from './MessageSaveNotification';
 import { PipelineContextPill } from './PipelineContextPill';
 import { extractStructureMetadata } from '../utils/structureMetadata';
 
@@ -270,8 +274,17 @@ export const ChatPanel: React.FC = () => {
   const clearSelections = useAppStore(state => state.clearSelections);
 
   // Chat history store
-  const { createSession, activeSessionId, saveVisualizationCode, getVisualizationCode, saveViewerVisibility, getViewerVisibility, getActiveSession, saveModelSettings, getModelSettings } = useChatHistoryStore();
+  const { createSession, activeSessionId, saveVisualizationCode, saveViewerVisibility, getViewerVisibility, getActiveSession, saveModelSettings, getModelSettings, syncSessionMessages } = useChatHistoryStore();
+  const isSyncing = useChatHistoryStore(state => state._isSyncing);
   const isViewerVisible = useAppStore(state => state.isViewerVisible);
+  
+  // Mark ChatPanel as ready for test detection
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      document.body.setAttribute('data-chat-panel-ready', 'true');
+    }, 500);
+    return () => clearTimeout(timer);
+  }, []);
   
   // Helper function to set viewer visibility and save to session
   const setViewerVisibleAndSave = (visible: boolean) => {
@@ -297,17 +310,62 @@ export const ChatPanel: React.FC = () => {
   const isViewerVisibleRef = useRef<boolean>(isViewerVisible);
   // Ref to prevent saving during restoration
   const isRestoringRef = useRef(false);
+  // Ref to track if we've attempted to create a session on mount
+  const hasAttemptedCreateRef = useRef(false);
 
-  // Initialize session if none exists
+  // Initialize session if none exists (but wait for sync to complete)
   useEffect(() => {
-    if (!activeSessionId) {
-      createSession().catch(console.error);
+    // Don't create a session if:
+    // 1. We're currently syncing sessions from the backend
+    // 2. We already have an active session
+    // 3. We've already attempted to create a session on this mount
+    if (isSyncing || activeSessionId || hasAttemptedCreateRef.current) {
+      return;
     }
-  }, [activeSessionId, createSession]);
+
+    // Wait a bit to allow rehydration to complete (onRehydrateStorage has 1000ms delay)
+    // This prevents race condition where we create a session before sync completes
+    const timer = setTimeout(() => {
+      // Check again after delay - sync might have completed and loaded sessions
+      const currentState = useChatHistoryStore.getState();
+      if (!currentState.activeSessionId && !currentState._isSyncing) {
+        hasAttemptedCreateRef.current = true;
+        createSession().catch((error) => {
+          console.error('[ChatPanel] Failed to create session:', error);
+          // Don't break the UI if session creation fails - user can still interact
+        });
+      }
+    }, 1500); // Wait 1.5s to allow onRehydrateStorage (1s delay) + sync to complete
+
+    return () => clearTimeout(timer);
+  }, [activeSessionId, createSession, isSyncing]);
+
+  // Create session after sync completes if we still don't have one
+  useEffect(() => {
+    // When sync completes (isSyncing becomes false) and we have no active session
+    if (!isSyncing && !activeSessionId && !hasAttemptedCreateRef.current) {
+      const timer = setTimeout(() => {
+        const currentState = useChatHistoryStore.getState();
+        // Double-check we still don't have a session and aren't syncing
+        if (!currentState.activeSessionId && !currentState._isSyncing) {
+          hasAttemptedCreateRef.current = true;
+          createSession().catch((error) => {
+            console.error('[ChatPanel] Failed to create session after sync:', error);
+          });
+        }
+      }, 500); // Small delay to ensure state is stable
+
+      return () => clearTimeout(timer);
+    }
+  }, [isSyncing, activeSessionId, createSession]);
 
   // Initialize previous session ID ref on mount
   useEffect(() => {
-    if (activeSessionId && !previousSessionIdRef.current) {
+    if (activeSessionId) {
+      // Reset the create attempt ref when we have a session (allows creating new session if all are deleted)
+      if (!previousSessionIdRef.current) {
+        hasAttemptedCreateRef.current = false;
+      }
       previousSessionIdRef.current = activeSessionId;
       // Restore viewer visibility for initial session on mount
       const savedVisibility = getViewerVisibility(activeSessionId);
@@ -358,10 +416,32 @@ export const ChatPanel: React.FC = () => {
     
     // Only restore when session changes
     if (sessionChanged) {
-      // Restore code for new session
-      const savedCode = getVisualizationCode(activeSessionId);
-      if (savedCode && savedCode.trim()) {
-        console.log('[ChatPanel] Restoring visualization code for session:', activeSessionId);
+      // Ensure messages are loaded for the active session
+      // This is a safeguard in case messages weren't loaded during switchToSession or syncSessions
+      if (activeSessionId && activeSession) {
+        const hasMessages = activeSession.messages && activeSession.messages.length > 0;
+        const user = useAuthStore.getState().user;
+        if (!hasMessages && user && syncSessionMessages) {
+          console.log('[ChatPanel] Active session has no messages, loading from backend:', activeSessionId);
+          syncSessionMessages(activeSessionId).catch(err => {
+            console.error('[ChatPanel] Failed to load messages for active session:', err);
+          });
+        }
+      }
+      
+      // Restore code for new session - ALWAYS use the latest message's code
+      const currentSession = getActiveSession();
+      const lastAiMessageWithCode = currentSession?.messages
+        .filter(m => m.type === 'ai' && m.threeDCanvas?.sceneData)
+        .sort((a, b) => b.timestamp.getTime() - a.timestamp.getTime())[0];
+      
+      if (lastAiMessageWithCode?.threeDCanvas?.sceneData) {
+        const savedCode = lastAiMessageWithCode.threeDCanvas.sceneData;
+        console.log('[ChatPanel] Restoring visualization code from latest message:', {
+          sessionId: activeSessionId,
+          messageId: lastAiMessageWithCode.id,
+          codeLength: savedCode.length
+        });
         setCurrentCode(savedCode);
       } else {
         // Clear code if session has no saved visualization
@@ -411,7 +491,29 @@ export const ChatPanel: React.FC = () => {
       // Update previous session ID
       previousSessionIdRef.current = activeSessionId;
     }
-  }, [activeSessionId, getVisualizationCode, saveVisualizationCode, getViewerVisibility, saveViewerVisibility, setCurrentCode, setViewerVisible, saveModelSettings, getModelSettings, updateAgentSettings]);
+  }, [activeSessionId, saveVisualizationCode, getViewerVisibility, saveViewerVisibility, setCurrentCode, setViewerVisible, saveModelSettings, getModelSettings, updateAgentSettings, getActiveSession]);
+
+  // Restore code when messages are loaded (after sync)
+  useEffect(() => {
+    if (!activeSessionId || !activeSession) return;
+    
+    // Check if messages have canvas data that we should restore
+    const lastAiMessage = activeSession.messages
+      .filter(m => m.type === 'ai' && m.threeDCanvas?.sceneData)
+      .sort((a, b) => b.timestamp.getTime() - a.timestamp.getTime())[0];
+    
+    if (lastAiMessage?.threeDCanvas?.sceneData) {
+      const canvasCode = lastAiMessage.threeDCanvas.sceneData;
+      // Only update if current code is different (avoid unnecessary updates)
+      if (currentCodeRef.current !== canvasCode) {
+        console.log('[ChatPanel] Restoring code from message canvas after sync:', {
+          messageId: lastAiMessage.id,
+          codeLength: canvasCode.length
+        });
+        setCurrentCode(canvasCode);
+      }
+    }
+  }, [activeSession?.messages, activeSessionId, setCurrentCode, activeSession]);
 
   // Save model settings when they change (for current session)
   // Skip saving during initial session switch to avoid overwriting restored settings
@@ -879,10 +981,23 @@ try {
         },
       });
       
-      // Save code to active session for persistence
+      // Save code to active session for persistence (message-scoped if messageId available)
       if (activeSessionId) {
-        saveVisualizationCode(activeSessionId, code);
-        console.log('[ChatPanel] Saved visualization code to session:', activeSessionId);
+        // Try to find the last AI message to link the canvas
+        const currentSession = getActiveSession();
+        const lastAiMessage = currentSession?.messages
+          .filter(m => m.type === 'ai')
+          .sort((a, b) => b.timestamp.getTime() - a.timestamp.getTime())[0];
+        
+        const messageId = lastAiMessage?.id;
+        if (messageId) {
+          saveVisualizationCode(activeSessionId, code, messageId);
+          console.log('[ChatPanel] Saved visualization code to message-scoped canvas:', messageId);
+        } else {
+          // Fallback to session-scoped (deprecated)
+          saveVisualizationCode(activeSessionId, code);
+          console.log('[ChatPanel] Saved visualization code to session (deprecated):', activeSessionId);
+        }
       }
       
       await executor.executeCode(code);
@@ -961,6 +1076,46 @@ try {
     );
   };
 
+  const renderVisualizationCode = (canvas: ExtendedMessage['threeDCanvas'], messageId: string) => {
+    if (!canvas?.sceneData) return null;
+
+    const loadInViewer = async () => {
+      if (!plugin || !canvas.sceneData) return;
+      
+      try {
+        setIsExecuting(true);
+        const executor = new CodeExecutor(plugin);
+        
+        // Set code in editor
+        setCurrentCode(canvas.sceneData);
+        
+        // Execute the code
+        await executor.executeCode(canvas.sceneData);
+        setViewerVisibleAndSave(true);
+        setActivePane('viewer');
+        
+        console.log('[ChatPanel] Loaded visualization from message:', messageId);
+      } catch (err) {
+        console.error('Failed to load visualization in viewer:', err);
+      } finally {
+        setIsExecuting(false);
+      }
+    };
+
+    return (
+      <div className="mt-3 flex justify-end">
+        <button
+          onClick={loadInViewer}
+          disabled={!plugin}
+          className="flex items-center space-x-1 px-4 py-2 bg-green-600 text-white rounded-md hover:bg-green-700 disabled:opacity-50 disabled:cursor-not-allowed text-sm font-medium"
+        >
+          <Play className="w-4 h-4" />
+          <span>View in 3D</span>
+        </button>
+      </div>
+    );
+  };
+
   const renderAlphaFoldResult = (result: ExtendedMessage['alphafoldResult']) => {
     if (!result) return null;
 
@@ -1019,11 +1174,22 @@ try {
           filename: result.filename
         });
         
-        // Save code to active session for persistence
-        if (activeSessionId) {
+      // Save code to active session for persistence (message-scoped if messageId available)
+      if (activeSessionId) {
+        const currentSession = getActiveSession();
+        const lastAiMessage = currentSession?.messages
+          .filter(m => m.type === 'ai')
+          .sort((a, b) => b.timestamp.getTime() - a.timestamp.getTime())[0];
+        
+        const messageId = lastAiMessage?.id;
+        if (messageId) {
+          saveVisualizationCode(activeSessionId, code, messageId);
+          console.log('[ChatPanel] Saved visualization code to message-scoped canvas:', messageId);
+        } else {
           saveVisualizationCode(activeSessionId, code);
-          console.log('[ChatPanel] Saved visualization code to session:', activeSessionId);
+          console.log('[ChatPanel] Saved visualization code to session (deprecated):', activeSessionId);
         }
+      }
         
         await executor.executeCode(code);
         setViewerVisibleAndSave(true);
@@ -1928,6 +2094,13 @@ try {
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
+    // Check authentication before allowing messages
+    const user = useAuthStore.getState().user;
+    if (!user) {
+      e.preventDefault();
+      alert('Please sign in to send messages. Messages must be saved to the database.');
+      return;
+    }
     e.preventDefault();
     if (!input.trim() || isLoading) return;
 
@@ -2067,9 +2240,18 @@ try {
               },
             });
             
-            // Save code to active session
+            // Save code to active session (message-scoped if messageId available)
             if (activeSessionId) {
-              saveVisualizationCode(activeSessionId, loadCode);
+              const currentSession = getActiveSession();
+              const lastAiMessage = currentSession?.messages
+                .filter(m => m.type === 'ai')
+                .sort((a, b) => b.timestamp.getTime() - a.timestamp.getTime())[0];
+              
+              if (lastAiMessage?.id) {
+                saveVisualizationCode(activeSessionId, loadCode, lastAiMessage.id);
+              } else {
+                saveVisualizationCode(activeSessionId, loadCode);
+              }
             }
             
             await executor.executeCode(loadCode);
@@ -2708,12 +2890,6 @@ try {
       // Sync code into editor
       setCurrentCode(code);
       
-      // Save code to active session
-      if (activeSessionId) {
-        saveVisualizationCode(activeSessionId, code);
-        console.log('[ChatPanel] Saved visualization code to session:', activeSessionId);
-      }
-
       // Update placeholder message or create new one
       // Mark thinking process as complete now that we have the full response
       // Skip if message was already updated during streaming
@@ -2734,6 +2910,12 @@ try {
             ? (aiText || `Generated code for: "${text}". Executing...`)
             : `I couldn't generate valid code for: "${text}". ${thinkingProcess ? 'See my thinking process above for details.' : ''}`;
           
+          // Include 3D canvas data if code exists
+          const threeDCanvas = code && code.trim() ? {
+            id: placeholderMessageId, // Will be updated when saved
+            sceneData: code,
+          } : undefined;
+          
           // Try to generate PDB summary asynchronously
           generatePDBSummary(text).then(summary => {
             if (summary) {
@@ -2744,7 +2926,8 @@ try {
                     ? { 
                         ...msg, 
                         content: summary,
-                        thinkingProcess: finalThinkingProcess
+                        thinkingProcess: finalThinkingProcess,
+                        threeDCanvas: threeDCanvas || msg.threeDCanvas
                       } as ExtendedMessage
                     : msg
                 );
@@ -2760,11 +2943,18 @@ try {
               ? { 
                   ...msg, 
                   content: defaultMessageContent,
-                  thinkingProcess: finalThinkingProcess
+                  thinkingProcess: finalThinkingProcess,
+                  threeDCanvas: threeDCanvas
                 } as ExtendedMessage
               : msg
           );
           updateMessages(updatedMessages);
+          
+          // Save code to message-scoped canvas after message is updated
+          if (activeSessionId && code && code.trim() && placeholderMessageId) {
+            saveVisualizationCode(activeSessionId, code, placeholderMessageId);
+            console.log('[ChatPanel] Saved visualization code to message-scoped canvas:', placeholderMessageId);
+          }
         } else {
           // Use AI text response if available, otherwise fall back to generic message
           const defaultMessageContent = code && code.trim()
@@ -2775,7 +2965,12 @@ try {
             id: uuidv4(),
             content: defaultMessageContent,
             type: 'ai',
-            timestamp: new Date()
+            timestamp: new Date(),
+            // Include 3D canvas data if code exists
+            threeDCanvas: code && code.trim() ? {
+              id: '', // Will be set when saved
+              sceneData: code,
+            } : undefined
           };
           
           // Add thinking process if available
@@ -2784,6 +2979,12 @@ try {
           }
           
           addMessage(aiResponse);
+          
+          // Save code to message-scoped canvas after message is created
+          if (activeSessionId && code && code.trim() && aiResponse.id) {
+            saveVisualizationCode(activeSessionId, code, aiResponse.id);
+            console.log('[ChatPanel] Saved visualization code to message-scoped canvas:', aiResponse.id);
+          }
           
           // Try to generate PDB summary asynchronously and update message
           generatePDBSummary(text).then(summary => {
@@ -2865,7 +3066,8 @@ try {
   const showCenteredLayout = !hasUserMessages && (messages.length === 0 || isOnlyWelcomeMessage);
 
   return (
-    <div className="h-full flex flex-col">
+    <>
+    <div className="h-full flex flex-col" data-testid="chat-panel" data-chat-ready="true">
       {!showCenteredLayout && (
         <div className="px-4 py-2 border-b border-gray-200">
           <div className="flex items-center space-x-2">
@@ -2906,6 +3108,12 @@ try {
                     />
                   )}
                   {renderMessageContent(message.content)}
+                  {/* Show visualization code attachment if present */}
+                  {message.threeDCanvas?.sceneData && (
+                    <div className="mt-3">
+                      {renderVisualizationCode(message.threeDCanvas, message.id)}
+                    </div>
+                  )}
                   {/* Show uploaded file attachment if the most recent user message before this AI message had one */}
                   {(() => {
                     const messageIndex = messages.findIndex(m => m.id === message.id);
@@ -3404,5 +3612,7 @@ try {
         />
       )}
     </div>
+    <MessageSaveNotification />
+    </>
   );
 };

@@ -1,522 +1,511 @@
 [
   {
-    "id": "TC001",
-    "title": "HTTP Method Selection and Execution",
-    "description": "Verify that the user can select each supported HTTP method (GET, POST, PUT, PATCH, DELETE, HEAD, OPTIONS) and the HTTP request node executes successfully with the selected method.",
-    "category": "functional",
+    "id": "TC_MU001",
+    "title": "User1 Login and Session Creation",
+    "description": "Verify User1 (user1@gmail.com / test12345) can successfully log in and create a chat session",
+    "category": "authentication",
     "priority": "High",
     "steps": [
       {
         "type": "action",
-        "description": "Drag and drop HTTP Request node onto pipeline canvas"
+        "description": "Navigate to /signin page"
       },
       {
         "type": "action",
-        "description": "Open node configuration panel"
+        "description": "Enter email: user1@gmail.com"
       },
       {
         "type": "action",
-        "description": "Select HTTP method from dropdown (test all supported methods one by one)"
+        "description": "Enter password: test12345"
       },
       {
         "type": "action",
-        "description": "Enter valid URL without template variables"
-      },
-      {
-        "type": "action",
-        "description": "Execute the node"
+        "description": "Click Sign in button"
       },
       {
         "type": "assertion",
-        "description": "Verify the request is sent using the selected HTTP method"
+        "description": "Verify user is redirected to /app after successful login"
       },
       {
         "type": "assertion",
-        "description": "Verify the output panel displays correct HTTP status code and response details"
+        "description": "Verify a new chat session is automatically created"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify User1's email is displayed in the header or user info"
       }
     ]
   },
   {
-    "id": "TC002",
-    "title": "URL Configuration with Absolute and Relative URLs and Template Variables",
-    "description": "Verify that the HTTP Request node accepts valid absolute URLs, relative URLs, and URLs containing template variables, with real-time validation feedback.",
-    "category": "functional",
+    "id": "TC_MU002",
+    "title": "User2 Login and Session Creation",
+    "description": "Verify User2 (user2@gmail.com / test12345) can successfully log in and create a chat session",
+    "category": "authentication",
     "priority": "High",
     "steps": [
       {
         "type": "action",
-        "description": "Configure node with absolute URL without template variables"
-      },
-      {
-        "type": "assertion",
-        "description": "Verify URL validation succeeds"
+        "description": "Navigate to /signin page (in a new browser context/window)"
       },
       {
         "type": "action",
-        "description": "Configure node with relative URL path"
-      },
-      {
-        "type": "assertion",
-        "description": "Verify URL validation succeeds"
+        "description": "Enter email: user2@gmail.com"
       },
       {
         "type": "action",
-        "description": "Configure node URL using valid template variables (e.g., {{input.userId}})"
-      },
-      {
-        "type": "assertion",
-        "description": "Verify real-time validation accepts template syntax"
+        "description": "Enter password: test12345"
       },
       {
         "type": "action",
-        "description": "Input invalid URL or malformed template variable"
+        "description": "Click Sign in button"
       },
       {
         "type": "assertion",
-        "description": "Verify URL validation failure and appropriate error feedback"
+        "description": "Verify user is redirected to /app after successful login"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify a new chat session is automatically created"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify User2's email is displayed in the header or user info"
       }
     ]
   },
   {
-    "id": "TC003",
-    "title": "Authentication Schemes Verification",
-    "description": "Verify the node supports all authentication schemes (none, Basic Auth, Bearer Token, Custom Headers, API Key) and that credentials/tokens are applied correctly.",
-    "category": "functional",
+    "id": "TC_MU003",
+    "title": "User1 Creates and Sends Chat Message",
+    "description": "Verify User1 can create a chat session and send messages",
+    "category": "chat",
     "priority": "High",
     "steps": [
       {
         "type": "action",
-        "description": "Select 'None' authentication"
+        "description": "Login as User1 (user1@gmail.com / test12345)"
       },
       {
         "type": "action",
-        "description": "Execute request and verify no authentication header is sent"
+        "description": "Wait for chat interface to load"
       },
       {
         "type": "action",
-        "description": "Select Basic Auth and input username and password"
+        "description": "Type a test message: 'Hello from User1'"
       },
       {
         "type": "action",
-        "description": "Execute request"
+        "description": "Send the message"
       },
       {
         "type": "assertion",
-        "description": "Verify Authorization header contains Base64 encoded credentials"
-      },
-      {
-        "type": "action",
-        "description": "Select Bearer Token authentication and input token"
-      },
-      {
-        "type": "action",
-        "description": "Execute request"
+        "description": "Verify message appears in the chat history"
       },
       {
         "type": "assertion",
-        "description": "Verify Authorization header is set to Bearer token"
-      },
-      {
-        "type": "action",
-        "description": "Select Custom Header and input custom header key and value"
-      },
-      {
-        "type": "action",
-        "description": "Execute request"
+        "description": "Verify message is marked as from User1"
       },
       {
         "type": "assertion",
-        "description": "Verify custom header is included in the request headers"
-      },
-      {
-        "type": "action",
-        "description": "Select API Key authentication with all supported injection methods (header, query parameter)"
-      },
-      {
-        "type": "action",
-        "description": "Execute request"
-      },
-      {
-        "type": "assertion",
-        "description": "Verify API Key is transmitted correctly based on selected method"
+        "description": "Verify AI response is received (if applicable)"
       }
     ]
   },
   {
-    "id": "TC004",
-    "title": "Headers and Query Parameters Management",
-    "description": "Verify that headers and query parameters can be toggled on/off, edited using JSON editors, support template variables, and the final request contains correct headers and parameters.",
-    "category": "functional",
+    "id": "TC_MU004",
+    "title": "User2 Creates and Sends Chat Message",
+    "description": "Verify User2 can create a chat session and send messages",
+    "category": "chat",
     "priority": "High",
     "steps": [
       {
         "type": "action",
-        "description": "Enable headers toggle and add multiple headers (including template variables)"
-      },
-      {
-        "type": "assertion",
-        "description": "Verify JSON editor supports valid JSON including template syntax"
+        "description": "Login as User2 (user2@gmail.com / test12345) in separate browser context"
       },
       {
         "type": "action",
-        "description": "Enable query parameters toggle and add multiple parameters (including template variables)"
-      },
-      {
-        "type": "assertion",
-        "description": "Verify JSON editor supports valid JSON including template syntax"
+        "description": "Wait for chat interface to load"
       },
       {
         "type": "action",
-        "description": "Execute request"
-      },
-      {
-        "type": "assertion",
-        "description": "Verify all headers and query parameters are included accurately in the HTTP request"
+        "description": "Type a test message: 'Hello from User2'"
       },
       {
         "type": "action",
-        "description": "Input invalid JSON in headers or query parameters JSON editor"
+        "description": "Send the message"
       },
       {
         "type": "assertion",
-        "description": "Verify validation errors are shown and request execution is blocked"
+        "description": "Verify message appears in the chat history"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify message is marked as from User2"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify AI response is received (if applicable)"
       }
     ]
   },
   {
-    "id": "TC005",
-    "title": "Request Body Configuration and Content Types",
-    "description": "Verify that the user can configure the request body with different content types (JSON, Form Data, Form URL Encoded, Raw text) including template expressions and that bodies are sent correctly.",
-    "category": "functional",
+    "id": "TC_MU005",
+    "title": "User1 Cannot Access User2's Chat Sessions",
+    "description": "Verify User1 cannot see or access User2's chat sessions",
+    "category": "isolation",
+    "priority": "Critical",
+    "steps": [
+      {
+        "type": "action",
+        "description": "Login as User2 and create a chat session with a message"
+      },
+      {
+        "type": "action",
+        "description": "Note the session ID from User2's session"
+      },
+      {
+        "type": "action",
+        "description": "Login as User1 in a separate browser context"
+      },
+      {
+        "type": "action",
+        "description": "Check the chat history sidebar for available sessions"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify User1's session list does not contain User2's session"
+      },
+      {
+        "type": "action",
+        "description": "Attempt to access User2's session directly via URL or API (if possible)"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify access is denied or session is not found"
+      }
+    ]
+  },
+  {
+    "id": "TC_MU006",
+    "title": "User2 Cannot Access User1's Chat Sessions",
+    "description": "Verify User2 cannot see or access User1's chat sessions",
+    "category": "isolation",
+    "priority": "Critical",
+    "steps": [
+      {
+        "type": "action",
+        "description": "Login as User1 and create a chat session with a message"
+      },
+      {
+        "type": "action",
+        "description": "Note the session ID from User1's session"
+      },
+      {
+        "type": "action",
+        "description": "Login as User2 in a separate browser context"
+      },
+      {
+        "type": "action",
+        "description": "Check the chat history sidebar for available sessions"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify User2's session list does not contain User1's session"
+      },
+      {
+        "type": "action",
+        "description": "Attempt to access User1's session directly via URL or API (if possible)"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify access is denied or session is not found"
+      }
+    ]
+  },
+  {
+    "id": "TC_MU007",
+    "title": "User1's Messages Are Isolated from User2",
+    "description": "Verify User1's messages are only visible to User1 and not to User2",
+    "category": "isolation",
+    "priority": "Critical",
+    "steps": [
+      {
+        "type": "action",
+        "description": "Login as User1 and send a message: 'This is User1's private message'"
+      },
+      {
+        "type": "action",
+        "description": "Login as User2 in a separate browser context"
+      },
+      {
+        "type": "action",
+        "description": "Check User2's chat history"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify User1's message is NOT visible in User2's chat"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify User2 only sees their own messages"
+      }
+    ]
+  },
+  {
+    "id": "TC_MU008",
+    "title": "User2's Messages Are Isolated from User1",
+    "description": "Verify User2's messages are only visible to User2 and not to User1",
+    "category": "isolation",
+    "priority": "Critical",
+    "steps": [
+      {
+        "type": "action",
+        "description": "Login as User2 and send a message: 'This is User2's private message'"
+      },
+      {
+        "type": "action",
+        "description": "Login as User1 in a separate browser context"
+      },
+      {
+        "type": "action",
+        "description": "Check User1's chat history"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify User2's message is NOT visible in User1's chat"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify User1 only sees their own messages"
+      }
+    ]
+  },
+  {
+    "id": "TC_MU009",
+    "title": "Concurrent Sessions - Both Users Logged In Simultaneously",
+    "description": "Verify both User1 and User2 can be logged in simultaneously without interference",
+    "category": "concurrency",
     "priority": "High",
     "steps": [
       {
         "type": "action",
-        "description": "Set content type to JSON and input valid JSON body with template variables"
+        "description": "Login as User1 in browser context 1"
       },
       {
         "type": "action",
-        "description": "Execute request"
+        "description": "Login as User2 in browser context 2 (simultaneously)"
+      },
+      {
+        "type": "action",
+        "description": "User1 sends a message: 'Message from User1'"
+      },
+      {
+        "type": "action",
+        "description": "User2 sends a message: 'Message from User2'"
       },
       {
         "type": "assertion",
-        "description": "Verify request body is serialized as JSON with substituted template values"
-      },
-      {
-        "type": "action",
-        "description": "Set content type to Form Data and input key-value pairs including template expressions"
-      },
-      {
-        "type": "action",
-        "description": "Execute request"
+        "description": "Verify User1 only sees their own message"
       },
       {
         "type": "assertion",
-        "description": "Verify request body is encoded as multipart/form-data correctly"
-      },
-      {
-        "type": "action",
-        "description": "Set content type to Form URL Encoded with key-value pairs"
-      },
-      {
-        "type": "action",
-        "description": "Execute request"
+        "description": "Verify User2 only sees their own message"
       },
       {
         "type": "assertion",
-        "description": "Verify request body is URL encoded correctly"
-      },
-      {
-        "type": "action",
-        "description": "Set content type to Raw text and input plain text including template expressions"
-      },
-      {
-        "type": "action",
-        "description": "Execute request"
-      },
-      {
-        "type": "assertion",
-        "description": "Verify raw body content is sent correctly with template substitutions"
-      },
-      {
-        "type": "action",
-        "description": "Input invalid JSON body"
-      },
-      {
-        "type": "assertion",
-        "description": "Verify validation error message appears and execution is blocked"
+        "description": "Verify both users can interact with the app simultaneously without errors"
       }
     ]
   },
   {
-    "id": "TC006",
-    "title": "Advanced Options Configuration and Impact",
-    "description": "Verify advanced HTTP request options such as timeout, follow redirects, SSL verification, and response format selection function correctly and affect request execution as expected.",
-    "category": "functional",
+    "id": "TC_MU010",
+    "title": "User1 Can Create, Read, Update, and Delete Own Sessions",
+    "description": "Verify User1 has full CRUD operations on their own chat sessions",
+    "category": "crud",
+    "priority": "High",
+    "steps": [
+      {
+        "type": "action",
+        "description": "Login as User1"
+      },
+      {
+        "type": "action",
+        "description": "Create a new chat session"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify new session appears in session list"
+      },
+      {
+        "type": "action",
+        "description": "Open the session and verify it loads correctly"
+      },
+      {
+        "type": "action",
+        "description": "Update session title (if feature exists)"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify session title is updated"
+      },
+      {
+        "type": "action",
+        "description": "Delete the session"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify session is removed from session list"
+      }
+    ]
+  },
+  {
+    "id": "TC_MU011",
+    "title": "User2 Can Create, Read, Update, and Delete Own Sessions",
+    "description": "Verify User2 has full CRUD operations on their own chat sessions",
+    "category": "crud",
+    "priority": "High",
+    "steps": [
+      {
+        "type": "action",
+        "description": "Login as User2"
+      },
+      {
+        "type": "action",
+        "description": "Create a new chat session"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify new session appears in session list"
+      },
+      {
+        "type": "action",
+        "description": "Open the session and verify it loads correctly"
+      },
+      {
+        "type": "action",
+        "description": "Update session title (if feature exists)"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify session title is updated"
+      },
+      {
+        "type": "action",
+        "description": "Delete the session"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify session is removed from session list"
+      }
+    ]
+  },
+  {
+    "id": "TC_MU012",
+    "title": "User1 Cannot Modify or Delete User2's Sessions",
+    "description": "Verify User1 cannot modify or delete sessions belonging to User2",
+    "category": "security",
+    "priority": "Critical",
+    "steps": [
+      {
+        "type": "action",
+        "description": "Login as User2 and create a session, note the session ID"
+      },
+      {
+        "type": "action",
+        "description": "Login as User1"
+      },
+      {
+        "type": "action",
+        "description": "Attempt to access User2's session (if session ID is known)"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify User1 cannot see User2's session in their session list"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify User1 cannot modify User2's session (if direct access attempted)"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify User1 cannot delete User2's session"
+      }
+    ]
+  },
+  {
+    "id": "TC_MU013",
+    "title": "User2 Cannot Modify or Delete User1's Sessions",
+    "description": "Verify User2 cannot modify or delete sessions belonging to User1",
+    "category": "security",
+    "priority": "Critical",
+    "steps": [
+      {
+        "type": "action",
+        "description": "Login as User1 and create a session, note the session ID"
+      },
+      {
+        "type": "action",
+        "description": "Login as User2"
+      },
+      {
+        "type": "action",
+        "description": "Attempt to access User1's session (if session ID is known)"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify User2 cannot see User1's session in their session list"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify User2 cannot modify User1's session (if direct access attempted)"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify User2 cannot delete User1's session"
+      }
+    ]
+  },
+  {
+    "id": "TC_MU014",
+    "title": "Multiple Sessions Per User",
+    "description": "Verify each user can create and manage multiple chat sessions independently",
+    "category": "functionality",
     "priority": "Medium",
     "steps": [
       {
         "type": "action",
-        "description": "Set a short timeout value and execute request to a slow-responding endpoint"
-      },
-      {
-        "type": "assertion",
-        "description": "Verify the request times out and error handling displays timeout message"
+        "description": "Login as User1"
       },
       {
         "type": "action",
-        "description": "Toggle follow redirects off and execute a request to an endpoint that performs HTTP redirect"
-      },
-      {
-        "type": "assertion",
-        "description": "Verify redirect is not followed and response status reflects redirect (e.g., 3xx)"
+        "description": "Create Session 1 and send a message"
       },
       {
         "type": "action",
-        "description": "Toggle SSL verification off and execute request to HTTPS endpoint with self-signed certificate"
-      },
-      {
-        "type": "assertion",
-        "description": "Verify request succeeds without SSL errors"
+        "description": "Create Session 2 and send a different message"
       },
       {
         "type": "action",
-        "description": "Set response format to different options (JSON, text, etc.)"
+        "description": "Create Session 3 and send another message"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify all three sessions appear in User1's session list"
       },
       {
         "type": "action",
-        "description": "Execute requests"
+        "description": "Switch between sessions"
       },
       {
         "type": "assertion",
-        "description": "Verify the output panel displays the response body correctly according to the selected format"
-      }
-    ]
-  },
-  {
-    "id": "TC007",
-    "title": "Output Panel Verification for Request and Response Details",
-    "description": "Verify that the output panel displays comprehensive data including execution status, HTTP status code, request headers, response headers, request body, response body, execution time, and multiple views (table, JSON, schema).",
-    "category": "ui",
-    "priority": "High",
-    "steps": [
-      {
-        "type": "action",
-        "description": "Execute an HTTP request node"
-      },
-      {
-        "type": "assertion",
-        "description": "Verify output panel shows execution status (success or error)"
-      },
-      {
-        "type": "assertion",
-        "description": "Verify HTTP status code is displayed"
-      },
-      {
-        "type": "assertion",
-        "description": "Verify request headers and request body are visible"
-      },
-      {
-        "type": "assertion",
-        "description": "Verify response headers and body are displayed"
-      },
-      {
-        "type": "assertion",
-        "description": "Verify execution time is shown"
+        "description": "Verify each session displays its own message history correctly"
       },
       {
         "type": "action",
-        "description": "Switch between table, JSON, and schema views of response body"
+        "description": "Login as User2 and create multiple sessions"
       },
       {
         "type": "assertion",
-        "description": "Verify response is correctly displayed in all supported views"
-      }
-    ]
-  },
-  {
-    "id": "TC008",
-    "title": "Error Handling and Retry Suggestions",
-    "description": "Verify error handling logic displays full error messages, network errors, HTTP error details, and actionable retry suggestions in the output panel when requests fail.",
-    "category": "error handling",
-    "priority": "High",
-    "steps": [
-      {
-        "type": "action",
-        "description": "Execute request to an invalid URL or offline endpoint"
-      },
-      {
-        "type": "assertion",
-        "description": "Verify network error details are displayed with retry recommendations"
-      },
-      {
-        "type": "action",
-        "description": "Execute request that returns HTTP error codes (4xx, 5xx)"
-      },
-      {
-        "type": "assertion",
-        "description": "Verify error response status, headers, body and error messages are displayed in output panel"
-      },
-      {
-        "type": "assertion",
-        "description": "Verify retry suggestions or instructions for errors are visible and clear"
-      }
-    ]
-  },
-  {
-    "id": "TC009",
-    "title": "Template Variable Syntax and Real-time Validation",
-    "description": "Verify that template variables can be used in URL, headers, query parameters, and body fields with correct syntax and that real-time validation alerts invalid template expressions.",
-    "category": "functional",
-    "priority": "High",
-    "steps": [
-      {
-        "type": "action",
-        "description": "Enter valid template variables (e.g., {{input.userId}}) in all supported fields"
-      },
-      {
-        "type": "assertion",
-        "description": "Verify real-time validation accepts variables and no errors shown"
-      },
-      {
-        "type": "action",
-        "description": "Enter invalid template expressions (e.g., unclosed braces, wrong format)"
-      },
-      {
-        "type": "assertion",
-        "description": "Verify validation errors are shown immediately"
-      },
-      {
-        "type": "action",
-        "description": "Execute requests with template variables resolving to valid values"
-      },
-      {
-        "type": "assertion",
-        "description": "Verify template variables are correctly substituted in final request"
-      }
-    ]
-  },
-  {
-    "id": "TC010",
-    "title": "Integration with Pipeline Execution Engine and Logging",
-    "description": "Verify that requests and responses are fully captured and logged by the pipeline execution engine, supporting data chaining and debugging within the pipeline.",
-    "category": "integration",
-    "priority": "High",
-    "steps": [
-      {
-        "type": "action",
-        "description": "Execute HTTP Request node within a simple pipeline"
-      },
-      {
-        "type": "assertion",
-        "description": "Verify execution engine logs include request method, URL, headers, body, response status, headers, body, and execution timings"
-      },
-      {
-        "type": "action",
-        "description": "Chain output data to a subsequent node via configuration"
-      },
-      {
-        "type": "assertion",
-        "description": "Verify downstream node receives expected data from HTTP response"
-      }
-    ]
-  },
-  {
-    "id": "TC011",
-    "title": "Request Timeout and Cancellation Handling",
-    "description": "Verify that the request timeout option works correctly, aborting requests exceeding timeout, and that cancellation produces correct error handling and output feedback.",
-    "category": "error handling",
-    "priority": "Medium",
-    "steps": [
-      {
-        "type": "action",
-        "description": "Set request timeout to a low value"
-      },
-      {
-        "type": "action",
-        "description": "Execute request to an endpoint with delayed response"
-      },
-      {
-        "type": "assertion",
-        "description": "Verify request is aborted after timeout and timeout error is shown"
-      },
-      {
-        "type": "action",
-        "description": "Manually cancel an ongoing request execution"
-      },
-      {
-        "type": "assertion",
-        "description": "Verify cancellation is handled gracefully with appropriate user feedback and no unhandled errors"
-      }
-    ]
-  },
-  {
-    "id": "TC012",
-    "title": "Exporting and Copying Response Data",
-    "description": "Verify that the user can copy, download, and export the HTTP response data from the output panel in supported formats.",
-    "category": "functional",
-    "priority": "Low",
-    "steps": [
-      {
-        "type": "action",
-        "description": "Execute an HTTP request node successfully"
-      },
-      {
-        "type": "action",
-        "description": "Use copy button to copy response data"
-      },
-      {
-        "type": "assertion",
-        "description": "Verify response data is copied to clipboard in expected format"
-      },
-      {
-        "type": "action",
-        "description": "Use download button to save response data as file"
-      },
-      {
-        "type": "assertion",
-        "description": "Verify downloaded file content matches response data"
-      },
-      {
-        "type": "action",
-        "description": "Use export functionality to export response in available formats"
-      },
-      {
-        "type": "assertion",
-        "description": "Verify exported data is correctly formatted and includes all necessary fields"
-      }
-    ]
-  },
-  {
-    "id": "TC013",
-    "title": "Validation of Malformed Input in Configuration Panels",
-    "description": "Verify that invalid inputs such as malformed JSON, invalid URLs, and incorrect data formats are detected promptly with user-friendly error messages and prevent execution.",
-    "category": "error handling",
-    "priority": "High",
-    "steps": [
-      {
-        "type": "action",
-        "description": "Enter invalid JSON in headers or query parameters editor"
-      },
-      {
-        "type": "assertion",
-        "description": "Verify validation error message is displayed and request execution button is disabled"
-      },
-      {
-        "type": "action",
-        "description": "Enter malformed URL (missing scheme, invalid characters)"
-      },
-      {
-        "type": "assertion",
-        "description": "Verify validation error message shown next to URL field"
-      },
-      {
-        "type": "action",
-        "description": "Enter invalid data type in request body as per selected content type"
-      },
-      {
-        "type": "assertion",
-        "description": "Verify validation error displayed and execution prevented"
+        "description": "Verify User2's sessions are independent from User1's sessions"
       }
     ]
   }

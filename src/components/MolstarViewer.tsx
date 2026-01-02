@@ -23,21 +23,25 @@ export const MolstarViewer: React.FC = () => {
   const { setPlugin: setStorePlugin, pendingCodeToRun, setPendingCodeToRun, setActivePane, setIsExecuting, currentCode, setCurrentCode } = useAppStore();
   const addSelection = useAppStore(state => state.addSelection);
   const lastLoadedPdb = useAppStore(state => state.lastLoadedPdb);
-  const { activeSessionId, getVisualizationCode } = useChatHistoryStore();
+  const { activeSessionId, getActiveSession } = useChatHistoryStore();
 
-  // Helper function to get the code to execute (checks both global and session-specific)
+  // Helper function to get the code to execute (prioritizes message code over global code)
   const getCodeToExecute = (): string | null => {
-    // First check global currentCode
-    if (currentCode && currentCode.trim()) {
-      return currentCode;
+    // First check latest message's code from active session
+    if (activeSessionId) {
+      const activeSession = getActiveSession();
+      const lastAiMessageWithCode = activeSession?.messages
+        .filter(m => m.type === 'ai' && m.threeDCanvas?.sceneData)
+        .sort((a, b) => b.timestamp.getTime() - a.timestamp.getTime())[0];
+      
+      if (lastAiMessageWithCode?.threeDCanvas?.sceneData) {
+        return lastAiMessageWithCode.threeDCanvas.sceneData;
+      }
     }
     
-    // Then check session-specific visualization code
-    if (activeSessionId) {
-      const sessionCode = getVisualizationCode(activeSessionId);
-      if (sessionCode && sessionCode.trim()) {
-        return sessionCode;
-      }
+    // Fallback to global currentCode
+    if (currentCode && currentCode.trim()) {
+      return currentCode;
     }
     
     return null;
@@ -166,14 +170,14 @@ export const MolstarViewer: React.FC = () => {
           return;
         }
 
-        // Priority 2: Get code to execute (checks both global and session-specific)
+        // Priority 2: Get code to execute (prioritizes message code)
         const codeToExecute = getCodeToExecute();
         if (codeToExecute) {
           try {
             setIsExecuting(true);
             const exec = new CodeExecutor(pluginInstance);
             await exec.executeCode(codeToExecute);
-            // Sync to store if it came from session
+            // Sync to store if it came from message
             if (!currentCode || currentCode.trim() === '') {
               setCurrentCode(codeToExecute);
             }
@@ -275,23 +279,16 @@ export const MolstarViewer: React.FC = () => {
     const run = async () => {
       if (!plugin || !isInitialized) return;
       
-      // Get code to execute (checks both global and session-specific)
-      let code = currentCode?.trim();
-      
-      // If no global code, check session-specific code
-      if (!code && activeSessionId) {
-        const sessionCode = getVisualizationCode(activeSessionId);
-        if (sessionCode && sessionCode.trim()) {
-          code = sessionCode;
-          // Sync to store so it's available globally
-          if (!currentCode || currentCode.trim() === '') {
-            setCurrentCode(sessionCode);
-          }
-        }
-      }
+      // Get code to execute (prioritizes message code over global code)
+      let code = getCodeToExecute();
       
       if (!code) return;
       if (lastExecutedCodeRef.current === code) return;
+      
+      // Sync to store if it came from message
+      if (code !== currentCode) {
+        setCurrentCode(code);
+      }
       
       try {
         setIsExecuting(true);

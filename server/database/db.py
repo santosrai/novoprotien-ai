@@ -6,7 +6,12 @@ from contextlib import contextmanager
 from typing import Generator
 import os
 
-from ..infrastructure.config import get_server_dir
+try:
+    # Try relative import first (when running as module)
+    from ..infrastructure.config import get_server_dir
+except ImportError:
+    # Fallback to absolute import (when running directly)
+    from infrastructure.config import get_server_dir
 
 # Database path - can be overridden by environment variable
 DB_PATH = Path(os.getenv("DATABASE_PATH", get_server_dir() / "novoprotein.db"))

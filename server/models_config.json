@@ -1,4 +1,8 @@
 {
+  "defaults": {
+    "codeModel": "mistralai/devstral-2512:free",
+    "chatModel": "mistralai/devstral-2512:free"
+  },
   "models": [
     {
       "id": "openai/gpt-4.1",

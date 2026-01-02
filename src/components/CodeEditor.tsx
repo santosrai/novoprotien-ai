@@ -35,10 +35,23 @@ export const CodeEditor: React.FC = () => {
       const res = await exec.executeCode(currentCode);
       console.log('[Molstar] execute result:', res);
       
-      // Save code to active session after successful execution
+      // Save code to active session after successful execution (message-scoped if possible)
       if (activeSessionId && currentCode.trim()) {
-        saveVisualizationCode(activeSessionId, currentCode);
-        console.log('[CodeEditor] Saved visualization code to session:', activeSessionId);
+        // Try to find the last AI message to link the canvas
+        const chatStore = useChatHistoryStore.getState();
+        const activeSession = chatStore.sessions.find(s => s.id === activeSessionId);
+        const lastAiMessage = activeSession?.messages
+          .filter(m => m.type === 'ai')
+          .sort((a, b) => b.timestamp.getTime() - a.timestamp.getTime())[0];
+        
+        if (lastAiMessage?.id) {
+          saveVisualizationCode(activeSessionId, currentCode, lastAiMessage.id);
+          console.log('[CodeEditor] Saved visualization code to message-scoped canvas:', lastAiMessage.id);
+        } else {
+          // Fallback to session-scoped (deprecated)
+          saveVisualizationCode(activeSessionId, currentCode);
+          console.log('[CodeEditor] Saved visualization code to session (deprecated):', activeSessionId);
+        }
       }
     } catch (e) {
       console.error('[Molstar] execute failed', e);

@@ -4,6 +4,7 @@ import { Pipeline, PipelineNode, PipelineBlueprint, NodeStatus } from '../types/
 import { topologicalSort } from '../utils/topologicalSort';
 import { api } from '../../../utils/api';
 import { useAuthStore } from '../../../stores/authStore';
+import { useChatHistoryStore } from '../../../stores/chatHistoryStore';
 
 // Execution log entry for tracking node execution history
 export interface ExecutionLogEntry {
@@ -79,7 +80,7 @@ interface PipelineState {
   deleteNode: (nodeId: string) => void;
   addEdge: (source: string, target: string) => void;
   deleteEdge: (source: string, target: string) => void;
-  savePipeline: (name: string) => Promise<void>;
+  savePipeline: (name: string, messageId?: string, conversationId?: string) => Promise<void>;
   loadPipeline: (pipelineId: string) => Promise<void>;
   deletePipeline: (pipelineId: string) => Promise<void>;
   syncPipelines: () => Promise<void>;
@@ -108,7 +109,7 @@ const debouncedAutoSave = (get: () => PipelineState, set: (partial: Partial<Pipe
     clearTimeout(autoSaveTimer);
   }
   
-  autoSaveTimer = setTimeout(() => {
+  autoSaveTimer = setTimeout(async () => {
     const { currentPipeline } = get();
     if (!currentPipeline) return;
     
@@ -121,6 +122,23 @@ const debouncedAutoSave = (get: () => PipelineState, set: (partial: Partial<Pipe
         updatedAt: new Date(),
       };
       localStorage.setItem(DRAFT_KEY, JSON.stringify(draft));
+      
+      // Also save draft to backend if user is authenticated
+      const user = useAuthStore.getState().user;
+      if (user) {
+        try {
+          // Save as draft pipeline (status='draft')
+          await api.post('/pipelines', {
+            ...draft,
+            status: 'draft',
+          });
+          console.log('[debouncedAutoSave] Draft pipeline saved to backend');
+        } catch (error: any) {
+          console.error('[debouncedAutoSave] Failed to save draft to backend:', error);
+          // Don't throw - localStorage save succeeded
+        }
+      }
+      
       set({ 
         lastSavedAt: new Date(),
         isSaving: false 
@@ -424,7 +442,7 @@ export const usePipelineStore = create<PipelineState>()(
         debouncedAutoSave(get, set);
       },
       
-      savePipeline: async (name) => {
+      savePipeline: async (name, messageId?: string, conversationId?: string) => {
         const { currentPipeline, savedPipelines } = get();
         if (!currentPipeline) return;
         
@@ -438,8 +456,23 @@ export const usePipelineStore = create<PipelineState>()(
         const user = useAuthStore.getState().user;
         if (user) {
           try {
-            await api.post('/pipelines', pipelineToSave);
-            console.log('Pipeline saved to backend');
+            // Include message_id and conversation_id if provided (for message-scoped pipelines)
+            const pipelineData: any = { ...pipelineToSave };
+            if (messageId) {
+              pipelineData.message_id = messageId;
+            }
+            if (conversationId) {
+              pipelineData.conversation_id = conversationId;
+            } else if (!conversationId && messageId) {
+              // Try to get conversationId from active session if messageId is provided
+              const { activeSessionId } = useChatHistoryStore.getState();
+              if (activeSessionId) {
+                pipelineData.conversation_id = activeSessionId;
+              }
+            }
+            
+            await api.post('/pipelines', pipelineData);
+            console.log('Pipeline saved to backend', messageId ? `(linked to message ${messageId})` : '');
           } catch (error: any) {
             console.error('Failed to save pipeline to backend:', error);
             // Continue with local save even if backend fails
@@ -586,6 +619,41 @@ export const usePipelineStore = create<PipelineState>()(
           
           set({ savedPipelines: validPipelines });
           console.log(`Synced ${validPipelines.length} pipelines from backend`);
+          
+          // Also try to load draft pipeline from backend
+          // Look for a pipeline with status='draft' and most recent updated_at
+          const draftPipelines = validPipelines.filter(p => p.status === 'draft');
+          if (draftPipelines.length > 0) {
+            // Get most recent draft
+            const latestDraft = draftPipelines.reduce((latest, current) => {
+              const latestTime = latest.updatedAt?.getTime() || 0;
+              const currentTime = current.updatedAt?.getTime() || 0;
+              return currentTime > latestTime ? current : latest;
+            });
+            
+            // Only load if it's newer than localStorage draft
+            try {
+              const localDraft = localStorage.getItem(DRAFT_KEY);
+              if (localDraft) {
+                const parsedLocal = JSON.parse(localDraft);
+                const localTime = parsedLocal.updatedAt ? new Date(parsedLocal.updatedAt).getTime() : 0;
+                const backendTime = latestDraft.updatedAt?.getTime() || 0;
+                
+                if (backendTime > localTime) {
+                  console.log('[syncPipelines] Loading draft from backend (newer than local)');
+                  set({ currentPipeline: latestDraft });
+                }
+              } else {
+                // No local draft, load from backend
+                console.log('[syncPipelines] Loading draft from backend (no local draft)');
+                set({ currentPipeline: latestDraft });
+              }
+            } catch (error) {
+              console.error('[syncPipelines] Failed to compare drafts:', error);
+              // Fallback: load backend draft
+              set({ currentPipeline: latestDraft });
+            }
+          }
         } catch (error: any) {
           console.error('Failed to sync pipelines from backend:', error);
         }

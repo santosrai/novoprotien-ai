@@ -13,7 +13,7 @@ export interface AppSettings {
     showQuickPrompts: boolean;   // Show/hide quick start buttons
   };
   api: {
-    key: string;                // API Key (Anthropic or OpenRouter)
+    key: string;                // OpenRouter API Key
   };
   performance: {
     debugMode: boolean;         // Enhanced logging

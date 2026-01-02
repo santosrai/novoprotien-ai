@@ -1,10 +1,13 @@
 -- Users table
 CREATE TABLE IF NOT EXISTS users (
     id TEXT PRIMARY KEY,
-    email TEXT UNIQUE NOT NULL,
+    email TEXT UNIQUE, -- NULL for AI agents
     username TEXT UNIQUE NOT NULL,
-    password_hash TEXT NOT NULL,
+    password_hash TEXT, -- NULL for AI agents
+    user_type TEXT NOT NULL DEFAULT 'human', -- 'human' | 'ai'
     role TEXT NOT NULL DEFAULT 'user', -- 'user', 'admin', 'moderator'
+    agent_id TEXT, -- References agent registry (e.g., 'code-builder', 'alphafold-agent')
+    model_version TEXT, -- e.g., 'anthropic/claude-3.5-sonnet'
     email_verified BOOLEAN DEFAULT 0,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -118,6 +121,7 @@ CREATE INDEX idx_user_files_type ON user_files(file_type);
 CREATE INDEX idx_user_files_job_id ON user_files(job_id);
 
 -- Chat sessions (migrate from frontend localStorage)
+-- Keep for backward compatibility during migration
 CREATE TABLE IF NOT EXISTS chat_sessions (
     id TEXT PRIMARY KEY,
     user_id TEXT NOT NULL,
@@ -129,22 +133,42 @@ CREATE TABLE IF NOT EXISTS chat_sessions (
 
 CREATE INDEX idx_chat_sessions_user_id ON chat_sessions(user_id);
 
+-- Conversations (new table, replaces chat_sessions)
+CREATE TABLE IF NOT EXISTS conversations (
+    id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL REFERENCES users(id),
+    ai_agent_id TEXT REFERENCES users(id), -- AI participant
+    title TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+);
+
+CREATE INDEX idx_conversations_user_id ON conversations(user_id);
+CREATE INDEX idx_conversations_ai_agent_id ON conversations(ai_agent_id);
+
 -- Chat messages (store actual message content)
 CREATE TABLE IF NOT EXISTS chat_messages (
     id TEXT PRIMARY KEY,
-    session_id TEXT NOT NULL,
-    user_id TEXT NOT NULL,
+    session_id TEXT NOT NULL, -- Keep for backward compatibility
+    conversation_id TEXT, -- New field, references conversations
+    user_id TEXT NOT NULL, -- Keep for backward compatibility
+    sender_id TEXT REFERENCES users(id), -- Can be human or AI user_id
     content TEXT NOT NULL,
-    message_type TEXT NOT NULL DEFAULT 'user', -- 'user' or 'ai'
+    message_type TEXT NOT NULL DEFAULT 'user', -- 'user', 'ai', 'text', 'tool_call', 'tool_result'
     role TEXT, -- 'user', 'assistant', 'system'
     metadata TEXT, -- JSON: jobId, jobType, thinkingProcess, results, etc.
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (session_id) REFERENCES chat_sessions(id) ON DELETE CASCADE,
-    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+    FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE,
+    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+    FOREIGN KEY (sender_id) REFERENCES users(id) ON DELETE CASCADE
 );
 
 CREATE INDEX idx_chat_messages_session_id ON chat_messages(session_id);
+CREATE INDEX idx_chat_messages_conversation_id ON chat_messages(conversation_id);
 CREATE INDEX idx_chat_messages_user_id ON chat_messages(user_id);
+CREATE INDEX idx_chat_messages_sender_id ON chat_messages(sender_id);
 CREATE INDEX idx_chat_messages_created_at ON chat_messages(created_at);
 
 -- Session-file associations (replaces session_files.json)
@@ -166,6 +190,8 @@ CREATE INDEX idx_session_files_file_id ON session_files(file_id);
 CREATE TABLE IF NOT EXISTS pipelines (
     id TEXT PRIMARY KEY,
     user_id TEXT NOT NULL,
+    message_id TEXT REFERENCES chat_messages(id), -- Links to message that created/triggered pipeline
+    conversation_id TEXT REFERENCES conversations(id), -- For gallery view
     name TEXT,
     description TEXT,
     pipeline_json TEXT NOT NULL, -- Full Pipeline definition as JSON
@@ -176,6 +202,8 @@ CREATE TABLE IF NOT EXISTS pipelines (
 );
 
 CREATE INDEX idx_pipelines_user_id ON pipelines(user_id);
+CREATE INDEX idx_pipelines_message_id ON pipelines(message_id);
+CREATE INDEX idx_pipelines_conversation_id ON pipelines(conversation_id);
 CREATE INDEX idx_pipelines_status ON pipelines(status);
 
 -- Pipeline executions
@@ -193,4 +221,48 @@ CREATE TABLE IF NOT EXISTS pipeline_executions (
 
 CREATE INDEX idx_pipeline_executions_user_id ON pipeline_executions(user_id);
 CREATE INDEX idx_pipeline_executions_pipeline_id ON pipeline_executions(pipeline_id);
+
+-- Session state (canvas/viewer state, model settings)
+CREATE TABLE IF NOT EXISTS session_state (
+    session_id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL,
+    visualization_code TEXT,
+    viewer_visible BOOLEAN DEFAULT 0,
+    model_settings TEXT, -- JSON: {selectedAgentId, selectedModel}
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (session_id) REFERENCES chat_sessions(id) ON DELETE CASCADE,
+    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+);
+
+CREATE INDEX idx_session_state_user_id ON session_state(user_id);
+CREATE INDEX idx_session_state_updated_at ON session_state(updated_at);
+
+-- Three D Canvases (message-scoped visualization code)
+CREATE TABLE IF NOT EXISTS three_d_canvases (
+    id TEXT PRIMARY KEY,
+    message_id TEXT REFERENCES chat_messages(id),
+    conversation_id TEXT REFERENCES conversations(id),
+    scene_data TEXT NOT NULL, -- JSON: {molstar_code, camera_position, objects, etc.}
+    preview_url TEXT,
+    version INTEGER DEFAULT 1,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX idx_three_d_canvases_message_id ON three_d_canvases(message_id);
+CREATE INDEX idx_three_d_canvases_conversation_id ON three_d_canvases(conversation_id);
+
+-- Attachments (message-scoped file attachments)
+CREATE TABLE IF NOT EXISTS attachments (
+    id TEXT PRIMARY KEY,
+    message_id TEXT REFERENCES chat_messages(id),
+    file_id TEXT REFERENCES user_files(id),
+    file_name TEXT,
+    file_type TEXT, -- MIME type
+    file_size_kb INTEGER,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX idx_attachments_message_id ON attachments(message_id);
+CREATE INDEX idx_attachments_file_id ON attachments(file_id);
 

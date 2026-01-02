@@ -10,7 +10,12 @@ from typing import Dict, List, Optional, Tuple
 
 from fastapi import HTTPException
 
-from ...database.db import get_db
+try:
+    # Try relative import first (when running as module)
+    from ...database.db import get_db
+except ImportError:
+    # Fallback to absolute import (when running directly)
+    from database.db import get_db
 
 BASE_DIR = Path(__file__).parent.parent.parent
 STORAGE_DIR = BASE_DIR / "storage"

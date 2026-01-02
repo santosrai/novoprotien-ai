@@ -5,8 +5,14 @@ from datetime import datetime, timedelta
 import uuid
 import json
 
-from ...database.db import get_db
-from ...infrastructure.auth import hash_password, verify_password, create_access_token, create_refresh_token
+try:
+    # Try relative import first (when running as module)
+    from ...database.db import get_db
+    from ...infrastructure.auth import hash_password, verify_password, create_access_token, create_refresh_token
+except ImportError:
+    # Fallback to absolute import (when running directly)
+    from database.db import get_db
+    from infrastructure.auth import hash_password, verify_password, create_access_token, create_refresh_token
 from .models import UserCreate, UserLogin, UserRole
 
 

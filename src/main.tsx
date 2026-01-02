@@ -9,44 +9,53 @@ import { SignInForm } from './components/auth/SignInForm'
 import { SignUpForm } from './components/auth/SignUpForm'
 import { AdminDashboard } from './pages/AdminDashboard'
 import { AuthGuard } from './components/auth/AuthGuard'
+import { ErrorBoundary } from './components/ErrorBoundary'
 import './index.css'
 
-ReactDOM.createRoot(document.getElementById('root')!).render(
+// Verify root element exists before rendering
+const rootElement = document.getElementById('root');
+if (!rootElement) {
+  throw new Error('Root element not found. Make sure index.html has a <div id="root"></div> element.');
+}
+
+ReactDOM.createRoot(rootElement).render(
   <React.StrictMode>
-    <BrowserRouter>
-      <Routes>
-        {/* Public Landing Page */}
-        <Route path="/" element={<LandingPage />} />
-        <Route path="/pricing" element={<PricingPage />} />
-        <Route path="/signin" element={<SignInForm />} />
-        <Route path="/signup" element={<SignUpForm />} />
-        
-        {/* Authenticated App Routes */}
-        <Route
-          path="/app"
-          element={
-            <AuthGuard>
-              <App />
-            </AuthGuard>
-          }
-        />
-        <Route
-          path="/pipeline"
-          element={
-            <AuthGuard>
-              <PipelinePage />
-            </AuthGuard>
-          }
-        />
-        <Route
-          path="/admin"
-          element={
-            <AuthGuard requireRole="admin">
-              <AdminDashboard />
-            </AuthGuard>
-          }
-        />
-      </Routes>
-    </BrowserRouter>
+    <ErrorBoundary>
+      <BrowserRouter>
+        <Routes>
+          {/* Public Landing Page */}
+          <Route path="/" element={<LandingPage />} />
+          <Route path="/pricing" element={<PricingPage />} />
+          <Route path="/signin" element={<SignInForm />} />
+          <Route path="/signup" element={<SignUpForm />} />
+          
+          {/* Authenticated App Routes */}
+          <Route
+            path="/app"
+            element={
+              <AuthGuard>
+                <App />
+              </AuthGuard>
+            }
+          />
+          <Route
+            path="/pipeline"
+            element={
+              <AuthGuard>
+                <PipelinePage />
+              </AuthGuard>
+            }
+          />
+          <Route
+            path="/admin"
+            element={
+              <AuthGuard requireRole="admin">
+                <AdminDashboard />
+              </AuthGuard>
+            }
+          />
+        </Routes>
+      </BrowserRouter>
+    </ErrorBoundary>
   </React.StrictMode>,
 )

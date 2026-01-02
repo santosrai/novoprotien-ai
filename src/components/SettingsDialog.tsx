@@ -248,7 +248,7 @@ export const SettingsDialog: React.FC<SettingsDialogProps> = ({ isOpen, onClose 
                         <div className="mt-2 text-sm text-blue-700">
                           <p>
                             You can use your own API key to power the AI features.
-                            We support both <strong>Anthropic</strong> and <strong>OpenRouter</strong> keys.
+                            We use <strong>OpenRouter</strong> to access AI models.
                           </p>
                           <p className="mt-1">
                             Your key is stored locally in your browser and sent directly to the server.
@@ -269,13 +269,13 @@ export const SettingsDialog: React.FC<SettingsDialogProps> = ({ isOpen, onClose 
                           name="apiKey"
                           id="apiKey"
                           className="shadow-sm focus:ring-blue-500 focus:border-blue-500 block w-full sm:text-sm border-gray-300 rounded-md px-3 py-2 border"
-                          placeholder="sk-ant-... or sk-or-..."
+                          placeholder="sk-or-..."
                           value={localSettings.api?.key || ''}
                           onChange={(e) => handleSettingChange('api.key', e.target.value)}
                         />
                       </div>
                       <p className="mt-2 text-xs text-gray-500">
-                        Enter your Anthropic (starts with sk-ant-) or OpenRouter (starts with sk-or-) API key.
+                        Enter your OpenRouter API key (starts with sk-or-).
                       </p>
                     </div>
                   </div>

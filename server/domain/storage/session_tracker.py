@@ -8,7 +8,12 @@ from pathlib import Path
 from typing import Dict, List, Optional
 from datetime import datetime
 
-from ...database.db import get_db
+try:
+    # Try relative import first (when running as module)
+    from ...database.db import get_db
+except ImportError:
+    # Fallback to absolute import (when running directly)
+    from database.db import get_db
 
 
 def create_chat_session(user_id: str, title: Optional[str] = None) -> str:

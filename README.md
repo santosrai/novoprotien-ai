@@ -90,11 +90,11 @@ The application can load structures from:
 
 ## Development
 
-### AI Code Generation (Claude)
+### AI Code Generation (OpenRouter)
 
-This app can generate Mol* builder code from natural language via a lightweight server that calls the Claude SDK.
+This app can generate Mol* builder code from natural language via a lightweight server that calls the OpenRouter API.
 
-1. Create a `.env` file in the project root and set `ANTHROPIC_API_KEY=your_key_here`.
+1. Create a `.env` file in the project root and set `OPENROUTER_API_KEY=your_key_here`.
 2. Run both the API server and Vite dev server together:
    ```bash
    npm run dev:all

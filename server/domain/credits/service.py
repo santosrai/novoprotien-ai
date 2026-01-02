@@ -5,7 +5,12 @@ from datetime import datetime
 import uuid
 import json
 
-from ...database.db import get_db
+try:
+    # Try relative import first (when running as module)
+    from ...database.db import get_db
+except ImportError:
+    # Fallback to absolute import (when running directly)
+    from database.db import get_db
 
 # Credit costs for different actions
 CREDIT_COSTS = {

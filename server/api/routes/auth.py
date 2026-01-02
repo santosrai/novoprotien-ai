@@ -4,10 +4,18 @@ from fastapi import APIRouter, HTTPException, Depends, status, Request
 from typing import Dict, Any, Optional
 from pydantic import BaseModel
 
-from ...domain.user.models import UserCreate, UserLogin
-from ...domain.user.service import create_user, authenticate_user, get_user_by_id
-from ..middleware.auth import get_current_user
-from ...database.db import get_db
+try:
+    # Try relative import first (when running as module)
+    from ...domain.user.models import UserCreate, UserLogin
+    from ...domain.user.service import create_user, authenticate_user, get_user_by_id
+    from ..middleware.auth import get_current_user
+    from ...database.db import get_db
+except ImportError:
+    # Fallback to absolute import (when running directly)
+    from domain.user.models import UserCreate, UserLogin
+    from domain.user.service import create_user, authenticate_user, get_user_by_id
+    from api.middleware.auth import get_current_user
+    from database.db import get_db
 from datetime import datetime
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])

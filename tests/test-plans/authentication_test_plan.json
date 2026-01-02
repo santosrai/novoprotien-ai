@@ -1,0 +1,78 @@
+[
+  {
+    "id": "TC_AUTH_001",
+    "title": "User1 Login and Session Creation",
+    "description": "Verify User1 (user1@gmail.com / test12345) can successfully log in and create a chat session",
+    "category": "authentication",
+    "priority": "High",
+    "tags": ["login", "session", "user1"],
+    "steps": [
+      {
+        "type": "action",
+        "description": "Navigate to /signin page"
+      },
+      {
+        "type": "action",
+        "description": "Enter email: user1@gmail.com"
+      },
+      {
+        "type": "action",
+        "description": "Enter password: test12345"
+      },
+      {
+        "type": "action",
+        "description": "Click Sign in button"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify user is redirected to /app after successful login"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify a new chat session is automatically created"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify User1's email is displayed in the header or user info"
+      }
+    ]
+  },
+  {
+    "id": "TC_AUTH_002",
+    "title": "User2 Login and Session Creation",
+    "description": "Verify User2 (user2@gmail.com / test12345) can successfully log in and create a chat session",
+    "category": "authentication",
+    "priority": "High",
+    "tags": ["login", "session", "user2"],
+    "steps": [
+      {
+        "type": "action",
+        "description": "Navigate to /signin page (in a new browser context/window)"
+      },
+      {
+        "type": "action",
+        "description": "Enter email: user2@gmail.com"
+      },
+      {
+        "type": "action",
+        "description": "Enter password: test12345"
+      },
+      {
+        "type": "action",
+        "description": "Click Sign in button"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify user is redirected to /app after successful login"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify a new chat session is automatically created"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify User2's email is displayed in the header or user info"
+      }
+    ]
+  }
+]

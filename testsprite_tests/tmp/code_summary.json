@@ -6,526 +6,149 @@
     "Python",
     "FastAPI",
     "SQLite",
-    "Zustand",
-    "TailwindCSS",
     "MolStar",
-    "Anthropic API",
-    "NVIDIA NIMS API"
+    "TailwindCSS",
+    "Zustand",
+    "React Router",
+    "Anthropic Claude",
+    "NVIDIA NIMS API",
+    "Pinecone",
+    "LangChain"
   ],
   "features": [
     {
-      "name": "Authentication",
-      "description": "User authentication with signup, signin, signout, token refresh, and user info endpoints",
+      "name": "Authentication System",
+      "description": "User authentication with sign in, sign up, and session management",
       "files": [
-        "server/api/routes/auth.py",
+        "src/components/auth/SignInForm.tsx",
+        "src/components/auth/SignUpForm.tsx",
+        "src/stores/authStore.ts",
         "server/infrastructure/auth.py",
-        "server/domain/user/service.py",
-        "src/stores/authStore.ts"
-      ],
-      "api_doc": {
-        "openapi": "3.0.0",
-        "paths": {
-          "/api/auth/signup": {
-            "post": {
-              "summary": "User registration",
-              "requestBody": {
-                "required": true,
-                "content": {
-                  "application/json": {
-                    "schema": {
-                      "type": "object",
-                      "properties": {
-                        "email": {"type": "string"},
-                        "password": {"type": "string"},
-                        "name": {"type": "string"}
-                      }
-                    }
-                  }
-                }
-              },
-              "responses": {
-                "200": {"description": "Registration successful"},
-                "400": {"description": "Invalid input"},
-                "500": {"description": "Registration failed"}
-              }
-            }
-          },
-          "/api/auth/signin": {
-            "post": {
-              "summary": "User login",
-              "requestBody": {
-                "required": true,
-                "content": {
-                  "application/json": {
-                    "schema": {
-                      "type": "object",
-                      "properties": {
-                        "email": {"type": "string"},
-                        "password": {"type": "string"}
-                      }
-                    }
-                  }
-                }
-              },
-              "responses": {
-                "200": {"description": "Login successful"},
-                "401": {"description": "Invalid credentials"},
-                "500": {"description": "Login failed"}
-              }
-            }
-          },
-          "/api/auth/signout": {
-            "post": {
-              "summary": "User signout",
-              "responses": {
-                "200": {"description": "Signout successful"}
-              }
-            }
-          },
-          "/api/auth/me": {
-            "get": {
-              "summary": "Get current user info",
-              "security": [{"bearerAuth": []}],
-              "responses": {
-                "200": {"description": "User info retrieved"}
-              }
-            }
-          }
-        }
-      }
+        "server/api/routes/auth.py"
+      ]
     },
     {
-      "name": "Chat Sessions",
-      "description": "Multi-user chat session management with user isolation - create, list, get, update, and delete sessions",
+      "name": "Chat Interface",
+      "description": "AI-powered chat interface with message history and session management",
       "files": [
-        "server/api/routes/chat_sessions.py",
-        "server/domain/storage/session_tracker.py",
-        "src/stores/chatHistoryStore.ts",
-        "src/components/ChatHistorySidebar.tsx"
-      ],
-      "api_doc": {
-        "openapi": "3.0.0",
-        "paths": {
-          "/api/chat/sessions": {
-            "post": {
-              "summary": "Create a new chat session",
-              "security": [{"bearerAuth": []}],
-              "requestBody": {
-                "content": {
-                  "application/json": {
-                    "schema": {
-                      "type": "object",
-                      "properties": {
-                        "id": {"type": "string"},
-                        "title": {"type": "string"}
-                      }
-                    }
-                  }
-                }
-              },
-              "responses": {
-                "200": {"description": "Session created"}
-              }
-            },
-            "get": {
-              "summary": "List all chat sessions for current user",
-              "security": [{"bearerAuth": []}],
-              "responses": {
-                "200": {"description": "Sessions retrieved"}
-              }
-            }
-          },
-          "/api/chat/sessions/{session_id}": {
-            "get": {
-              "summary": "Get a specific chat session",
-              "security": [{"bearerAuth": []}],
-              "parameters": [{
-                "name": "session_id",
-                "in": "path",
-                "required": true,
-                "schema": {"type": "string"}
-              }],
-              "responses": {
-                "200": {"description": "Session retrieved"},
-                "404": {"description": "Session not found or access denied"}
-              }
-            },
-            "put": {
-              "summary": "Update a chat session",
-              "security": [{"bearerAuth": []}],
-              "parameters": [{
-                "name": "session_id",
-                "in": "path",
-                "required": true,
-                "schema": {"type": "string"}
-              }],
-              "responses": {
-                "200": {"description": "Session updated"},
-                "404": {"description": "Session not found or access denied"}
-              }
-            },
-            "delete": {
-              "summary": "Delete a chat session",
-              "security": [{"bearerAuth": []}],
-              "parameters": [{
-                "name": "session_id",
-                "in": "path",
-                "required": true,
-                "schema": {"type": "string"}
-              }],
-              "responses": {
-                "200": {"description": "Session deleted"},
-                "404": {"description": "Session not found or access denied"}
-              }
-            }
-          }
-        }
-      }
+        "src/components/ChatPanel.tsx",
+        "src/components/ChatHistoryPanel.tsx",
+        "src/components/ChatHistorySidebar.tsx",
+        "src/components/ChatHistoryItem.tsx",
+        "src/stores/chatHistoryStore.ts"
+      ]
     },
     {
-      "name": "Chat Messages",
-      "description": "Chat message management with user isolation - create, list, get, update, and delete messages within sessions",
+      "name": "Molecular Viewer",
+      "description": "3D protein structure visualization using MolStar",
       "files": [
-        "server/api/routes/chat_messages.py",
-        "src/components/ChatPanel.tsx"
-      ],
-      "api_doc": {
-        "openapi": "3.0.0",
-        "paths": {
-          "/api/chat/sessions/{session_id}/messages": {
-            "post": {
-              "summary": "Create a new message in a chat session",
-              "security": [{"bearerAuth": []}],
-              "parameters": [{
-                "name": "session_id",
-                "in": "path",
-                "required": true,
-                "schema": {"type": "string"}
-              }],
-              "requestBody": {
-                "content": {
-                  "application/json": {
-                    "schema": {
-                      "type": "object",
-                      "properties": {
-                        "content": {"type": "string"},
-                        "type": {"type": "string"},
-                        "role": {"type": "string"},
-                        "metadata": {"type": "object"}
-                      }
-                    }
-                  }
-                }
-              },
-              "responses": {
-                "200": {"description": "Message created"},
-                "404": {"description": "Session not found or access denied"}
-              }
-            },
-            "get": {
-              "summary": "List all messages in a chat session",
-              "security": [{"bearerAuth": []}],
-              "parameters": [{
-                "name": "session_id",
-                "in": "path",
-                "required": true,
-                "schema": {"type": "string"}
-              }],
-              "responses": {
-                "200": {"description": "Messages retrieved"},
-                "404": {"description": "Session not found or access denied"}
-              }
-            }
-          }
-        }
-      }
+        "src/components/MolstarViewer.tsx",
+        "src/components/MolstarToolbar.tsx",
+        "src/utils/molstarBuilder.ts"
+      ]
     },
     {
-      "name": "AI Agents",
-      "description": "AI agent routing and execution system with multiple specialized agents (bio-chat, code-builder, alphafold-agent, rfdiffusion-agent, proteinmpnn-agent)",
+      "name": "AlphaFold Integration",
+      "description": "Protein structure prediction using NVIDIA AlphaFold2 NIMS API",
+      "files": [
+        "src/components/AlphaFoldDialog.tsx",
+        "src/components/ProgressTracker.tsx",
+        "server/agents/handlers/alphafold.py",
+        "server/tools/nvidia/alphafold_client.py"
+      ]
+    },
+    {
+      "name": "RFdiffusion Integration",
+      "description": "De novo protein design using RFdiffusion",
+      "files": [
+        "src/components/RFdiffusionDialog.tsx",
+        "server/agents/handlers/rfdiffusion.py",
+        "server/tools/nvidia/rfdiffusion_client.py"
+      ]
+    },
+    {
+      "name": "ProteinMPNN Integration",
+      "description": "Sequence design using ProteinMPNN",
+      "files": [
+        "src/components/ProteinMPNNDialog.tsx",
+        "server/agents/handlers/proteinmpnn.py",
+        "server/tools/nvidia/proteinmpnn_client.py"
+      ]
+    },
+    {
+      "name": "Pipeline Canvas",
+      "description": "Visual workflow designer for protein analysis pipelines",
+      "files": [
+        "src/components/pipeline-canvas/components/PipelineCanvas.tsx",
+        "src/components/pipeline-canvas/components/PipelineNodeConfig.tsx",
+        "src/components/pipeline-canvas/components/PipelineNodePalette.tsx",
+        "src/components/pipeline-canvas/store/pipelineStore.ts",
+        "src/components/pipeline-canvas/utils/topologicalSort.ts"
+      ]
+    },
+    {
+      "name": "Code Execution",
+      "description": "Dynamic code execution with molecular data",
+      "files": [
+        "src/components/CodeEditor.tsx",
+        "src/utils/codeExecutor.ts"
+      ]
+    },
+    {
+      "name": "Agent System",
+      "description": "AI agent routing and execution system",
       "files": [
         "server/agents.py",
         "server/router_graph.py",
         "server/runner.py",
-        "server/app.py"
-      ],
-      "api_doc": {
-        "openapi": "3.0.0",
-        "paths": {
-          "/api/agents": {
-            "get": {
-              "summary": "List all available agents",
-              "responses": {
-                "200": {"description": "Agents list retrieved"}
-              }
-            }
-          },
-          "/api/agents/route": {
-            "post": {
-              "summary": "Auto-route request to appropriate agent",
-              "requestBody": {
-                "content": {
-                  "application/json": {
-                    "schema": {
-                      "type": "object",
-                      "properties": {
-                        "input": {"type": "string"},
-                        "selection": {"type": "string"},
-                        "currentCode": {"type": "string"},
-                        "history": {"type": "array"}
-                      }
-                    }
-                  }
-                }
-              },
-              "responses": {
-                "200": {"description": "Agent routed and executed"}
-              }
-            }
-          },
-          "/api/agents/invoke": {
-            "post": {
-              "summary": "Invoke a specific agent",
-              "requestBody": {
-                "content": {
-                  "application/json": {
-                    "schema": {
-                      "type": "object",
-                      "properties": {
-                        "agentId": {"type": "string"},
-                        "input": {"type": "string"}
-                      }
-                    }
-                  }
-                }
-              },
-              "responses": {
-                "200": {"description": "Agent executed"}
-              }
-            }
-          }
-        }
-      }
+        "server/agents/registry.py",
+        "server/agents/router.py"
+      ]
     },
     {
-      "name": "AlphaFold2 Integration",
-      "description": "Protein structure prediction using NVIDIA NIMS API AlphaFold2 service",
+      "name": "RAG System",
+      "description": "Retrieval-augmented generation for protein data queries",
       "files": [
-        "server/agents/handlers/alphafold.py",
-        "server/tools/nvidia/alphafold.py",
-        "src/components/AlphaFoldDialog.tsx"
-      ],
-      "api_doc": {
-        "openapi": "3.0.0",
-        "paths": {
-          "/api/alphafold/fold": {
-            "post": {
-              "summary": "Submit protein folding request",
-              "requestBody": {
-                "content": {
-                  "application/json": {
-                    "schema": {
-                      "type": "object",
-                      "properties": {
-                        "sequence": {"type": "string"},
-                        "pdb_id": {"type": "string"},
-                        "chain": {"type": "string"},
-                        "residues": {"type": "string"}
-                      }
-                    }
-                  }
-                }
-              },
-              "responses": {
-                "200": {"description": "Folding job submitted"}
-              }
-            }
-          },
-          "/api/alphafold/status/{job_id}": {
-            "get": {
-              "summary": "Check folding job status",
-              "parameters": [{
-                "name": "job_id",
-                "in": "path",
-                "required": true,
-                "schema": {"type": "string"}
-              }],
-              "responses": {
-                "200": {"description": "Job status retrieved"}
-              }
-            }
-          }
-        }
-      }
+        "server/memory/rag/rag_service.py",
+        "server/memory/embeddings/embedding_service.py"
+      ]
     },
     {
-      "name": "RFdiffusion Integration",
-      "description": "De novo protein backbone design using NVIDIA NIMS API RFdiffusion service",
+      "name": "Error Handling",
+      "description": "Comprehensive error handling and display system",
       "files": [
-        "server/agents/handlers/rfdiffusion.py",
-        "server/tools/nvidia/rfdiffusion.py",
-        "src/components/RFdiffusionDialog.tsx"
-      ],
-      "api_doc": {
-        "openapi": "3.0.0",
-        "paths": {
-          "/api/rfdiffusion/design": {
-            "post": {
-              "summary": "Submit protein design request",
-              "requestBody": {
-                "content": {
-                  "application/json": {
-                    "schema": {
-                      "type": "object",
-                      "properties": {
-                        "contigs": {"type": "string"},
-                        "hotspots": {"type": "array"},
-                        "template_pdb": {"type": "string"}
-                      }
-                    }
-                  }
-                }
-              },
-              "responses": {
-                "200": {"description": "Design job submitted"}
-              }
-            }
-          }
-        }
-      }
-    },
-    {
-      "name": "ProteinMPNN Integration",
-      "description": "Protein sequence design using NVIDIA NIMS API ProteinMPNN service",
-      "files": [
-        "server/agents/handlers/proteinmpnn.py",
-        "server/tools/nvidia/proteinmpnn.py"
-      ],
-      "api_doc": {
-        "openapi": "3.0.0",
-        "paths": {
-          "/api/proteinmpnn/design": {
-            "post": {
-              "summary": "Submit sequence design request",
-              "requestBody": {
-                "content": {
-                  "application/json": {
-                    "schema": {
-                      "type": "object",
-                      "properties": {
-                        "pdb_file": {"type": "string"},
-                        "fixed_positions": {"type": "array"}
-                      }
-                    }
-                  }
-                }
-              },
-              "responses": {
-                "200": {"description": "Design job submitted"}
-              }
-            }
-          }
-        }
-      }
+        "src/components/ErrorDisplay.tsx",
+        "src/components/ErrorDashboard.tsx",
+        "src/utils/errorHandler.ts",
+        "src/utils/errorLogger.ts"
+      ]
     },
     {
       "name": "File Management",
-      "description": "PDB file upload, storage, and retrieval with session association and user isolation",
+      "description": "File upload, storage, and browser interface",
       "files": [
-        "server/domain/storage/pdb_storage.py",
-        "server/domain/storage/session_tracker.py",
         "src/components/FileBrowser.tsx",
-        "src/components/FileEditor.tsx"
-      ],
-      "api_doc": {
-        "openapi": "3.0.0",
-        "paths": {
-          "/api/upload/pdb": {
-            "post": {
-              "summary": "Upload a PDB file",
-              "requestBody": {
-                "content": {
-                  "multipart/form-data": {
-                    "schema": {
-                      "type": "object",
-                      "properties": {
-                        "file": {"type": "string", "format": "binary"}
-                      }
-                    }
-                  }
-                }
-              },
-              "responses": {
-                "200": {"description": "File uploaded"}
-              }
-            }
-          },
-          "/api/sessions/{session_id}/files": {
-            "get": {
-              "summary": "List files associated with a session",
-              "parameters": [{
-                "name": "session_id",
-                "in": "path",
-                "required": true,
-                "schema": {"type": "string"}
-              }],
-              "responses": {
-                "200": {"description": "Files retrieved"}
-              }
-            }
-          }
-        }
-      }
+        "src/components/FileEditor.tsx",
+        "server/domain/storage/storage_service.py"
+      ]
     },
     {
-      "name": "Molecular Visualization",
-      "description": "3D protein structure visualization using MolStar viewer with code execution capabilities",
+      "name": "Admin Dashboard",
+      "description": "Administrative interface for user and system management",
       "files": [
-        "src/components/MolstarViewer.tsx",
-        "src/utils/molstarBuilder.ts",
-        "src/utils/codeExecutor.ts"
-      ],
-      "api_doc": {}
+        "src/pages/AdminDashboard.tsx",
+        "src/components/admin/UserManagement.tsx",
+        "server/api/routes/admin.py"
+      ]
     },
     {
-      "name": "Pipeline Canvas",
-      "description": "Visual workflow design system for creating protein design pipelines",
+      "name": "Session Management",
+      "description": "User session and chat session management",
       "files": [
-        "src/components/pipeline-canvas/components/PipelineCanvas.tsx",
-        "src/components/pipeline-canvas/store/pipelineStore.ts"
-      ],
-      "api_doc": {}
-    },
-    {
-      "name": "Credits System",
-      "description": "User credit balance and usage tracking system",
-      "files": [
-        "server/api/routes/credits.py",
-        "server/domain/credits/service.py"
-      ],
-      "api_doc": {
-        "openapi": "3.0.0",
-        "paths": {
-          "/api/credits/balance": {
-            "get": {
-              "summary": "Get user credit balance",
-              "security": [{"bearerAuth": []}],
-              "responses": {
-                "200": {"description": "Balance retrieved"}
-              }
-            }
-          },
-          "/api/credits/history": {
-            "get": {
-              "summary": "Get credit usage history",
-              "security": [{"bearerAuth": []}],
-              "responses": {
-                "200": {"description": "History retrieved"}
-              }
-            }
-          }
-        }
-      }
+        "src/components/SessionListItem.tsx",
+        "server/domain/user/user_service.py",
+        "server/database/schema.sql"
+      ]
     }
   ]
 }

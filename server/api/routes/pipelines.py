@@ -7,8 +7,14 @@ import json
 import uuid
 from datetime import datetime
 
-from ...database.db import get_db
-from ..middleware.auth import get_current_user
+try:
+    # Try relative import first (when running as module)
+    from ...database.db import get_db
+    from ..middleware.auth import get_current_user
+except ImportError:
+    # Fallback to absolute import (when running directly)
+    from database.db import get_db
+    from api.middleware.auth import get_current_user
 
 router = APIRouter(prefix="/api/pipelines", tags=["pipelines"])
 
@@ -18,14 +24,54 @@ async def create_pipeline(
     pipeline_data: Dict[str, Any],
     user: Dict[str, Any] = Depends(get_current_user),
 ) -> Dict[str, Any]:
-    """Create or save a pipeline."""
+    """Create or save a pipeline. Supports message_id and conversation_id for message-scoped pipelines."""
     pipeline_id = pipeline_data.get("id") or str(uuid.uuid4())
     name = pipeline_data.get("name", "Untitled Pipeline")
     description = pipeline_data.get("description")
     pipeline_json = json.dumps(pipeline_data)
     status_value = pipeline_data.get("status", "draft")
+    message_id = pipeline_data.get("message_id")
+    conversation_id = pipeline_data.get("conversation_id")
     
     with get_db() as conn:
+        # Verify message and conversation ownership if provided
+        if message_id:
+            message = conn.execute(
+                """SELECT id, conversation_id, session_id, user_id 
+                   FROM chat_messages 
+                   WHERE id = ? AND user_id = ?""",
+                (message_id, user["id"]),
+            ).fetchone()
+            
+            if not message:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail="Message not found or access denied",
+                )
+            
+            # Use conversation_id from message if not provided
+            if not conversation_id:
+                conversation_id = message.get('conversation_id') or message.get('session_id')
+        
+        if conversation_id:
+            # Verify conversation ownership
+            conversation = conn.execute(
+                "SELECT id FROM conversations WHERE id = ? AND user_id = ?",
+                (conversation_id, user["id"]),
+            ).fetchone()
+            
+            if not conversation:
+                conversation = conn.execute(
+                    "SELECT id FROM chat_sessions WHERE id = ? AND user_id = ?",
+                    (conversation_id, user["id"]),
+                ).fetchone()
+            
+            if not conversation:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail="Conversation not found or access denied",
+                )
+        
         # Check if pipeline exists and belongs to user
         existing = conn.execute(
             "SELECT id FROM pipelines WHERE id = ? AND user_id = ?",
@@ -34,20 +80,34 @@ async def create_pipeline(
         
         if existing:
             # Update existing pipeline
+            updates = ["name = ?", "description = ?", "pipeline_json = ?", "status = ?", "updated_at = ?"]
+            params = [name, description, pipeline_json, status_value, datetime.utcnow()]
+            
+            if message_id is not None:
+                updates.append("message_id = ?")
+                params.append(message_id)
+            if conversation_id is not None:
+                updates.append("conversation_id = ?")
+                params.append(conversation_id)
+            
+            params.extend([pipeline_id, user["id"]])
             conn.execute(
-                """UPDATE pipelines 
-                   SET name = ?, description = ?, pipeline_json = ?, status = ?, updated_at = ?
+                f"""UPDATE pipelines 
+                   SET {', '.join(updates)}
                    WHERE id = ? AND user_id = ?""",
-                (name, description, pipeline_json, status_value, datetime.utcnow(), pipeline_id, user["id"]),
+                params,
             )
         else:
             # Create new pipeline
             conn.execute(
-                """INSERT INTO pipelines (id, user_id, name, description, pipeline_json, status, created_at, updated_at)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                """INSERT INTO pipelines 
+                   (id, user_id, message_id, conversation_id, name, description, pipeline_json, status, created_at, updated_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     pipeline_id,
                     user["id"],
+                    message_id,
+                    conversation_id,
                     name,
                     description,
                     pipeline_json,
@@ -67,16 +127,42 @@ async def create_pipeline(
 @router.get("")
 async def list_pipelines(
     user: Dict[str, Any] = Depends(get_current_user),
+    conversation_id: Optional[str] = None,
 ) -> Dict[str, Any]:
-    """List all pipelines for the current user."""
+    """List all pipelines for the current user. Optionally filter by conversation_id."""
     with get_db() as conn:
-        rows = conn.execute(
-            """SELECT id, name, description, status, created_at, updated_at
-               FROM pipelines 
-               WHERE user_id = ? 
-               ORDER BY updated_at DESC""",
-            (user["id"],),
-        ).fetchall()
+        if conversation_id:
+            # Verify conversation ownership
+            conversation = conn.execute(
+                "SELECT id FROM conversations WHERE id = ? AND user_id = ?",
+                (conversation_id, user["id"]),
+            ).fetchone()
+            
+            if not conversation:
+                conversation = conn.execute(
+                    "SELECT id FROM chat_sessions WHERE id = ? AND user_id = ?",
+                    (conversation_id, user["id"]),
+                ).fetchone()
+            
+            if not conversation:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail="Conversation not found or access denied",
+                )
+            
+            query = """SELECT id, name, description, status, message_id, conversation_id, created_at, updated_at
+                       FROM pipelines 
+                       WHERE user_id = ? AND conversation_id = ?
+                       ORDER BY updated_at DESC"""
+            params = (user["id"], conversation_id)
+        else:
+            query = """SELECT id, name, description, status, message_id, conversation_id, created_at, updated_at
+                       FROM pipelines 
+                       WHERE user_id = ? 
+                       ORDER BY updated_at DESC"""
+            params = (user["id"],)
+        
+        rows = conn.execute(query, params).fetchall()
         
         pipelines = []
         for row in rows:
@@ -85,6 +171,8 @@ async def list_pipelines(
                 "name": row["name"],
                 "description": row["description"],
                 "status": row["status"],
+                "message_id": row.get("message_id"),
+                "conversation_id": row.get("conversation_id"),
                 "created_at": row["created_at"],
                 "updated_at": row["updated_at"],
             })
@@ -134,7 +222,7 @@ async def update_pipeline(
     pipeline_data: Dict[str, Any],
     user: Dict[str, Any] = Depends(get_current_user),
 ) -> Dict[str, Any]:
-    """Update a pipeline. Verifies ownership."""
+    """Update a pipeline. Verifies ownership. Supports updating message_id and conversation_id."""
     with get_db() as conn:
         # Verify ownership
         existing = conn.execute(
@@ -153,12 +241,56 @@ async def update_pipeline(
         description = pipeline_data.get("description")
         pipeline_json = json.dumps(pipeline_data)
         status_value = pipeline_data.get("status", "draft")
+        message_id = pipeline_data.get("message_id")
+        conversation_id = pipeline_data.get("conversation_id")
         
+        # Verify message and conversation ownership if provided
+        if message_id:
+            message = conn.execute(
+                "SELECT id, user_id FROM chat_messages WHERE id = ? AND user_id = ?",
+                (message_id, user["id"]),
+            ).fetchone()
+            
+            if not message:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail="Message not found or access denied",
+                )
+        
+        if conversation_id:
+            conversation = conn.execute(
+                "SELECT id FROM conversations WHERE id = ? AND user_id = ?",
+                (conversation_id, user["id"]),
+            ).fetchone()
+            
+            if not conversation:
+                conversation = conn.execute(
+                    "SELECT id FROM chat_sessions WHERE id = ? AND user_id = ?",
+                    (conversation_id, user["id"]),
+                ).fetchone()
+            
+            if not conversation:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail="Conversation not found or access denied",
+                )
+        
+        updates = ["name = ?", "description = ?", "pipeline_json = ?", "status = ?", "updated_at = ?"]
+        params = [name, description, pipeline_json, status_value, datetime.utcnow()]
+        
+        if message_id is not None:
+            updates.append("message_id = ?")
+            params.append(message_id)
+        if conversation_id is not None:
+            updates.append("conversation_id = ?")
+            params.append(conversation_id)
+        
+        params.extend([pipeline_id, user["id"]])
         conn.execute(
-            """UPDATE pipelines 
-               SET name = ?, description = ?, pipeline_json = ?, status = ?, updated_at = ?
+            f"""UPDATE pipelines 
+               SET {', '.join(updates)}
                WHERE id = ? AND user_id = ?""",
-            (name, description, pipeline_json, status_value, datetime.utcnow(), pipeline_id, user["id"]),
+            params,
         )
     
     return {

@@ -27,11 +27,11 @@ if os.path.exists(server_env_path):
     print(f"Also loaded .env from: {server_env_path}")
 
 # Debug: Check if key environment variables are loaded
-api_key = os.getenv('ANTHROPIC_API_KEY')
+api_key = os.getenv('OPENROUTER_API_KEY')
 if api_key:
-    print(f"ANTHROPIC_API_KEY loaded: {api_key[:20]}...")
+    print(f"OPENROUTER_API_KEY loaded: {api_key[:20]}...")
 else:
-    print("Warning: ANTHROPIC_API_KEY not found in environment")
+    print("Warning: OPENROUTER_API_KEY not found in environment")
 
 nvidia_key = os.getenv('NVCF_RUN_KEY')
 if nvidia_key:
@@ -58,7 +58,7 @@ try:
     from .domain.storage.pdb_storage import save_uploaded_pdb, get_uploaded_pdb
     from .domain.storage.session_tracker import associate_file_with_session, get_session_files
     from .database.db import init_db
-    from .api.routes import auth, credits, reports, admin, pipelines, chat_sessions, chat_messages
+    from .api.routes import auth, credits, reports, admin, pipelines, chat_sessions, chat_messages, three_d_canvases, attachments
     from .api.middleware.auth import get_current_user
     from .api.middleware.credits import check_credits
     from .domain.credits.service import deduct_credits, log_usage, CREDIT_COSTS, get_user_credits
@@ -78,7 +78,7 @@ except ImportError:
     from domain.storage.pdb_storage import save_uploaded_pdb, get_uploaded_pdb
     from domain.storage.session_tracker import associate_file_with_session, get_session_files, remove_file_from_session
     from database.db import init_db
-    from api.routes import auth, credits, reports, admin, pipelines, chat_sessions, chat_messages
+    from api.routes import auth, credits, reports, admin, pipelines, chat_sessions, chat_messages, three_d_canvases, attachments
     from api.middleware.auth import get_current_user
     from api.middleware.credits import check_credits
     from domain.credits.service import deduct_credits, log_usage, CREDIT_COSTS, get_user_credits
@@ -120,6 +120,8 @@ async def startup():
     app.include_router(pipelines.router)
     app.include_router(chat_sessions.router)
     app.include_router(chat_messages.router)
+    app.include_router(three_d_canvases.router)
+    app.include_router(attachments.router)
 
 
 @app.get("/api/health")
@@ -1641,11 +1643,15 @@ AI: {ai_content}
 
 Return ONLY the title text, no quotes, no explanation. Make it specific and meaningful."""
 
-        # Use a lightweight model for title generation (Haiku is fast and cheap)
-        from .runner import _get_openrouter_api_key, _load_model_map
+        # Use default chatModel from models_config.json
+        try:
+            from .agents.runner import _get_openrouter_api_key
+        except ImportError:
+            from agents.runner import _get_openrouter_api_key
         
-        model_map = _load_model_map()
-        model_id = model_map.get("anthropic/claude-3-haiku", "anthropic/claude-3-haiku")
+        config = _load_models_config()
+        defaults = config.get("defaults", {})
+        model_id = defaults.get("chatModel", "anthropic/claude-3-haiku")
         api_key = _get_openrouter_api_key()
         
         if not api_key:

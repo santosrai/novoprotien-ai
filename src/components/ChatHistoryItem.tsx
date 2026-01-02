@@ -1,6 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { 
-  MessageSquare, 
   Pin, 
   Edit2, 
   Trash2, 
@@ -8,12 +7,7 @@ import {
   MoreHorizontal, 
   Check, 
   X,
-  Star,
-  Clock,
-  User,
-  Bot,
-  Code,
-  Search
+  Star
 } from 'lucide-react';
 import { ChatSession, useChatHistoryStore, useSessionManagement } from '../stores/chatHistoryStore';
 
@@ -46,51 +40,6 @@ export const ChatHistoryItem: React.FC<ChatHistoryItemProps> = ({
 
   const isStarred = session.metadata.starred;
 
-  // Format relative time
-  const formatRelativeTime = (date: Date | string) => {
-    const dateObj = new Date(date);
-    const now = new Date();
-    const diffInMs = now.getTime() - dateObj.getTime();
-    const diffInHours = diffInMs / (1000 * 60 * 60);
-    const diffInDays = diffInHours / 24;
-
-    if (diffInHours < 1) {
-      const diffInMinutes = Math.floor(diffInMs / (1000 * 60));
-      return diffInMinutes < 1 ? 'now' : `${diffInMinutes}m`;
-    } else if (diffInHours < 24) {
-      return `${Math.floor(diffInHours)}h`;
-    } else if (diffInDays < 7) {
-      return `${Math.floor(diffInDays)}d`;
-    } else {
-      return dateObj.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
-    }
-  };
-
-  // Generate conversation type icon based on content
-  const getConversationIcon = () => {
-    const firstUserMessage = session.messages.find(m => m.type === 'user')?.content.toLowerCase() || '';
-    
-    if (firstUserMessage.includes('code') || firstUserMessage.includes('function') || firstUserMessage.includes('debug')) {
-      return <Code className="w-4 h-4 text-green-400" />;
-    } else if (firstUserMessage.includes('search') || firstUserMessage.includes('find')) {
-      return <Search className="w-4 h-4 text-blue-400" />;
-    } else if (firstUserMessage.includes('show') || firstUserMessage.includes('display') || firstUserMessage.includes('visualize')) {
-      return <Bot className="w-4 h-4 text-purple-400" />;
-    } else {
-      return <MessageSquare className="w-4 h-4 text-gray-400" />;
-    }
-  };
-
-  // Get user avatar/initials
-  const getUserAvatar = () => {
-    const initials = session.title.split(' ').slice(0, 2).map(word => word[0]).join('').toUpperCase();
-    return (
-      <div className="w-6 h-6 bg-gradient-to-br from-blue-500 to-purple-600 rounded-full flex items-center justify-center text-xs font-medium text-white">
-        {initials.length > 0 ? initials : 'C'}
-      </div>
-    );
-  };
-
   // Auto-focus edit input
   useEffect(() => {
     if (isEditing && editInputRef.current) {
@@ -103,7 +52,7 @@ export const ChatHistoryItem: React.FC<ChatHistoryItemProps> = ({
     if (showBulkActions) {
       toggleSessionSelection(session.id);
     } else {
-      switchToSession(session.id);
+      switchToSession(session.id).catch(err => console.error('Failed to switch session:', err));
       setSidebarCollapsed(false); // Ensure sidebar stays open when selecting
     }
   };
@@ -115,10 +64,10 @@ export const ChatHistoryItem: React.FC<ChatHistoryItemProps> = ({
     setShowActions(false);
   };
 
-  const handleEditSave = () => {
+  const handleEditSave = async () => {
     const trimmedTitle = editTitle.trim();
     if (trimmedTitle && trimmedTitle !== session.title) {
-      updateSessionTitle(session.id, trimmedTitle);
+      await updateSessionTitle(session.id, trimmedTitle);
     }
     setIsEditing(false);
   };
@@ -189,15 +138,10 @@ export const ChatHistoryItem: React.FC<ChatHistoryItemProps> = ({
           </div>
         )}
 
-        {/* Avatar/Icon */}
-        <div className="flex-shrink-0 mt-0.5">
-          {showBulkActions ? getConversationIcon() : getUserAvatar()}
-        </div>
-
         {/* Content */}
         <div className="flex-1 min-w-0">
           {/* Title */}
-          <div className="flex items-center space-x-2 mb-1">
+          <div className="flex items-center space-x-2">
             {isEditing ? (
               <div className="flex items-center space-x-1 flex-1">
                 <input
@@ -224,7 +168,7 @@ export const ChatHistoryItem: React.FC<ChatHistoryItemProps> = ({
               </div>
             ) : (
               <>
-                <h3 className={`text-sm font-medium truncate flex-1 ${
+                <h3 className={`text-sm font-medium truncate flex-1 leading-tight ${
                   isActive ? 'text-blue-700' : 'text-gray-700'
                 }`}>
                   {session.title}
@@ -241,26 +185,6 @@ export const ChatHistoryItem: React.FC<ChatHistoryItemProps> = ({
                 )}
               </>
             )}
-          </div>
-
-          {/* Metadata */}
-          <div className="flex items-center justify-between text-xs text-gray-400">
-            <div className="flex items-center space-x-2">
-              <Clock className="w-3 h-3" />
-              <span>{formatRelativeTime(session.lastModified)}</span>
-              <span>•</span>
-              <span>{session.metadata.messageCount} msg{session.metadata.messageCount !== 1 ? 's' : ''}</span>
-            </div>
-            
-            {/* Message type indicators */}
-            <div className="flex items-center space-x-1">
-              {session.messages.some(m => m.type === 'user') && (
-                <User className="w-3 h-3 text-blue-400" />
-              )}
-              {session.messages.some(m => m.type === 'ai') && (
-                <Bot className="w-3 h-3 text-green-400" />
-              )}
-            </div>
           </div>
         </div>
 

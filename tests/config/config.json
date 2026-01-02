@@ -1,0 +1,42 @@
+{
+  "project": {
+    "name": "novoprotien-ai",
+    "version": "1.0.0"
+  },
+  "environments": {
+    "local": {
+      "frontend": "http://localhost:3000",
+      "backend": "http://localhost:8787",
+      "apiBase": "http://localhost:8787/api"
+    },
+    "staging": {
+      "frontend": "https://staging.example.com",
+      "backend": "https://api-staging.example.com",
+      "apiBase": "https://api-staging.example.com/api"
+    }
+  },
+  "testSettings": {
+    "defaultTimeout": 30000,
+    "navigationTimeout": 30000,
+    "headless": false,
+    "browser": "chromium",
+    "viewport": {
+      "width": 1280,
+      "height": 720
+    },
+    "screenshotOnFailure": true,
+    "videoOnFailure": true
+  },
+  "waitStrategies": {
+    "networkIdle": true,
+    "waitForReact": true,
+    "reactTimeout": 5000,
+    "elementTimeout": 30000
+  },
+  "execution": {
+    "parallel": false,
+    "workers": 1,
+    "retries": 0,
+    "shard": null
+  }
+}

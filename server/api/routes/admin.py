@@ -5,15 +5,28 @@ from typing import Dict, Any, Optional
 from pydantic import BaseModel
 
 from ..middleware.auth import require_admin
-from ...domain.user.service import (
-    get_all_users,
-    get_user_by_id,
-    update_user_role,
-    deactivate_user,
-    activate_user
-)
-from ...domain.credits.service import add_credits, get_user_credits
-from ...database.db import get_db
+try:
+    # Try relative import first (when running as module)
+    from ...domain.user.service import (
+        get_all_users,
+        get_user_by_id,
+        update_user_role,
+        deactivate_user,
+        activate_user
+    )
+    from ...domain.credits.service import add_credits, get_user_credits
+    from ...database.db import get_db
+except ImportError:
+    # Fallback to absolute import (when running directly)
+    from domain.user.service import (
+        get_all_users,
+        get_user_by_id,
+        update_user_role,
+        deactivate_user,
+        activate_user
+    )
+    from domain.credits.service import add_credits, get_user_credits
+    from database.db import get_db
 
 router = APIRouter(prefix="/api/admin", tags=["admin"])
 

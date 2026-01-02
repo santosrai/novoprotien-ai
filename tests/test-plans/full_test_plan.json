@@ -1,0 +1,46 @@
+{
+  "name": "NovoProtein AI Full Test Plan",
+  "version": "1.0.0",
+  "description": "Complete test plan for all test categories",
+  "lastUpdated": "2025-01-01",
+  "categories": [
+    {
+      "name": "authentication",
+      "testPlan": "tests/test-plans/authentication_test_plan.json",
+      "tests": [
+        "TC_AUTH_001",
+        "TC_AUTH_002"
+      ]
+    },
+    {
+      "name": "chat",
+      "testPlan": "tests/test-plans/chat_test_plan.json",
+      "tests": [
+        "TC_CHAT_001",
+        "TC_CHAT_002"
+      ]
+    },
+    {
+      "name": "isolation",
+      "testPlan": "tests/test-plans/isolation_test_plan.json",
+      "tests": [
+        "TC_ISO_001",
+        "TC_ISO_002",
+        "TC_ISO_003",
+        "TC_ISO_004"
+      ]
+    }
+  ],
+  "summary": {
+    "totalTests": 8,
+    "byCategory": {
+      "authentication": 2,
+      "chat": 2,
+      "isolation": 4
+    },
+    "byPriority": {
+      "High": 4,
+      "Critical": 4
+    }
+  }
+}

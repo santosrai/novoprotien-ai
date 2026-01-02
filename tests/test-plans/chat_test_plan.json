@@ -1,0 +1,102 @@
+[
+  {
+    "id": "TC_CHAT_001",
+    "title": "Chat History Isolation Between Users",
+    "description": "Verify that User1's chat history, sessions, and messages are completely isolated from User2's chat history. Each user should only see their own messages, sessions, and have their own credits and pipelines.",
+    "category": "chat",
+    "priority": "High",
+    "tags": ["chat", "isolation", "history", "user1", "user2", "credits", "sessions"],
+    "steps": [
+      {
+        "type": "action",
+        "description": "Login as User1"
+      },
+      {
+        "type": "action",
+        "description": "Wait for chat interface to load"
+      },
+      {
+        "type": "action",
+        "description": "Send a unique message as User1: 'User1 Private Message - {timestamp}'"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify message appears in User1's chat history"
+      },
+      {
+        "type": "action",
+        "description": "Sign out from User1"
+      },
+      {
+        "type": "action",
+        "description": "Login as User2"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify User2's chat history does NOT contain User1's message"
+      },
+      {
+        "type": "action",
+        "description": "Send a unique message as User2: 'User2 Private Message - {timestamp}'"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify User2 only sees their own message"
+      },
+      {
+        "type": "action",
+        "description": "Sign out from User2"
+      },
+      {
+        "type": "action",
+        "description": "Login back as User1"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify User1 only sees their own message (not User2's)"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify User1's session list only contains their own sessions"
+      }
+    ]
+  },
+  {
+    "id": "TC_CHAT_002",
+    "title": "User2 Creates and Sends Chat Message",
+    "description": "Verify User2 can create a chat session and send messages",
+    "category": "chat",
+    "priority": "High",
+    "tags": ["chat", "message", "user2"],
+    "steps": [
+      {
+        "type": "action",
+        "description": "Login as User2 (user2@gmail.com / test12345) in separate browser context"
+      },
+      {
+        "type": "action",
+        "description": "Wait for chat interface to load"
+      },
+      {
+        "type": "action",
+        "description": "Type a test message: 'Hello from User2'"
+      },
+      {
+        "type": "action",
+        "description": "Send the message"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify message appears in the chat history"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify message is marked as from User2"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify AI response is received (if applicable)"
+      }
+    ]
+  }
+]

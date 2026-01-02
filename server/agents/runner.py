@@ -30,8 +30,8 @@ def _load_model_map() -> Dict[str, str]:
     
     _model_map = {}
     
-    # Try to load from models_config.json
-    config_path = Path(__file__).parent / "models_config.json"
+    # Try to load from models_config.json (in server/ directory)
+    config_path = Path(__file__).parent.parent / "models_config.json"
     try:
         if config_path.exists():
             with open(config_path, 'r') as f:
@@ -76,7 +76,7 @@ def _load_model_map() -> Dict[str, str]:
 
 
 def _get_openrouter_api_key(api_key: Optional[str] = None) -> Optional[str]:    
-    """Get OpenRouter API key. Supports OPENROUTER_API_KEY or ANTHROPIC_API_KEY env vars."""
+    """Get OpenRouter API key from OPENROUTER_API_KEY env var."""
     global _openrouter_api_key
     
     # If a specific key is provided (e.g. from client request), use it
@@ -87,16 +87,10 @@ def _get_openrouter_api_key(api_key: Optional[str] = None) -> Optional[str]:
     if _openrouter_api_key:
         return _openrouter_api_key
 
-    # Check for OpenRouter key first in env
+    # Get OpenRouter key from env
     openrouter_key = os.getenv("OPENROUTER_API_KEY")
     if openrouter_key:
         _openrouter_api_key = openrouter_key
-        return _openrouter_api_key
-
-    # Fallback to ANTHROPIC_API_KEY (may be OpenRouter key)
-    env_api_key = os.getenv("ANTHROPIC_API_KEY")
-    if env_api_key:
-        _openrouter_api_key = env_api_key
         return _openrouter_api_key
     
     return None
@@ -204,7 +198,7 @@ def _call_openrouter_api_stream(
     """
     key = _get_openrouter_api_key(api_key)
     if not key:
-        raise RuntimeError("OpenRouter API key is missing. Please set OPENROUTER_API_KEY or ANTHROPIC_API_KEY in your .env file.")
+        raise RuntimeError("OpenRouter API key is missing. Please set OPENROUTER_API_KEY in your .env file.")
     
     url = "https://openrouter.ai/api/v1/chat/completions"
     headers = {
@@ -306,7 +300,7 @@ def _call_openrouter_api(
     """
     key = _get_openrouter_api_key(api_key)
     if not key:
-        raise RuntimeError("OpenRouter API key is missing. Please set OPENROUTER_API_KEY or ANTHROPIC_API_KEY in your .env file.")
+        raise RuntimeError("OpenRouter API key is missing. Please set OPENROUTER_API_KEY in your .env file.")
     
     url = "https://openrouter.ai/api/v1/chat/completions"
     headers = {
@@ -337,7 +331,7 @@ def _call_openrouter_api(
                 }
             }
         else:
-            # Anthropic and other thinking models
+            # Thinking models (accessed via OpenRouter)
             payload["extra_body"] = {
                 "reasoning": {
                     "effort": "high"
@@ -639,7 +633,7 @@ def _parse_thinking_data(completion: Any) -> Optional[Dict[str, Any]]:
         log_line("runner:thinking:raw", {"type": type(thinking_raw).__name__, "is_str": isinstance(thinking_raw, str), "is_list": isinstance(thinking_raw, list), "is_dict": isinstance(thinking_raw, dict)})
         
         # Parse thinking data - structure depends on API response format
-        # OpenRouter/Anthropic may return thinking as:
+        # OpenRouter API may return thinking as:
         # - A string (raw thinking text)
         # - A list of steps
         # - A dict with steps

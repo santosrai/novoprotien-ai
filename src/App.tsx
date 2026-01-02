@@ -1,7 +1,6 @@
 import { Header } from './components/Header';
 import { ChatPanel } from './components/ChatPanel';
 import { CodeEditor } from './components/CodeEditor';
-import { MolstarViewer } from './components/MolstarViewer';
 import { SettingsDialog } from './components/SettingsDialog';
 import { ChatHistoryPanel } from './components/ChatHistoryPanel';
 import { ChatHistorySidebar } from './components/ChatHistorySidebar';
@@ -15,7 +14,10 @@ import { Eye, Code2, Settings, FolderOpen, Workflow } from 'lucide-react';
 import { useAppStore } from './stores/appStore';
 import { useSettingsStore } from './stores/settingsStore';
 import { useChatHistoryStore } from './stores/chatHistoryStore';
-import { useEffect, useState } from 'react';
+import { useEffect, useState, Suspense, lazy } from 'react';
+
+// Lazy load MolstarViewer - only load when viewer is visible
+const MolstarViewer = lazy(() => import('./components/MolstarViewer').then(module => ({ default: module.MolstarViewer })));
 
 function App() {
   const { activePane, setActivePane, chatPanelWidth, setChatPanelWidth, isViewerVisible, selectedFile, setSelectedFile } = useAppStore();
@@ -79,8 +81,16 @@ function App() {
     setActivePane('viewer');
   };
 
+  // Mark App as ready for test detection
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      document.body.setAttribute('data-app-ready', 'true');
+    }, 500);
+    return () => clearTimeout(timer);
+  }, []);
+
   return (
-    <div className="h-screen flex flex-col bg-gray-50">
+    <div className="h-screen flex flex-col bg-gray-50" data-testid="app-container" data-app-ready="true">
       <Header />
       
       <div className="flex-1 flex overflow-hidden">
@@ -201,7 +211,16 @@ function App() {
                 </div>
               ) : (
                 <div className="h-full bg-gray-900">
-                  <MolstarViewer />
+                  <Suspense fallback={
+                    <div className="h-full flex items-center justify-center text-gray-400">
+                      <div className="text-center">
+                        <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-gray-400 mx-auto mb-4"></div>
+                        <p>Loading molecular viewer...</p>
+                      </div>
+                    </div>
+                  }>
+                    <MolstarViewer />
+                  </Suspense>
                 </div>
               )}
             </div>
