@@ -7,11 +7,11 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, AsyncGenerator
 
 try:
-    from ..infrastructure.utils import log_line, get_text_from_completion, strip_code_fences, trim_history, extract_code_and_text
+    from ..infrastructure.utils import log_line, get_text_from_completion, strip_code_fences, trim_history
     from ..infrastructure.safety import violates_whitelist, ensure_clear_on_change
     from ..domain.protein.uniprot import search_uniprot
 except ImportError:
-    from infrastructure.utils import log_line, get_text_from_completion, strip_code_fences, trim_history, extract_code_and_text
+    from infrastructure.utils import log_line, get_text_from_completion, strip_code_fences, trim_history
     from infrastructure.safety import violates_whitelist, ensure_clear_on_change
     from domain.protein.uniprot import search_uniprot
 
@@ -30,8 +30,8 @@ def _load_model_map() -> Dict[str, str]:
     
     _model_map = {}
     
-    # Try to load from models_config.json (in server/ directory)
-    config_path = Path(__file__).parent.parent / "models_config.json"
+    # Try to load from models_config.json
+    config_path = Path(__file__).parent / "models_config.json"
     try:
         if config_path.exists():
             with open(config_path, 'r') as f:
@@ -76,7 +76,7 @@ def _load_model_map() -> Dict[str, str]:
 
 
 def _get_openrouter_api_key(api_key: Optional[str] = None) -> Optional[str]:    
-    """Get OpenRouter API key from OPENROUTER_API_KEY env var."""
+    """Get OpenRouter API key. Supports OPENROUTER_API_KEY or ANTHROPIC_API_KEY env vars."""
     global _openrouter_api_key
     
     # If a specific key is provided (e.g. from client request), use it
@@ -87,10 +87,16 @@ def _get_openrouter_api_key(api_key: Optional[str] = None) -> Optional[str]:
     if _openrouter_api_key:
         return _openrouter_api_key
 
-    # Get OpenRouter key from env
+    # Check for OpenRouter key first in env
     openrouter_key = os.getenv("OPENROUTER_API_KEY")
     if openrouter_key:
         _openrouter_api_key = openrouter_key
+        return _openrouter_api_key
+
+    # Fallback to ANTHROPIC_API_KEY (may be OpenRouter key)
+    env_api_key = os.getenv("ANTHROPIC_API_KEY")
+    if env_api_key:
+        _openrouter_api_key = env_api_key
         return _openrouter_api_key
     
     return None
@@ -198,7 +204,7 @@ def _call_openrouter_api_stream(
     """
     key = _get_openrouter_api_key(api_key)
     if not key:
-        raise RuntimeError("OpenRouter API key is missing. Please set OPENROUTER_API_KEY in your .env file.")
+        raise RuntimeError("OpenRouter API key is missing. Please set OPENROUTER_API_KEY or ANTHROPIC_API_KEY in your .env file.")
     
     url = "https://openrouter.ai/api/v1/chat/completions"
     headers = {
@@ -300,7 +306,7 @@ def _call_openrouter_api(
     """
     key = _get_openrouter_api_key(api_key)
     if not key:
-        raise RuntimeError("OpenRouter API key is missing. Please set OPENROUTER_API_KEY in your .env file.")
+        raise RuntimeError("OpenRouter API key is missing. Please set OPENROUTER_API_KEY or ANTHROPIC_API_KEY in your .env file.")
     
     url = "https://openrouter.ai/api/v1/chat/completions"
     headers = {
@@ -331,7 +337,7 @@ def _call_openrouter_api(
                 }
             }
         else:
-            # Thinking models (accessed via OpenRouter)
+            # Anthropic and other thinking models
             payload["extra_body"] = {
                 "reasoning": {
                     "effort": "high"
@@ -633,7 +639,7 @@ def _parse_thinking_data(completion: Any) -> Optional[Dict[str, Any]]:
         log_line("runner:thinking:raw", {"type": type(thinking_raw).__name__, "is_str": isinstance(thinking_raw, str), "is_list": isinstance(thinking_raw, list), "is_dict": isinstance(thinking_raw, dict)})
         
         # Parse thinking data - structure depends on API response format
-        # OpenRouter API may return thinking as:
+        # OpenRouter/Anthropic may return thinking as:
         # - A string (raw thinking text)
         # - A list of steps
         # - A dict with steps
@@ -748,8 +754,6 @@ async def run_agent(
     current_structure_origin: Optional[Dict[str, Any]] = None,
     uploaded_file_context: Optional[Dict[str, Any]] = None,
     model_override: Optional[str] = None,
-    pipeline_context: Optional[Dict[str, Any]] = None,
-    structure_metadata: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     # Use model_override if provided, otherwise fall back to agent's default
     if model_override:
@@ -981,7 +985,7 @@ async def run_agent(
             temperature=0.2,
         )
         content_text = get_text_from_completion(completion)
-        code, explanation_text = extract_code_and_text(content_text)
+        code = strip_code_fences(content_text)
         final_completion = completion  # Track which completion to use for thinking data
 
         # Safety pass
@@ -1002,19 +1006,15 @@ async def run_agent(
                 max_tokens=800,
                 temperature=0.2,
             )
-            content_text2 = get_text_from_completion(completion2)
-            code, explanation_text = extract_code_and_text(content_text2)
+            code = strip_code_fences(get_text_from_completion(completion2))
             final_completion = completion2  # Use the safety pass completion for thinking data
 
         code = ensure_clear_on_change(current_code, code)
-        log_line("agent:code:res", {"length": len(code), "has_text": bool(explanation_text)})
+        log_line("agent:code:res", {"length": len(code)})
         
         # Extract thinking data if available (from final completion)
         thinking_process = _parse_thinking_data(final_completion)
         result = {"type": "code", "code": code}
-        # Include text explanation if available
-        if explanation_text:
-            result["text"] = explanation_text
         if thinking_process:
             result["thinkingProcess"] = thinking_process
         return result
@@ -1143,41 +1143,6 @@ async def run_agent(
             selection_lines.append("Note: User has selected this specific residue for analysis.")
     selection_context = "Context:\n" + "\n".join(selection_lines) if selection_lines else ""
     
-    # Build StructureContext from metadata (prioritize over CodeContext)
-    structure_context_lines = []
-    if structure_metadata:
-        structure_context_lines.append("StructureContext (Current 3D Visualization):")
-        
-        if structure_metadata.get("sequence"):
-            seq = structure_metadata["sequence"]
-            structure_context_lines.append(f"  - Sequence: {seq[:100]}{'...' if len(seq) > 100 else ''} ({len(seq)} residues)")
-            
-            if structure_metadata.get("isPolyGlycine"):
-                structure_context_lines.append("  - Type: Poly-glycine chain (repeating Glycine residues)")
-        
-        if structure_metadata.get("sequences"):
-            chains = structure_metadata["sequences"]
-            structure_context_lines.append(f"  - Chains: {len(chains)} chain(s)")
-            for chain_info in chains:
-                seq = chain_info.get("sequence", "")
-                structure_context_lines.append(f"    • Chain {chain_info.get('chain', '?')}: {len(seq)} residues")
-        
-        if structure_metadata.get("residueCount"):
-            structure_context_lines.append(f"  - Total residues: {structure_metadata['residueCount']}")
-        
-        if structure_metadata.get("chainCount") and structure_metadata.get("chains"):
-            structure_context_lines.append(f"  - Chain IDs: {', '.join(structure_metadata['chains'])}")
-        
-        if structure_metadata.get("residueComposition"):
-            comp = structure_metadata["residueComposition"]
-            top_residues = sorted(comp.items(), key=lambda x: x[1], reverse=True)[:5]
-            structure_context_lines.append(f"  - Composition: {', '.join(f'{aa}({count})' for aa, count in top_residues)}")
-        
-        if structure_metadata.get("structureType"):
-            structure_context_lines.append(f"  - Structure type: {structure_metadata['structureType']}")
-    
-    structure_context = "\n".join(structure_context_lines) if structure_context_lines else ""
-    
     code_context = (
         f"CodeContext (Current PDB: {code_pdb_id or 'unknown'}):\n" + str(current_code)[:3000]
         if current_code and str(current_code).strip()
@@ -1212,89 +1177,6 @@ async def run_agent(
 
     messages: List[Dict[str, Any]] = []
     context_parts = []
-    
-    # Add pipeline context FIRST if provided (prioritize over other contexts)
-    if pipeline_context:
-        log_line("agent:pipeline:context_check", {
-            "has_pipeline_context": True,
-            "pipeline_id": pipeline_context.get("id") if isinstance(pipeline_context, dict) else None,
-            "pipeline_type": type(pipeline_context).__name__
-        })
-        try:
-            log_line("agent:pipeline:context_received", {
-                "pipeline_id": pipeline_context.get("id"),
-                "pipeline_name": pipeline_context.get("name"),
-                "node_count": len(pipeline_context.get("nodes", [])),
-                "has_nodes": bool(pipeline_context.get("nodes"))
-            })
-            from ..domain.pipeline.context import get_pipeline_summary
-            pipeline_summary = await get_pipeline_summary(
-                pipeline_context.get("id", "unknown"),
-                pipeline_context
-            )
-            log_line("agent:pipeline:summary_generated", {
-                "summary_node_count": pipeline_summary.get("node_count"),
-                "summary_edge_count": pipeline_summary.get("edge_count")
-            })
-            
-            # Check if user question is about pipeline
-            user_text_lower = user_text.lower()
-            is_pipeline_question = any(k in user_text_lower for k in [
-                "pipeline", "workflow", "node", "nodes", "execution", "what is happening",
-                "what's happening", "describe", "explain", "status", "progress"
-            ])
-            
-            pipeline_context_text = f"""IMPORTANT: The user is asking about the active pipeline. Focus on pipeline information, not code.
-
-Current Pipeline Context:
-- Pipeline Name: {pipeline_summary.get('name')}
-- Status: {pipeline_summary.get('status')}
-- Nodes: {pipeline_summary.get('node_count')} nodes, {pipeline_summary.get('edge_count')} edges
-
-Node Types:
-{chr(10).join(f"- {node_type}: {len(nodes)} node(s)" for node_type, nodes in pipeline_summary.get('nodes_by_type', {}).items())}
-
-Execution Flow:
-{chr(10).join(f"- {flow}" for flow in pipeline_summary.get('execution_flow', []))}
-
-Node Details:
-{chr(10).join(f"- {node['label']} ({node['type']}): {node['status']}" for node in pipeline_summary.get('node_details', []))}
-"""
-            # Insert pipeline context at the beginning to prioritize it
-            context_parts.insert(0, pipeline_context_text)
-        except Exception as e:
-            log_line("agent:pipeline:context_error", {
-                "error": str(e),
-                "traceback": traceback.format_exc(),
-                "userText": user_text,
-                "pipeline_context_keys": list(pipeline_context.keys()) if pipeline_context else None
-            })
-            # Even if summary generation fails, include basic pipeline info
-            try:
-                basic_context = f"""Current Pipeline Context:
-- Pipeline Name: {pipeline_context.get('name', 'Unknown')}
-- Pipeline ID: {pipeline_context.get('id', 'Unknown')}
-- Status: {pipeline_context.get('status', 'Unknown')}
-- Nodes: {pipeline_context.get('nodeCount', 0)} nodes
-- Edges: {pipeline_context.get('edgeCount', 0)} edges
-
-Note: Detailed pipeline summary could not be generated due to an error.
-"""
-                context_parts.insert(0, basic_context)
-            except Exception as e2:
-                log_line("agent:pipeline:basic_context_error", {"error": str(e2)})
-    
-    # Log if pipeline context was expected but not provided
-    if not pipeline_context:
-        log_line("agent:pipeline:context_missing", {
-            "user_text": user_text[:100],  # First 100 chars for debugging
-            "agent_id": agent.get("id")
-        })
-    
-    # Add other contexts after pipeline context
-    # StructureContext should come before CodeContext to prioritize biological observations
-    if structure_context:
-        context_parts.append(structure_context)
     if uploaded_file_info:
         context_parts.append(uploaded_file_info)
     if history_context_lines:
@@ -1389,8 +1271,6 @@ async def run_agent_stream(
     current_structure_origin: Optional[Dict[str, Any]] = None,
     uploaded_file_context: Optional[Dict[str, Any]] = None,
     model_override: Optional[str] = None,
-    pipeline_context: Optional[Dict[str, Any]] = None,
-    structure_metadata: Optional[Dict[str, Any]] = None,
 ) -> AsyncGenerator[Dict[str, Any], None]:
     """Stream agent execution with incremental thinking step updates.
     
@@ -1420,8 +1300,6 @@ async def run_agent_stream(
                 selection=selection,
                 selections=selections,
                 model_override=model_override,
-                pipeline_context=pipeline_context,
-                structure_metadata=structure_metadata,
             )
             yield {"type": "complete", "data": result}
             return
@@ -1539,7 +1417,7 @@ async def run_agent_stream(
                 "accumulated_content_preview": accumulated_content[:200] if accumulated_content else None
             })
             
-            code, explanation_text = extract_code_and_text(accumulated_content)
+            code = strip_code_fences(accumulated_content)
             
             # If no code found, log warning but still return result with thinking process
             if not code or not code.strip():
@@ -1566,9 +1444,6 @@ async def run_agent_stream(
                 "type": "code",
                 "code": code,
             }
-            # Include text explanation if available
-            if explanation_text:
-                final_result["text"] = explanation_text
             
             # Add thinking process if we have steps (even if code is empty)
             if thinking_steps:
@@ -1712,42 +1587,6 @@ async def run_agent_stream(
                 selection_lines.append("Note: User has selected this specific residue for analysis.")
         
         selection_context = "Context:\n" + "\n".join(selection_lines) if selection_lines else ""
-        
-        # Build StructureContext from metadata (prioritize over CodeContext)
-        structure_context_lines = []
-        if structure_metadata:
-            structure_context_lines.append("StructureContext (Current 3D Visualization):")
-            
-            if structure_metadata.get("sequence"):
-                seq = structure_metadata["sequence"]
-                structure_context_lines.append(f"  - Sequence: {seq[:100]}{'...' if len(seq) > 100 else ''} ({len(seq)} residues)")
-                
-                if structure_metadata.get("isPolyGlycine"):
-                    structure_context_lines.append("  - Type: Poly-glycine chain (repeating Glycine residues)")
-            
-            if structure_metadata.get("sequences"):
-                chains = structure_metadata["sequences"]
-                structure_context_lines.append(f"  - Chains: {len(chains)} chain(s)")
-                for chain_info in chains:
-                    seq = chain_info.get("sequence", "")
-                    structure_context_lines.append(f"    • Chain {chain_info.get('chain', '?')}: {len(seq)} residues")
-            
-            if structure_metadata.get("residueCount"):
-                structure_context_lines.append(f"  - Total residues: {structure_metadata['residueCount']}")
-            
-            if structure_metadata.get("chainCount") and structure_metadata.get("chains"):
-                structure_context_lines.append(f"  - Chain IDs: {', '.join(structure_metadata['chains'])}")
-            
-            if structure_metadata.get("residueComposition"):
-                comp = structure_metadata["residueComposition"]
-                top_residues = sorted(comp.items(), key=lambda x: x[1], reverse=True)[:5]
-                structure_context_lines.append(f"  - Composition: {', '.join(f'{aa}({count})' for aa, count in top_residues)}")
-            
-            if structure_metadata.get("structureType"):
-                structure_context_lines.append(f"  - Structure type: {structure_metadata['structureType']}")
-        
-        structure_context = "\n".join(structure_context_lines) if structure_context_lines else ""
-        
         code_context = (
             f"CodeContext (Current PDB: {code_pdb_id or 'unknown'}):\n" + str(current_code)[:3000]
             if current_code and str(current_code).strip()
@@ -1782,67 +1621,6 @@ async def run_agent_stream(
         
         messages: List[Dict[str, Any]] = []
         context_parts = []
-        
-        # Add pipeline context FIRST if provided (prioritize over other contexts)
-        if pipeline_context:
-            try:
-                from ..domain.pipeline.context import get_pipeline_summary
-                pipeline_summary = await get_pipeline_summary(
-                    pipeline_context.get("id", "unknown"),
-                    pipeline_context
-                )
-                
-                # Check if user question is about pipeline
-                user_text_lower = user_text.lower()
-                is_pipeline_question = any(k in user_text_lower for k in [
-                    "pipeline", "workflow", "node", "nodes", "execution", "what is happening",
-                    "what's happening", "describe", "explain", "status", "progress"
-                ])
-                
-                pipeline_context_text = f"""IMPORTANT: The user is asking about the active pipeline. Focus on pipeline information, not code.
-
-Current Pipeline Context:
-- Pipeline Name: {pipeline_summary.get('name')}
-- Status: {pipeline_summary.get('status')}
-- Nodes: {pipeline_summary.get('node_count')} nodes, {pipeline_summary.get('edge_count')} edges
-
-Node Types:
-{chr(10).join(f"- {node_type}: {len(nodes)} node(s)" for node_type, nodes in pipeline_summary.get('nodes_by_type', {}).items())}
-
-Execution Flow:
-{chr(10).join(f"- {flow}" for flow in pipeline_summary.get('execution_flow', []))}
-
-Node Details:
-{chr(10).join(f"- {node['label']} ({node['type']}): {node['status']}" for node in pipeline_summary.get('node_details', []))}
-"""
-                # Insert pipeline context at the beginning to prioritize it
-                context_parts.insert(0, pipeline_context_text)
-            except Exception as e:
-                log_line("agent:stream:pipeline:context_error", {
-                    "error": str(e),
-                    "traceback": traceback.format_exc(),
-                    "userText": user_text,
-                    "pipeline_context_keys": list(pipeline_context.keys()) if pipeline_context else None
-                })
-                # Even if summary generation fails, include basic pipeline info
-                try:
-                    basic_context = f"""Current Pipeline Context:
-- Pipeline Name: {pipeline_context.get('name', 'Unknown')}
-- Pipeline ID: {pipeline_context.get('id', 'Unknown')}
-- Status: {pipeline_context.get('status', 'Unknown')}
-- Nodes: {pipeline_context.get('nodeCount', 0)} nodes
-- Edges: {pipeline_context.get('edgeCount', 0)} edges
-
-Note: Detailed pipeline summary could not be generated due to an error.
-"""
-                    context_parts.insert(0, basic_context)
-                except Exception as e2:
-                    log_line("agent:stream:pipeline:basic_context_error", {"error": str(e2)})
-        
-        # Add other contexts after pipeline context
-        # StructureContext should come before CodeContext to prioritize biological observations
-        if structure_context:
-            context_parts.append(structure_context)
         if uploaded_file_info:
             context_parts.append(uploaded_file_info)
         if history_context_lines:

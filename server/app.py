@@ -3,7 +3,7 @@ import os
 import traceback
 import time
 import json
-from typing import Any, Dict, Optional
+from typing import Any, Dict
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -27,11 +27,11 @@ if os.path.exists(server_env_path):
     print(f"Also loaded .env from: {server_env_path}")
 
 # Debug: Check if key environment variables are loaded
-api_key = os.getenv('OPENROUTER_API_KEY')
+api_key = os.getenv('ANTHROPIC_API_KEY')
 if api_key:
-    print(f"OPENROUTER_API_KEY loaded: {api_key[:20]}...")
+    print(f"ANTHROPIC_API_KEY loaded: {api_key[:20]}...")
 else:
-    print("Warning: OPENROUTER_API_KEY not found in environment")
+    print("Warning: ANTHROPIC_API_KEY not found in environment")
 
 nvidia_key = os.getenv('NVCF_RUN_KEY')
 if nvidia_key:
@@ -39,51 +39,37 @@ if nvidia_key:
 else:
     print("Warning: NVCF_RUN_KEY not found in environment")
 
-from fastapi import FastAPI, Request, UploadFile, File, HTTPException, Depends
+from fastapi import FastAPI, Request, UploadFile, File, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from slowapi import Limiter
 from slowapi.util import get_remote_address
 from slowapi.middleware import SlowAPIMiddleware
 from slowapi.errors import RateLimitExceeded
-from fastapi.responses import JSONResponse, FileResponse, StreamingResponse
+from fastapi.responses import JSONResponse, FileResponse
 
 try:
-    from .agents import agents, list_agents
-    from .router_graph import init_router, routerGraph
-    from .runner import run_agent, run_agent_stream
+    from .agents.registry import agents, list_agents
+    from .agents.router import init_router, routerGraph
+    from .agents.runner import run_agent
     from .infrastructure.utils import log_line, spell_fix
     from .agents.handlers.alphafold import alphafold_handler
     from .agents.handlers.rfdiffusion import rfdiffusion_handler
     from .agents.handlers.proteinmpnn import proteinmpnn_handler
     from .domain.storage.pdb_storage import save_uploaded_pdb, get_uploaded_pdb
-    from .domain.storage.session_tracker import associate_file_with_session, get_session_files
-    from .domain.storage.file_access import list_user_files, verify_file_ownership, get_file_metadata
-    from .database.db import init_db, get_db
-    from .api.routes import auth, credits, reports, admin, pipelines, chat_sessions, chat_messages, three_d_canvases, attachments
-    from .api.middleware.auth import get_current_user
-    from .api.middleware.credits import check_credits
-    from .domain.credits.service import deduct_credits, log_usage, CREDIT_COSTS, get_user_credits
 except ImportError:
     # When running directly (not as module)
     import sys
     current_dir = os.path.dirname(os.path.abspath(__file__))
     if current_dir not in sys.path:
         sys.path.insert(0, current_dir)
-    from agents import agents, list_agents
-    from router_graph import init_router, routerGraph
-    from runner import run_agent, run_agent_stream
+    from agents.registry import agents, list_agents
+    from agents.router import init_router, routerGraph
+    from agents.runner import run_agent
     from infrastructure.utils import log_line, spell_fix
     from agents.handlers.alphafold import alphafold_handler
     from agents.handlers.rfdiffusion import rfdiffusion_handler
     from agents.handlers.proteinmpnn import proteinmpnn_handler
     from domain.storage.pdb_storage import save_uploaded_pdb, get_uploaded_pdb
-    from domain.storage.session_tracker import associate_file_with_session, get_session_files, remove_file_from_session
-    from domain.storage.file_access import list_user_files, verify_file_ownership, get_file_metadata
-    from database.db import init_db, get_db
-    from api.routes import auth, credits, reports, admin, pipelines, chat_sessions, chat_messages, three_d_canvases, attachments
-    from api.middleware.auth import get_current_user, get_current_user_optional
-    from api.middleware.credits import check_credits
-    from domain.credits.service import deduct_credits, log_usage, CREDIT_COSTS, get_user_credits
 
 DEBUG_API = os.getenv("DEBUG_API", "0") == "1"
 
@@ -104,26 +90,7 @@ app.add_middleware(
 
 @app.on_event("startup")
 async def startup():
-    # Initialize database
-    try:
-        init_db()
-        print("Database initialized successfully")
-    except Exception as e:
-        print(f"Warning: Database initialization failed: {e}")
-    
-    # Initialize router
     await init_router(list(agents.values()))
-    
-    # Register API routes
-    app.include_router(auth.router)
-    app.include_router(credits.router)
-    app.include_router(reports.router)
-    app.include_router(admin.router)
-    app.include_router(pipelines.router)
-    app.include_router(chat_sessions.router)
-    app.include_router(chat_messages.router)
-    app.include_router(three_d_canvases.router)
-    app.include_router(attachments.router)
 
 
 @app.get("/api/health")
@@ -219,7 +186,6 @@ async def invoke(request: Request):
             history=body.get("history"),
             selection=body.get("selection"),
             selections=body.get("selections"),
-            pipeline_context=body.get("pipelineContext"),
         )
         return {"agentId": agent_id, **res}
     except Exception as e:
@@ -232,7 +198,7 @@ async def invoke(request: Request):
 
 @app.post("/api/agents/route")
 @limiter.limit("60/minute")
-async def route(request: Request, user: Dict[str, Any] = Depends(get_current_user)):
+async def route(request: Request):
     try:
         body = await request.json()
         input_text = body.get("input")
@@ -250,8 +216,6 @@ async def route(request: Request, user: Dict[str, Any] = Depends(get_current_use
             "input_length": len(input_text),
             "has_selection": bool(body.get("selection")),
             "has_code": bool(body.get("currentCode")),
-            "has_pipeline_context": bool(body.get("pipelineContext")),
-            "pipeline_id": body.get("pipelineContext", {}).get("id") if body.get("pipelineContext") else None,
             "manual_agent": manual_agent_id,
             "model_override": model_override
         })
@@ -271,8 +235,6 @@ async def route(request: Request, user: Dict[str, Any] = Depends(get_current_use
                     "selections": body.get("selections"),
                     "currentCode": body.get("currentCode"),
                     "history": body.get("history"),
-                    "uploadedFileId": body.get("uploadedFileId"),
-                    "pipelineContext": body.get("pipelineContext"),
                 }
             )
             agent_id = routed.get("routedAgentId")
@@ -288,23 +250,6 @@ async def route(request: Request, user: Dict[str, Any] = Depends(get_current_use
         
         if not agent_id:
             return {"error": "router_no_decision", "reason": reason}
-        
-        # Check and deduct credits for agent chat
-        cost = CREDIT_COSTS["agent_chat"]
-        if not deduct_credits(user["id"], cost, f"Agent chat: {agent_id}", None):
-            return JSONResponse(
-                status_code=402,
-                content={
-                    "error": "Insufficient credits",
-                    "required": cost,
-                    "available": get_user_credits(user["id"]),
-                    "action": "agent_chat"
-                }
-            )
-        
-        # Log usage
-        log_usage(user["id"], "agent_chat", cost, {"agent_id": agent_id, "input_length": len(input_text)})
-        
         log_line("router", {"agentId": agent_id, "reason": reason})
         log_line("agent_executing", {
             "agentId": agent_id,
@@ -313,28 +258,6 @@ async def route(request: Request, user: Dict[str, Any] = Depends(get_current_use
             "model_override": model_override
         })
         
-        # Load uploaded file metadata if uploadedFileId is provided
-        uploaded_file_context = None
-        uploaded_file_id = body.get("uploadedFileId")
-        if uploaded_file_id:
-            try:
-                file_metadata = get_uploaded_pdb(uploaded_file_id)
-                if file_metadata:
-                    uploaded_file_context = {
-                        "file_id": uploaded_file_id,
-                        "filename": file_metadata.get("filename"),
-                        "atoms": file_metadata.get("atoms"),
-                        "chains": file_metadata.get("chains", []),
-                        "file_url": f"/api/upload/pdb/{uploaded_file_id}",
-                    }
-                    log_line("agent_route:uploaded_file", {
-                        "file_id": uploaded_file_id,
-                        "filename": file_metadata.get("filename"),
-                        "atoms": file_metadata.get("atoms"),
-                    })
-            except Exception as e:
-                log_line("agent_route:uploaded_file_error", {"error": str(e), "file_id": uploaded_file_id})
-        
         res = await run_agent(
             agent=agents[agent_id],
             user_text=input_text,
@@ -342,11 +265,7 @@ async def route(request: Request, user: Dict[str, Any] = Depends(get_current_use
             history=body.get("history"),
             selection=body.get("selection"),
             selections=body.get("selections"),
-            current_structure_origin=body.get("currentStructureOrigin"),
-            uploaded_file_context=uploaded_file_context,
             model_override=model_override,
-            pipeline_context=body.get("pipelineContext"),
-            structure_metadata=body.get("structureMetadata"),
         )
         
         log_line("agent_completed", {
@@ -366,156 +285,19 @@ async def route(request: Request, user: Dict[str, Any] = Depends(get_current_use
         return JSONResponse(status_code=500, content=content)
 
 
-@app.post("/api/agents/route-stream")
-@limiter.limit("60/minute")
-async def route_stream(request: Request):
-    """Streaming endpoint for thinking models that yields incremental updates."""
-    try:
-        body = await request.json()
-        input_text = body.get("input")
-        if not isinstance(input_text, str):
-            return JSONResponse(status_code=400, content={"error": "invalid_input"})
-        input_text = spell_fix(input_text)
-
-        # Check for manual agent override
-        manual_agent_id = body.get("agentId")
-        model_override = body.get("model")
-        
-        # Log the input for debugging
-        log_line("agent_route_stream_input", {
-            "input": input_text,
-            "input_length": len(input_text),
-            "has_selection": bool(body.get("selection")),
-            "has_code": bool(body.get("currentCode")),
-            "manual_agent": manual_agent_id,
-            "model_override": model_override
-        })
-        
-        # If agentId is provided, skip routing and use specified agent
-        if manual_agent_id:
-            if manual_agent_id not in agents:
-                return JSONResponse(status_code=400, content={"error": "invalid_agent_id", "agentId": manual_agent_id})
-            agent_id = manual_agent_id
-            reason = f"Manually selected: {agents[agent_id].get('name', agent_id)}"
-        else:
-            # Use router to determine agent
-            routed = await routerGraph.ainvoke(
-                {
-                    "input": input_text,
-                    "selection": body.get("selection"),
-                    "selections": body.get("selections"),
-                    "currentCode": body.get("currentCode"),
-                    "history": body.get("history"),
-                    "uploadedFileId": body.get("uploadedFileId"),
-                    "pipelineContext": body.get("pipelineContext"),
-                }
-            )
-            agent_id = routed.get("routedAgentId")
-            reason = routed.get("reason")
-        
-        log_line("agent_route_stream_result", {
-            "input": input_text,
-            "agentId": agent_id,
-            "reason": reason,
-            "manual_override": bool(manual_agent_id)
-        })
-        
-        if not agent_id:
-            return JSONResponse(status_code=400, content={"error": "router_no_decision", "reason": reason})
-        
-        log_line("agent_stream_executing", {
-            "agentId": agent_id,
-            "agent_kind": agents[agent_id].get("kind"),
-            "input": input_text,
-            "model_override": model_override
-        })
-        
-        # Load uploaded file metadata if uploadedFileId is provided
-        uploaded_file_context = None
-        uploaded_file_id = body.get("uploadedFileId")
-        if uploaded_file_id:
-            try:
-                file_metadata = get_uploaded_pdb(uploaded_file_id)
-                if file_metadata:
-                    uploaded_file_context = {
-                        "file_id": uploaded_file_id,
-                        "filename": file_metadata.get("filename"),
-                        "atoms": file_metadata.get("atoms"),
-                        "chains": file_metadata.get("chains", []),
-                        "file_url": f"/api/upload/pdb/{uploaded_file_id}",
-                    }
-                    log_line("agent_route_stream:uploaded_file", {
-                        "file_id": uploaded_file_id,
-                        "filename": file_metadata.get("filename"),
-                        "atoms": file_metadata.get("atoms"),
-                    })
-            except Exception as e:
-                log_line("agent_route_stream:uploaded_file_error", {"error": str(e), "file_id": uploaded_file_id})
-        
-        async def generate_stream():
-            try:
-                async for chunk in run_agent_stream(
-                    agent=agents[agent_id],
-                    user_text=input_text,
-                    current_code=body.get("currentCode"),
-                    history=body.get("history"),
-                    selection=body.get("selection"),
-                    selections=body.get("selections"),
-                    current_structure_origin=body.get("currentStructureOrigin"),
-                    uploaded_file_context=uploaded_file_context,
-                    model_override=model_override,
-                    pipeline_context=body.get("pipelineContext"),
-                    structure_metadata=body.get("structureMetadata"),
-                ):
-                    # Format chunk as JSON line
-                    chunk_data = {
-                        "type": chunk["type"],
-                        "data": chunk["data"]
-                    }
-                    # Add agentId and reason to complete message
-                    if chunk["type"] == "complete":
-                        chunk_data["data"]["agentId"] = agent_id
-                        chunk_data["data"]["reason"] = reason
-                    
-                    yield json.dumps(chunk_data) + "\n"
-            except Exception as e:
-                log_line("agent_stream_failed", {"error": str(e), "trace": traceback.format_exc()})
-                error_chunk = {
-                    "type": "error",
-                    "data": {
-                        "error": "agent_stream_failed",
-                        "detail": str(e) if DEBUG_API else None
-                    }
-                }
-                yield json.dumps(error_chunk) + "\n"
-        
-        return StreamingResponse(
-            generate_stream(),
-            media_type="application/x-ndjson"  # Newline-delimited JSON
-        )
-    except Exception as e:
-        log_line("agent_route_stream_failed", {"error": str(e), "trace": traceback.format_exc()})
-        content = {"error": "agent_route_stream_failed"}
-        if DEBUG_API:
-            content["detail"] = str(e)
-        return JSONResponse(status_code=500, content=content)
-
-
 # AlphaFold API endpoints
 @app.post("/api/alphafold/fold")
 @limiter.limit("5/minute")
-async def alphafold_fold(request: Request, user: Dict[str, Any] = Depends(get_current_user)):
+async def alphafold_fold(request: Request):
     try:
         body = await request.json()
         sequence = body.get("sequence")
         parameters = body.get("parameters", {})
         job_id = body.get("jobId")
-        session_id = body.get("sessionId")  # Optional session ID
         
         # Comprehensive logging
         log_line("alphafold_request", {
             "jobId": job_id,
-            "sessionId": session_id,
             "sequence_length": len(sequence) if sequence else 0,
             "sequence_preview": sequence[:50] if sequence else None,
             "parameters": parameters,
@@ -538,26 +320,9 @@ async def alphafold_fold(request: Request, user: Dict[str, Any] = Depends(get_cu
                 }
             )
         
-        # Check and deduct credits
-        cost = CREDIT_COSTS["alphafold"]
-        if not deduct_credits(user["id"], cost, "AlphaFold structure prediction", job_id):
-            return JSONResponse(
-                status_code=402,
-                content={
-                    "status": "error",
-                    "error": "Insufficient credits",
-                    "errorCode": "INSUFFICIENT_CREDITS",
-                    "userMessage": f"Insufficient credits. Required: {cost}, Available: {get_user_credits(user['id'])}"
-                }
-            )
-        
-        # Log usage
-        log_usage(user["id"], "alphafold", cost, {"job_id": job_id, "sequence_length": len(sequence)})
-        
         # Queue background job and return 202 Accepted immediately
         log_line("alphafold_submitting", {
             "jobId": job_id,
-            "sessionId": session_id,
             "handler": "alphafold_handler.submit_folding_job (background)"
         })
         # Mark job as queued
@@ -572,9 +337,7 @@ async def alphafold_fold(request: Request, user: Dict[str, Any] = Depends(get_cu
             alphafold_handler.submit_folding_job({
                 "sequence": sequence,
                 "parameters": parameters,
-                "jobId": job_id,
-                "sessionId": session_id,  # Pass session ID to handler
-                "userId": user["id"],  # Pass user ID for file storage
+                "jobId": job_id
             })
         )
 
@@ -606,11 +369,7 @@ async def alphafold_fold(request: Request, user: Dict[str, Any] = Depends(get_cu
 async def alphafold_status(request: Request, job_id: str):
     try:
         status = alphafold_handler.get_job_status(job_id)
-        if status.get("status") == "not_found":
-            raise HTTPException(status_code=404, detail="AlphaFold job not found")
         return status
-    except HTTPException:
-        raise
     except Exception as e:
         log_line("alphafold_status_failed", {"error": str(e), "trace": traceback.format_exc()})
         content = {"error": "alphafold_status_failed"}
@@ -624,11 +383,7 @@ async def alphafold_status(request: Request, job_id: str):
 async def alphafold_cancel(request: Request, job_id: str):
     try:
         result = alphafold_handler.cancel_job(job_id)
-        if result.get("status") == "not_found":
-            raise HTTPException(status_code=404, detail="AlphaFold job not found")
         return result
-    except HTTPException:
-        raise
     except Exception as e:
         log_line("alphafold_cancel_failed", {"error": str(e), "trace": traceback.format_exc()})
         content = {"error": "alphafold_cancel_failed"}
@@ -642,35 +397,11 @@ async def alphafold_cancel(request: Request, job_id: str):
 
 @app.post("/api/upload/pdb")
 @limiter.limit("20/minute")
-async def upload_pdb(request: Request, file: UploadFile = File(...), user: Dict[str, Any] = Depends(get_current_user)):
+async def upload_pdb(request: Request, file: UploadFile = File(...)):
+    _ = request
     try:
-        # Try to get session_id from form data or query params
-        form_data = await request.form()
-        session_id = form_data.get("session_id") or request.query_params.get("session_id")
-        
         contents = await file.read()
-        metadata = save_uploaded_pdb(file.filename, contents, user["id"])
-        
-        # Associate file with session if session_id provided
-        if session_id:
-            try:
-                associate_file_with_session(
-                    session_id=str(session_id),
-                    file_id=metadata["file_id"],
-                    user_id=user["id"],
-                    file_type="upload",
-                    file_path=metadata.get("stored_path", ""),
-                    filename=metadata.get("filename", file.filename),
-                    size=metadata.get("size", len(contents)),
-                    metadata={
-                        "atoms": metadata.get("atoms"),
-                        "chains": metadata.get("chains", []),
-                    },
-                )
-            except Exception as e:
-                # Log but don't fail the upload if association fails
-                log_line("file_association_failed", {"error": str(e), "session_id": session_id})
-        
+        metadata = save_uploaded_pdb(file.filename, contents)
         log_line(
             "pdb_upload_success",
             {
@@ -678,7 +409,6 @@ async def upload_pdb(request: Request, file: UploadFile = File(...), user: Dict[
                 "file_id": metadata["file_id"],
                 "size": metadata.get("size"),
                 "chains": metadata.get("chains"),
-                "session_id": session_id,
             },
         )
         return {
@@ -692,9 +422,6 @@ async def upload_pdb(request: Request, file: UploadFile = File(...), user: Dict[
                 "size": metadata.get("size"),
                 "atoms": metadata.get("atoms"),
                 "chains": metadata.get("chains", []),
-                "chain_residue_counts": metadata.get("chain_residue_counts", {}),
-                "total_residues": metadata.get("total_residues", 0),
-                "suggested_contigs": metadata.get("suggested_contigs", "50-150"),
             },
         }
     except HTTPException as exc:
@@ -706,11 +433,11 @@ async def upload_pdb(request: Request, file: UploadFile = File(...), user: Dict[
 
 @app.get("/api/upload/pdb/{file_id}")
 @limiter.limit("30/minute")
-async def download_uploaded_pdb(request: Request, file_id: str, user: Dict[str, Any] = Depends(get_current_user)):
+async def download_uploaded_pdb(request: Request, file_id: str):
     _ = request
-    metadata = get_uploaded_pdb(file_id, user["id"])
+    metadata = get_uploaded_pdb(file_id)
     if not metadata:
-        raise HTTPException(status_code=404, detail="Uploaded file not found or access denied")
+        raise HTTPException(status_code=404, detail="Uploaded file not found")
     return FileResponse(
         metadata["absolute_path"],
         media_type="chemical/x-pdb",
@@ -718,354 +445,15 @@ async def download_uploaded_pdb(request: Request, file_id: str, user: Dict[str, 
     )
 
 
-# User file management endpoints -----------------------------------------
-
-
-@app.get("/api/files")
-@limiter.limit("30/minute")
-async def get_user_files_endpoint(request: Request, user: Dict[str, Any] = Depends(get_current_user)):
-    """List all files for the current user. Files are already user-scoped in the database."""
-    _ = request
-    try:
-        log_line("user_files_request", {"user_id": user["id"]})
-        base_dir = Path(__file__).parent
-        all_files = []
-        
-        # Get all user files (already filtered by user_id in list_user_files)
-        user_files = list_user_files(user["id"])
-        log_line("user_files_raw", {"user_id": user["id"], "count": len(user_files)})
-        
-        for file_entry in user_files:
-            file_type = file_entry.get("file_type", "")
-            file_id = file_entry.get("id", "")
-            stored_path_str = file_entry.get("stored_path", "")
-            filename = file_entry.get("original_filename", f"{file_id}")
-            
-            log_line("processing_file", {
-                "file_id": file_id,
-                "file_type": file_type,
-                "stored_path": stored_path_str,
-                "filename": filename
-            })
-            
-            if stored_path_str:
-                file_path = base_dir / stored_path_str
-                file_exists = file_path.exists()
-                log_line("file_path_check", {
-                    "file_id": file_id,
-                    "stored_path": stored_path_str,
-                    "absolute_path": str(file_path),
-                    "exists": file_exists
-                })
-                
-                if file_exists:
-                    # Determine download URL based on file type
-                    if file_type == "upload":
-                        download_url = f"/api/upload/pdb/{file_id}"
-                    elif file_type == "proteinmpnn":
-                        download_url = f"/api/proteinmpnn/result/{file_id}"
-                    else:
-                        # For other types, use generic download endpoint
-                        download_url = f"/api/files/{file_id}/download"
-                    
-                    # Parse metadata if it's a JSON string
-                    metadata = file_entry.get("metadata", {})
-                    if isinstance(metadata, str):
-                        try:
-                            metadata = json.loads(metadata)
-                        except json.JSONDecodeError:
-                            metadata = {}
-                    
-                    file_size = file_entry.get("size", 0)
-                    if file_size == 0:
-                        try:
-                            file_size = file_path.stat().st_size
-                        except OSError:
-                            file_size = 0
-                    
-                    all_files.append({
-                        "file_id": file_id,
-                        "type": file_type,
-                        "filename": filename,
-                        "file_path": stored_path_str,
-                        "size": file_size,
-                        "download_url": download_url,
-                        "metadata": metadata,
-                    })
-                else:
-                    log_line("file_not_found", {
-                        "file_id": file_id,
-                        "expected_path": str(file_path)
-                    })
-        
-        log_line("user_files_loaded", {"user_id": user["id"], "file_count": len(all_files)})
-        
-        return {
-            "status": "success",
-            "files": all_files,
-        }
-    except Exception as e:
-        log_line("user_files_list_failed", {"error": str(e), "trace": traceback.format_exc(), "user_id": user["id"]})
-        content = {"error": "Failed to list user files"}
-        if DEBUG_API:
-            content["detail"] = str(e)
-        return JSONResponse(status_code=500, content=content)
-
-
-# Session file management endpoints -----------------------------------------
-
-
-@app.get("/api/sessions/{session_id}/files")
-@limiter.limit("30/minute")
-async def get_session_files_endpoint(request: Request, session_id: str, user: Dict[str, Any] = Depends(get_current_user)):
-    """List all files in the session. Verifies session ownership."""
-    _ = request
-    try:
-        log_line("session_files_request", {"session_id": session_id, "user_id": user["id"]})
-        base_dir = Path(__file__).parent
-        all_files = []
-        
-        # 1. Get files from session tracker (explicitly associated files) - verifies ownership
-        tracked_files = get_session_files(session_id, user["id"])
-        tracked_file_ids = set()
-        for file_entry in tracked_files:
-            file_type = file_entry.get("type", "")
-            file_id = file_entry.get("file_id", "")
-            file_path = file_entry.get("file_path", "")
-            filename = file_entry.get("filename", "")
-            
-            # Get file path from stored_path in database
-            stored_path_str = file_entry.get("stored_path", "")
-            if stored_path_str:
-                file_path = base_dir / stored_path_str
-                if file_path.exists():
-                    tracked_file_ids.add(file_id)
-                    # Determine download URL based on file type
-                    if file_type == "upload":
-                        download_url = f"/api/upload/pdb/{file_id}"
-                    elif file_type == "proteinmpnn":
-                        download_url = f"/api/proteinmpnn/result/{file_id}"
-                    else:
-                        download_url = f"/api/sessions/{session_id}/files/{file_id}/download"
-                    
-                    all_files.append({
-                        "file_id": file_id,
-                        "type": file_type,
-                        "filename": filename or file_entry.get("original_filename", f"{file_id}"),
-                        "file_path": stored_path_str,
-                        "size": file_entry.get("size", file_path.stat().st_size if file_path.exists() else 0),
-                        "download_url": download_url,
-                        "metadata": file_entry.get("metadata", {}),
-                    })
-        
-        log_line("session_files_loaded", {"session_id": session_id, "file_count": len(all_files)})
-        
-        return {
-            "status": "success",
-            "files": all_files,
-        }
-    except Exception as e:
-        log_line("session_files_list_failed", {"error": str(e), "trace": traceback.format_exc(), "session_id": session_id})
-        content = {"error": "Failed to list session files"}
-        if DEBUG_API:
-            content["detail"] = str(e)
-        return JSONResponse(status_code=500, content=content)
-
-
-@app.delete("/api/files/{file_id}")
-@limiter.limit("10/minute")
-async def delete_user_file(request: Request, file_id: str, user: Dict[str, Any] = Depends(get_current_user)):
-    """Delete a user file. Verifies ownership."""
-    _ = request
-    try:
-        # Verify ownership
-        if not verify_file_ownership(file_id, user["id"]):
-            raise HTTPException(status_code=403, detail="File not found or access denied")
-        
-        # Get file metadata
-        file_metadata = get_file_metadata(file_id, user["id"])
-        if not file_metadata:
-            raise HTTPException(status_code=404, detail="File not found")
-        
-        base_dir = Path(__file__).parent
-        stored_path = file_metadata.get("stored_path")
-        
-        if stored_path:
-            file_path = base_dir / stored_path
-            if file_path.exists():
-                file_path.unlink()
-                log_line("file_deleted", {"file_id": file_id, "user_id": user["id"], "path": str(file_path)})
-        
-        # Delete from database
-        with get_db() as conn:
-            conn.execute("DELETE FROM user_files WHERE id = ? AND user_id = ?", (file_id, user["id"]))
-            # Also remove from session_files associations
-            conn.execute("DELETE FROM session_files WHERE file_id = ? AND user_id = ?", (file_id, user["id"]))
-        
-        return {"status": "success", "message": "File deleted successfully"}
-    except HTTPException:
-        raise
-    except Exception as e:
-        log_line("file_delete_failed", {"error": str(e), "trace": traceback.format_exc(), "file_id": file_id, "user_id": user["id"]})
-        content = {"error": "Failed to delete file"}
-        if DEBUG_API:
-            content["detail"] = str(e)
-        return JSONResponse(status_code=500, content=content)
-
-
-@app.delete("/api/sessions/{session_id}/files/{file_id}")
-@limiter.limit("10/minute")
-async def delete_session_file(request: Request, session_id: str, file_id: str, user: Dict[str, Any] = Depends(get_current_user)):
-    """Delete a file from a session. Verifies ownership."""
-    _ = request
-    try:
-        base_dir = Path(__file__).parent
-        
-        # Get file from session (verifies ownership)
-        files = get_session_files(session_id, user["id"])
-        file_entry = next((f for f in files if f.get("file_id") == file_id or f.get("id") == file_id), None)
-        
-        if not file_entry:
-            raise HTTPException(status_code=404, detail="File not found in session or access denied")
-        
-        # Get file path from database entry
-        stored_path_str = file_entry.get("stored_path", "")
-        if not stored_path_str:
-            raise HTTPException(status_code=404, detail="File path not found in database")
-        
-        file_path = base_dir / stored_path_str
-        if not file_path.exists():
-            # File doesn't exist on disk, but remove from database anyway
-            remove_file_from_session(session_id, file_id, user["id"])
-            return {"status": "success", "message": "File association removed (file not found on disk)"}
-        
-        # Delete file from filesystem
-        if file_path.is_dir():
-            # Delete entire directory (for ProteinMPNN)
-            import shutil
-            shutil.rmtree(file_path)
-        else:
-            # Delete single file
-            file_path.unlink()
-        
-        # Remove from session tracker
-        remove_file_from_session(session_id, file_id, user["id"])
-        
-        log_line("file_deleted", {"session_id": session_id, "file_id": file_id, "file_path": str(file_path)})
-        return {"status": "success", "message": "File deleted successfully"}
-    except HTTPException:
-        raise
-    except Exception as e:
-        log_line("file_delete_failed", {"error": str(e), "trace": traceback.format_exc(), "session_id": session_id, "file_id": file_id})
-        content = {"error": "Failed to delete file"}
-        if DEBUG_API:
-            content["detail"] = str(e)
-        return JSONResponse(status_code=500, content=content)
-
-
-@app.get("/api/sessions/{session_id}/files/{file_id}")
-@limiter.limit("30/minute")
-async def get_session_file_content(request: Request, session_id: str, file_id: str, user: Dict[str, Any] = Depends(get_current_user)):
-    """Get content of a specific file from a session. Verifies ownership."""
-    _ = request
-    try:
-        base_dir = Path(__file__).parent
-        
-        # Get file from session (verifies ownership)
-        files = get_session_files(session_id, user["id"])
-        file_entry = next((f for f in files if f.get("file_id") == file_id or f.get("id") == file_id), None)
-        
-        if not file_entry:
-            raise HTTPException(status_code=404, detail="File not found in session or access denied")
-        
-        # Get file path from database entry
-        stored_path_str = file_entry.get("stored_path", "")
-        if not stored_path_str:
-            raise HTTPException(status_code=404, detail="File path not found in database")
-        
-        file_path = base_dir / stored_path_str
-        if not file_path.exists():
-            raise HTTPException(status_code=404, detail="File not found on disk")
-        
-        filename = file_entry.get("original_filename") or file_entry.get("filename") or file_path.name
-        file_type = file_entry.get("file_type", "unknown")
-        
-        # Read and return file content
-        with open(file_path, "r", encoding="utf-8") as f:
-            content = f.read()
-        
-        return {
-            "status": "success",
-            "file_id": file_id,
-            "filename": filename,
-            "type": file_type,
-            "content": content,
-            "size": len(content),
-        }
-    except HTTPException:
-        raise
-    except Exception as e:
-        log_line("session_file_content_failed", {"error": str(e), "trace": traceback.format_exc(), "session_id": session_id, "file_id": file_id})
-        content = {"error": "Failed to get file content"}
-        if DEBUG_API:
-            content["detail"] = str(e)
-        return JSONResponse(status_code=500, content=content)
-
-
-@app.get("/api/sessions/{session_id}/files/{file_id}/download")
-@limiter.limit("30/minute")
-async def download_session_file(request: Request, session_id: str, file_id: str, user: Dict[str, Any] = Depends(get_current_user)):
-    """Download a file from a session. Verifies ownership."""
-    _ = request
-    try:
-        base_dir = Path(__file__).parent
-        
-        # Get file from session (verifies ownership)
-        files = get_session_files(session_id, user["id"])
-        file_entry = next((f for f in files if f.get("file_id") == file_id or f.get("id") == file_id), None)
-        
-        if not file_entry:
-            raise HTTPException(status_code=404, detail="File not found in session or access denied")
-        
-        # Get file path from database entry
-        stored_path_str = file_entry.get("stored_path", "")
-        if not stored_path_str:
-            raise HTTPException(status_code=404, detail="File path not found in database")
-        
-        file_path_obj = base_dir / stored_path_str
-        if not file_path_obj.exists():
-            raise HTTPException(status_code=404, detail="File not found on disk")
-        
-        filename = file_entry.get("original_filename") or file_entry.get("filename") or f"{file_id}"
-        
-        # Determine media type based on file extension
-        media_type = "chemical/x-pdb"  # Default for PDB files
-        if file_path_obj.suffix == ".json":
-            media_type = "application/json"
-        elif file_path_obj.suffix == ".fasta":
-            media_type = "text/plain"
-        
-        return FileResponse(
-            str(file_path_obj),
-            media_type=media_type,
-            filename=filename,
-        )
-    except HTTPException:
-        raise
-    except Exception as e:
-        log_line("session_file_download_failed", {"error": str(e), "trace": traceback.format_exc(), "session_id": session_id, "file_id": file_id})
-        raise HTTPException(status_code=500, detail="Failed to download file")
-
-
 # ProteinMPNN endpoints ---------------------------------------------------
 
 
 @app.get("/api/proteinmpnn/sources")
 @limiter.limit("30/minute")
-async def proteinmpnn_sources(request: Request, user: Dict[str, Any] = Depends(get_current_user)):
+async def proteinmpnn_sources(request: Request):
     _ = request
     try:
-        sources = proteinmpnn_handler.list_available_sources(user_id=user.get("id"))
+        sources = proteinmpnn_handler.list_available_sources()
         return {"status": "success", "sources": sources}
     except Exception as e:
         log_line("proteinmpnn_sources_failed", {"error": str(e), "trace": traceback.format_exc()})
@@ -1077,7 +465,7 @@ async def proteinmpnn_sources(request: Request, user: Dict[str, Any] = Depends(g
 
 @app.post("/api/proteinmpnn/design")
 @limiter.limit("5/minute")
-async def proteinmpnn_design(request: Request, user: Dict[str, Any] = Depends(get_current_user)):
+async def proteinmpnn_design(request: Request):
     body = await request.json()
     job_id = body.get("jobId")
 
@@ -1090,19 +478,6 @@ async def proteinmpnn_design(request: Request, user: Dict[str, Any] = Depends(ge
                 "errorCode": "MISSING_PARAMETERS",
                 "userMessage": "Required parameters are missing",
             },
-        )
-
-    # Check and deduct credits
-    cost = CREDIT_COSTS["proteinmpnn"]
-    if not deduct_credits(user["id"], cost, "ProteinMPNN sequence design", job_id):
-        return JSONResponse(
-            status_code=402,
-            content={
-                "status": "error",
-                "error": "Insufficient credits",
-                "errorCode": "INSUFFICIENT_CREDITS",
-                "userMessage": f"Insufficient credits. Required: {cost}, Available: {get_user_credits(user['id'])}"
-            }
         )
 
     job_payload = {
@@ -1138,9 +513,6 @@ async def proteinmpnn_design(request: Request, user: Dict[str, Any] = Depends(ge
     except Exception:
         pass
 
-    # Log usage
-    log_usage(user["id"], "proteinmpnn", cost, {"job_id": job_id, "pdb_source": job_payload.get("pdbSource")})
-
     log_line(
         "proteinmpnn_request",
         {
@@ -1168,11 +540,7 @@ async def proteinmpnn_design(request: Request, user: Dict[str, Any] = Depends(ge
 async def proteinmpnn_status(request: Request, job_id: str):
     try:
         status = proteinmpnn_handler.get_job_status(job_id)
-        if status.get("status") == "not_found":
-            raise HTTPException(status_code=404, detail="ProteinMPNN job not found")
         return status
-    except HTTPException:
-        raise
     except Exception as e:
         log_line("proteinmpnn_status_failed", {"error": str(e), "trace": traceback.format_exc()})
         content = {"error": "proteinmpnn_status_failed"}
@@ -1183,56 +551,31 @@ async def proteinmpnn_status(request: Request, job_id: str):
 
 @app.get("/api/proteinmpnn/result/{job_id}")
 @limiter.limit("30/minute")
-async def proteinmpnn_result(
-    request: Request, 
-    job_id: str, 
-    fmt: str = "json", 
-    user: Dict[str, Any] = Depends(get_current_user)
-):
+async def proteinmpnn_result(request: Request, job_id: str, fmt: str = "json"):
     try:
-        user_id = user.get("id")
-        log_line("proteinmpnn_result_request", {"job_id": job_id, "user_id": user_id, "fmt": fmt})
-        result = proteinmpnn_handler.get_job_result(job_id, user_id)
+        result = proteinmpnn_handler.get_job_result(job_id)
         if not result:
-            log_line("proteinmpnn_result_not_found", {"job_id": job_id, "user_id": user_id})
             raise HTTPException(status_code=404, detail="ProteinMPNN result not found")
 
         if fmt == "json":
             return result
-        
-        # For FASTA and raw formats, search in multiple locations (same logic as get_job_result)
-        base_dir = Path(__file__).parent
-        search_paths = []
-        
-        if user.get("id"):
-            search_paths.append(base_dir / "storage" / user["id"] / "proteinmpnn_results" / job_id)
-        
-        # Always check system directory as fallback
-        search_paths.append(base_dir / "storage" / "system" / "proteinmpnn_results" / job_id)
-        
-        # Old location for backward compatibility
-        search_paths.append(base_dir / "proteinmpnn_results" / job_id)
-        
         if fmt == "fasta":
-            for result_dir in search_paths:
-                fasta_path = result_dir / "designed_sequences.fasta"
-                if fasta_path.exists():
-                    return FileResponse(
-                        fasta_path,
-                        media_type="text/plain",
-                        filename=f"proteinmpnn_{job_id}.fasta",
-                    )
-            raise HTTPException(status_code=404, detail="FASTA output not available")
-        
+            fasta_path = proteinmpnn_handler.results_dir / job_id / "designed_sequences.fasta"
+            if not fasta_path.exists():
+                raise HTTPException(status_code=404, detail="FASTA output not available")
+            return FileResponse(
+                fasta_path,
+                media_type="text/plain",
+                filename=f"proteinmpnn_{job_id}.fasta",
+            )
         if fmt == "raw":
-            for result_dir in search_paths:
-                raw_path = result_dir / "raw_data.json"
-                if raw_path.exists():
-                    return FileResponse(
-                        raw_path,
-                        media_type="application/json",
-                        filename=f"proteinmpnn_{job_id}_raw.json",
-                    )
+            raw_path = proteinmpnn_handler.results_dir / job_id / "raw_data.json"
+            if raw_path.exists():
+                return FileResponse(
+                    raw_path,
+                    media_type="application/json",
+                    filename=f"proteinmpnn_{job_id}_raw.json",
+                )
             raise HTTPException(status_code=404, detail="Raw output not available")
 
         raise HTTPException(status_code=400, detail="Unsupported format requested")
@@ -1249,12 +592,11 @@ async def proteinmpnn_result(
 # RFdiffusion API endpoints
 @app.post("/api/rfdiffusion/design")
 @limiter.limit("5/minute")
-async def rfdiffusion_design(request: Request, user: Dict[str, Any] = Depends(get_current_user)):
+async def rfdiffusion_design(request: Request):
     try:
         body = await request.json()
         parameters = body.get("parameters", {})
         job_id = body.get("jobId")
-        session_id = body.get("sessionId")  # Optional session ID
         
         if not job_id:
             return JSONResponse(
@@ -1267,27 +609,9 @@ async def rfdiffusion_design(request: Request, user: Dict[str, Any] = Depends(ge
                 }
             )
         
-        # Check and deduct credits
-        cost = CREDIT_COSTS["rfdiffusion"]
-        if not deduct_credits(user["id"], cost, "RFdiffusion protein design", job_id):
-            return JSONResponse(
-                status_code=402,
-                content={
-                    "status": "error",
-                    "error": "Insufficient credits",
-                    "errorCode": "INSUFFICIENT_CREDITS",
-                    "userMessage": f"Insufficient credits. Required: {cost}, Available: {get_user_credits(user['id'])}"
-                }
-            )
-        
-        # Log usage
-        log_usage(user["id"], "rfdiffusion", cost, {"job_id": job_id, "parameters": parameters})
-        
         result = await rfdiffusion_handler.submit_design_job({
             "parameters": parameters,
-            "jobId": job_id,
-            "sessionId": session_id,  # Pass session ID to handler
-            "userId": user["id"],  # Pass user ID for file storage
+            "jobId": job_id
         })
         
         # Check if result contains an error and return appropriate HTTP status
@@ -1315,23 +639,13 @@ async def rfdiffusion_design(request: Request, user: Dict[str, Any] = Depends(ge
                     }
                 )
             else:
-                # For validation errors (422), use the detailed error message as userMessage
-                # Check if it's a validation error (contains "Residue" or "not in pdb" or "Validation error")
-                is_validation_error = (
-                    "Validation error" in error_msg or 
-                    "Residue" in error_msg and "not in pdb" in error_msg.lower() or
-                    "422" in error_msg
-                )
-                
-                user_message = error_msg if is_validation_error else "Protein design computation failed"
-                
                 return JSONResponse(
                     status_code=500,
                     content={
                         "status": "error",
                         "error": "",  # Empty for frontend error handling
                         "errorCode": "DESIGN_FAILED",
-                        "userMessage": user_message,
+                        "userMessage": "Protein design computation failed",
                         "technicalMessage": error_msg
                     }
                 )
@@ -1357,11 +671,7 @@ async def rfdiffusion_design(request: Request, user: Dict[str, Any] = Depends(ge
 async def rfdiffusion_status(request: Request, job_id: str):
     try:
         status = rfdiffusion_handler.get_job_status(job_id)
-        if status.get("status") == "not_found":
-            raise HTTPException(status_code=404, detail="RFdiffusion job not found")
         return status
-    except HTTPException:
-        raise
     except Exception as e:
         log_line("rfdiffusion_status_failed", {"error": str(e), "trace": traceback.format_exc()})
         content = {"error": "rfdiffusion_status_failed"}
@@ -1375,369 +685,13 @@ async def rfdiffusion_status(request: Request, job_id: str):
 async def rfdiffusion_cancel(request: Request, job_id: str):
     try:
         result = rfdiffusion_handler.cancel_job(job_id)
-        if result.get("status") == "not_found":
-            raise HTTPException(status_code=404, detail="RFdiffusion job not found")
         return result
-    except HTTPException:
-        raise
     except Exception as e:
         log_line("rfdiffusion_cancel_failed", {"error": str(e), "trace": traceback.format_exc()})
         content = {"error": "rfdiffusion_cancel_failed"}
         if DEBUG_API:
             content["detail"] = str(e)
         return JSONResponse(status_code=500, content=content)
-
-
-@app.post("/api/rfdiffusion/run")
-@limiter.limit("5/minute")
-async def rfdiffusion_run(request: Request):
-    """
-    Direct RFdiffusion endpoint for pipeline nodes.
-    Accepts pipeline node format and bridges to existing handler.
-    
-    Expected request body format (from pipeline node):
-    {
-        "pdb_file": "...",  # PDB content string, file path, or file ID
-        "contigs": "50",     # Contig specification
-        "num_designs": 1,    # Number of designs (optional)
-        "hotspot_res": [],   # Hotspot residues (optional)
-        "diffusion_steps": 15  # Diffusion steps (optional)
-    }
-    
-    Returns:
-    {
-        "status": "success",
-        "output_pdb": "...",  # PDB content string
-        "filename": "...",
-        "filepath": "..."
-    }
-    """
-    try:
-        body = await request.json()
-        
-        # Debug: Log incoming request - FULL DETAILS
-        print("=" * 80)
-        print("[RFdiffusion Run] ===== INCOMING REQUEST ======")
-        print(f"[RFdiffusion Run] Request body type: {type(body).__name__}")
-        if isinstance(body, dict):
-            print(f"[RFdiffusion Run] Request body keys: {list(body.keys())}")
-            for key, value in body.items():
-                if key == "pdb_file" and isinstance(value, str) and len(value) > 200:
-                    print(f"[RFdiffusion Run]   {key}: {type(value).__name__} (length: {len(value)}, preview: {value[:100]}...)")
-                elif isinstance(value, (dict, list)):
-                    print(f"[RFdiffusion Run]   {key}: {type(value).__name__} = {value}")
-                else:
-                    print(f"[RFdiffusion Run]   {key}: {type(value).__name__} = {repr(value)}")
-        else:
-            print(f"[RFdiffusion Run] Request body: {body}")
-        print("=" * 80)
-        
-        # Extract parameters from pipeline node format
-        pdb_file = body.get("pdb_file") or body.get("input_pdb")
-        pdb_id = body.get("pdb_id")
-        contigs = body.get("contigs", "A50-150")
-        num_designs = body.get("num_designs", 1)
-        hotspot_res_raw = body.get("hotspot_res", [])
-        # Parse hotspot_res - can be array or comma-separated string
-        if isinstance(hotspot_res_raw, str):
-            # If it's a string, parse it (even if empty)
-            if hotspot_res_raw.strip():
-                hotspot_res = [h.strip() for h in hotspot_res_raw.split(',') if h.strip()]
-            else:
-                hotspot_res = []  # Empty string = empty array
-        elif isinstance(hotspot_res_raw, list):
-            # Filter out empty strings from list
-            hotspot_res = [h for h in hotspot_res_raw if h and str(h).strip()]
-        else:
-            hotspot_res = []
-        
-        # Debug log hotspot_res
-        print(f"[RFdiffusion Run] hotspot_res: {hotspot_res} (type: {type(hotspot_res).__name__}, length: {len(hotspot_res)})")
-        diffusion_steps = body.get("diffusion_steps", 15)
-        design_mode = body.get("design_mode", "unconditional")
-        
-        # Handle pdb_file if it's an object (from input_node or rfdiffusion_node)
-        upload_id_from_object = None
-        if pdb_file and isinstance(pdb_file, dict):
-            # Extract file_id if it's a file metadata object
-            upload_id_from_object = pdb_file.get("file_id") or pdb_file.get("uploadId")
-            # Also check for pdb_id in the object
-            if not pdb_id and pdb_file.get("pdb_id"):
-                pdb_id = pdb_file.get("pdb_id")
-            # If it has file_id, use that as uploadId and clear pdb_file
-            if upload_id_from_object:
-                pdb_file = None  # Clear pdb_file so we use uploadId instead
-            elif pdb_file.get("filepath"):
-                # If it has filepath (from RFdiffusion output), use that as the file path
-                pdb_file = pdb_file.get("filepath")
-            else:
-                # If it's a dict but no file_id or filepath, try to extract other useful info
-                # Maybe it has file_url or we should treat it as invalid
-                # For now, clear it and let the handler deal with missing PDB
-                pdb_file = None
-        
-        # Generate job ID for tracking
-        job_id = f"rf_{int(time.time() * 1000)}"
-        
-        # Convert pipeline format to handler format
-        # The handler expects parameters in a specific structure
-        parameters = {
-            "contigs": contigs,
-            "diffusion_steps": diffusion_steps,
-            "design_mode": design_mode,
-            "num_designs": num_designs,
-        }
-        
-        # Only include hotspot_res if it's not empty
-        # Empty hotspot_res can cause API errors if the PDB doesn't match
-        # Also filter out any invalid/empty entries
-        if hotspot_res and len(hotspot_res) > 0:
-            # Filter out empty strings and ensure all entries are valid
-            filtered_hotspot_res = [h for h in hotspot_res if h and str(h).strip()]
-            if filtered_hotspot_res:
-                parameters["hotspot_res"] = filtered_hotspot_res
-                print(f"[RFdiffusion Run] Including hotspot_res: {filtered_hotspot_res}")
-            else:
-                print(f"[RFdiffusion Run] hotspot_res was provided but all values were empty, omitting it")
-        else:
-            print(f"[RFdiffusion Run] No hotspot_res provided, omitting from parameters")
-        
-        # Handle PDB ID if provided separately
-        if pdb_id and pdb_id.strip():
-            parameters["pdb_id"] = pdb_id.strip().upper()
-            parameters["design_mode"] = "motif_scaffolding"
-        
-        # Handle upload ID from object
-        if upload_id_from_object:
-            # Verify the upload ID exists before using it
-            try:
-                metadata = get_uploaded_pdb(upload_id_from_object)
-                if metadata and metadata.get("absolute_path"):
-                    parameters["uploadId"] = upload_id_from_object
-                    # Only set design_mode to motif_scaffolding if we have a PDB source
-                    if design_mode == "unconditional":
-                        parameters["design_mode"] = "motif_scaffolding"
-                    print(f"[RFdiffusion Run] Using uploadId: {upload_id_from_object}, file exists: {Path(metadata['absolute_path']).exists()}")
-                else:
-                    print(f"[RFdiffusion Run] Warning: uploadId {upload_id_from_object} not found in metadata")
-                    # If uploadId doesn't exist, don't set it - let handler deal with missing PDB
-            except Exception as e:
-                print(f"[RFdiffusion Run] Error checking uploadId {upload_id_from_object}: {e}")
-                # Don't set uploadId if we can't verify it
-        
-        # Track if we set input_pdb so we can update design_mode
-        has_input_pdb_set = False
-        
-        # Handle PDB file - could be:
-        # 1. PDB content string (starts with ATOM or HEADER)
-        # 2. File path (relative to server directory)
-        # 3. File ID (upload ID)
-        # 4. PDB ID (4-character code)
-        if pdb_file:
-            pdb_str = str(pdb_file).strip()
-            
-            # Check if it's PDB content (starts with ATOM or HEADER)
-            if pdb_str.startswith("ATOM") or pdb_str.startswith("HEADER"):
-                parameters["input_pdb"] = pdb_str
-                has_input_pdb_set = True
-                # If we have PDB content, we must use motif_scaffolding or partial_diffusion mode
-                # Unconditional mode doesn't accept input_pdb
-                if parameters.get("design_mode") == "unconditional":
-                    parameters["design_mode"] = "motif_scaffolding"
-                    print(f"[RFdiffusion Run] Changed design_mode from unconditional to motif_scaffolding (PDB content provided)")
-            # Check if it's a PDB ID (4 characters)
-            elif len(pdb_str) == 4 and pdb_str.isalnum():
-                parameters["pdb_id"] = pdb_str.upper()
-                parameters["design_mode"] = "motif_scaffolding"
-            # Check if it's a file path or upload ID
-            else:
-                # Try as upload ID first
-                try:
-                    metadata = get_uploaded_pdb(pdb_str)
-                    if metadata and metadata.get("absolute_path"):
-                        parameters["uploadId"] = pdb_str
-                        parameters["design_mode"] = "motif_scaffolding"
-                    else:
-                        # Try as file path
-                        pdb_path = Path(__file__).parent / pdb_str
-                        if pdb_path.exists():
-                            parameters["input_pdb"] = pdb_path.read_text()
-                            has_input_pdb_set = True
-                            # If we have PDB content, use motif_scaffolding mode
-                            if parameters.get("design_mode") == "unconditional":
-                                parameters["design_mode"] = "motif_scaffolding"
-                                print(f"[RFdiffusion Run] Changed design_mode from unconditional to motif_scaffolding (PDB file found)")
-                        else:
-                            # Assume it's PDB content
-                            parameters["input_pdb"] = pdb_str
-                            has_input_pdb_set = True
-                            # If we have PDB content, use motif_scaffolding mode
-                            if parameters.get("design_mode") == "unconditional":
-                                parameters["design_mode"] = "motif_scaffolding"
-                                print(f"[RFdiffusion Run] Changed design_mode from unconditional to motif_scaffolding (assuming PDB content)")
-                except Exception as e:
-                    log_line("rfdiffusion_run_pdb_resolve_warning", {
-                        "pdb_source": pdb_str,
-                        "error": str(e)
-                    })
-                    parameters["input_pdb"] = pdb_str
-                    # If we have PDB content, use motif_scaffolding mode
-                    if parameters.get("design_mode") == "unconditional":
-                        parameters["design_mode"] = "motif_scaffolding"
-        
-        # Final check: if we have input_pdb but design_mode is still unconditional, change it
-        if parameters.get("input_pdb") and parameters.get("design_mode") == "unconditional":
-            parameters["design_mode"] = "motif_scaffolding"
-            print(f"[RFdiffusion Run] Final fix: Changed design_mode from unconditional to motif_scaffolding (input_pdb present)")
-        
-        # Debug: Log parameters being sent to handler - FULL DETAILS
-        print("=" * 80)
-        print("[RFdiffusion Run] ===== PARAMETERS TO HANDLER ======")
-        print(f"[RFdiffusion Run] Parameters keys: {list(parameters.keys())}")
-        for key, value in parameters.items():
-            if key == "input_pdb" and isinstance(value, str) and len(value) > 200:
-                print(f"[RFdiffusion Run]   {key}: {type(value).__name__} (length: {len(value)}, preview: {value[:100]}...)")
-            elif isinstance(value, (dict, list)):
-                print(f"[RFdiffusion Run]   {key}: {type(value).__name__} = {value}")
-            else:
-                print(f"[RFdiffusion Run]   {key}: {type(value).__name__} = {repr(value)}")
-        print(f"[RFdiffusion Run] Design mode: {parameters.get('design_mode')}")
-        print(f"[RFdiffusion Run] Has uploadId: {bool(parameters.get('uploadId'))}")
-        if parameters.get('uploadId'):
-            # Verify uploadId exists before calling handler
-            try:
-                upload_metadata = get_uploaded_pdb(parameters.get('uploadId'))
-                if upload_metadata:
-                    print(f"[RFdiffusion Run] UploadId verified, file path: {upload_metadata.get('absolute_path')}")
-                else:
-                    print(f"[RFdiffusion Run] WARNING: UploadId {parameters.get('uploadId')} not found!")
-            except Exception as e:
-                print(f"[RFdiffusion Run] ERROR checking uploadId: {e}")
-        print(f"[RFdiffusion Run] Has pdb_id: {bool(parameters.get('pdb_id'))}")
-        print(f"[RFdiffusion Run] Has input_pdb: {bool(parameters.get('input_pdb'))}")
-        if parameters.get('input_pdb'):
-            input_pdb_val = parameters.get('input_pdb')
-            print(f"[RFdiffusion Run] input_pdb type: {type(input_pdb_val).__name__}, length: {len(input_pdb_val) if isinstance(input_pdb_val, str) else 'N/A'}")
-        print("=" * 80)
-        
-        # Extract sessionId from request body if provided (for pipeline nodes)
-        session_id = body.get("sessionId")
-        print(f"[RFdiffusion Run] Session ID from request: {session_id} (type: {type(session_id).__name__})")
-        
-        # Call existing handler
-        # Note: This endpoint doesn't require auth, so we can't get user_id
-        # For pipeline nodes, user_id should come from the request body
-        user_id = body.get("userId") or "system"  # Fallback for backward compatibility
-        result = await rfdiffusion_handler.submit_design_job({
-            "parameters": parameters,
-            "jobId": job_id,
-            "sessionId": session_id,  # Pass sessionId from request to associate files with session
-            "userId": user_id,  # Pass user ID for file storage
-        })
-        
-        # Check for errors
-        if result.get("status") == "error":
-            error_msg = result.get("error", "Unknown error")
-            # Log the error for debugging
-            log_line("rfdiffusion_run_handler_error", {
-                "error": error_msg,
-                "job_id": job_id,
-                "parameters_keys": list(parameters.keys()),
-                "design_mode": parameters.get("design_mode"),
-                "has_input_pdb": bool(parameters.get("input_pdb")),
-                "has_uploadId": bool(parameters.get("uploadId")),
-                "has_pdb_id": bool(parameters.get("pdb_id"))
-            })
-            print(f"[RFdiffusion Run] Handler returned error: {error_msg}")
-            return JSONResponse(
-                status_code=500,
-                content={
-                    "status": "error",
-                    "error": error_msg,
-                    "response": {
-                        "status": 500,
-                        "statusText": "Internal Server Error",
-                        "headers": {},
-                        "data": {"detail": error_msg}
-                    }
-                }
-            )
-        
-        # Success case - extract PDB content
-        if result.get("status") == "success":
-            data = result.get("data", {})
-            pdb_content = data.get("pdbContent")
-            filename = data.get("filename", f"rfdiffusion_{job_id}.pdb")
-            filepath = data.get("filepath")
-            
-            if pdb_content:
-                return JSONResponse(
-                    status_code=200,
-                    content={
-                        "status": "success",
-                        "output_pdb": pdb_content,
-                        "filename": filename,
-                        "filepath": filepath,
-                        "data": {
-                            "pdbContent": pdb_content,
-                            "filename": filename,
-                            "filepath": filepath
-                        }
-                    }
-                )
-            else:
-                return JSONResponse(
-                    status_code=500,
-                    content={
-                        "status": "error",
-                        "error": "No PDB content in response",
-                        "response": {
-                            "status": 500,
-                            "statusText": "Internal Server Error",
-                            "headers": {},
-                            "data": {"detail": "No PDB content in response"}
-                        }
-                    }
-                )
-        
-        # Unexpected status
-        return JSONResponse(
-            status_code=500,
-            content={
-                "status": "error",
-                "error": f"Unexpected status: {result.get('status')}",
-                "response": {
-                    "status": 500,
-                    "statusText": "Internal Server Error",
-                    "headers": {},
-                    "data": {"detail": f"Unexpected status: {result.get('status')}"}
-                }
-            }
-        )
-        
-    except Exception as e:
-        error_trace = traceback.format_exc()
-        error_msg = str(e)
-        log_line("rfdiffusion_run_failed", {
-            "error": error_msg,
-            "trace": error_trace,
-            "body_keys": list(body.keys()) if isinstance(body, dict) else "not_dict",
-            "body_pdb_file_type": type(body.get("pdb_file")).__name__ if isinstance(body, dict) and body.get("pdb_file") else "unknown"
-        })
-        print(f"[RFdiffusion Run Error] {error_msg}\n{error_trace}")
-        return JSONResponse(
-            status_code=500,
-            content={
-                "status": "error",
-                "error": error_msg,
-                "response": {
-                    "status": 500,
-                    "statusText": "Internal Server Error",
-                    "headers": {},
-                    "data": {"detail": error_msg if DEBUG_API else "Internal server error"}
-                }
-            }
-        )
 
 
 # Back-compat endpoints
@@ -1797,13 +751,7 @@ async def generate_chat_title(request: Request):
         body = await request.json()
         messages = body.get("messages", [])
         
-        log_line("title_generation_request", {
-            "message_count": len(messages) if messages else 0,
-            "has_messages": bool(messages)
-        })
-        
         if not messages or len(messages) < 2:
-            log_line("title_generation_skipped", {"reason": "insufficient_messages"})
             return {"title": "New Chat"}
         
         # Get first user message and first AI response
@@ -1811,7 +759,6 @@ async def generate_chat_title(request: Request):
         ai_msg = next((m for m in messages if m.get("type") == "ai"), None)
         
         if not user_msg or not ai_msg:
-            log_line("title_generation_skipped", {"reason": "missing_user_or_ai_message"})
             return {"title": "New Chat"}
         
         # Create prompt for title generation
@@ -1825,15 +772,11 @@ AI: {ai_content}
 
 Return ONLY the title text, no quotes, no explanation. Make it specific and meaningful."""
 
-        # Use default chatModel from models_config.json
-        try:
-            from .agents.runner import _get_openrouter_api_key
-        except ImportError:
-            from agents.runner import _get_openrouter_api_key
+        # Use a lightweight model for title generation (Haiku is fast and cheap)
+        from .agents.runner import _get_openrouter_api_key, _load_model_map
         
-        config = _load_models_config()
-        defaults = config.get("defaults", {})
-        model_id = defaults.get("chatModel", "anthropic/claude-3-haiku")
+        model_map = _load_model_map()
+        model_id = model_map.get("anthropic/claude-3-haiku", "anthropic/claude-3-haiku")
         api_key = _get_openrouter_api_key()
         
         if not api_key:

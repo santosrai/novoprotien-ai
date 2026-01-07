@@ -1,7 +1,8 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { X, Clock } from 'lucide-react';
 import { api } from '../utils/api';
 import { Message } from '../stores/chatHistoryStore';
+import { JobPoller, JobStatus } from '../utils/jobPoller';
 
 interface JobLoadingPillProps {
   message: Message;
@@ -18,52 +19,47 @@ export const JobLoadingPill: React.FC<JobLoadingPillProps> = ({
 }) => {
   const [status, setStatus] = useState<'running' | 'completed' | 'error'>('running');
   const [progress, setProgress] = useState(0);
+  const [progressMessage, setProgressMessage] = useState<string>('');
   const [elapsedTime, setElapsedTime] = useState(0);
-  const [polling, setPolling] = useState(true);
+  const pollerRef = useRef<JobPoller | null>(null);
 
-  // Polling effect
+  // Initialize job poller
   useEffect(() => {
-    if (!message.jobId || !polling || status !== 'running') return;
+    if (!message.jobId || status !== 'running') return;
 
-    const pollStatus = async () => {
-      try {
-        const endpoint = message.jobType === 'rfdiffusion' 
-          ? `/rfdiffusion/status/${message.jobId}`
-          : `/alphafold/status/${message.jobId}`;
-          
-        const response = await api.get(endpoint);
-        
-        if (response.data.status === 'completed') {
-          setStatus('completed');
-          setProgress(100);
-          setPolling(false);
-          
-          // Fetch the completed job result
-          // This would typically return the PDB data
-          onJobComplete(response.data.data || response.data);
-          
-        } else if (response.data.status === 'error') {
-          setStatus('error');
-          setPolling(false);
-          onJobError(response.data.error || 'Job failed');
-        } else {
-          // Still running - update progress based on elapsed time
-          const estimatedDuration = message.jobType === 'rfdiffusion' ? 480 : 300; // 8min vs 5min
-          const progressPercent = Math.min((elapsedTime / estimatedDuration) * 90, 85); // Max 85% until completion
-          setProgress(progressPercent);
+    const poller = new JobPoller({
+      jobId: message.jobId,
+      jobType: message.jobType || 'alphafold',
+      enableWebSocket: true,
+      maxPollTime: 7200, // 2 hours
+      onUpdate: (jobStatus: JobStatus) => {
+        setProgress(jobStatus.progress || 0);
+        if (jobStatus.progress_message) {
+          setProgressMessage(jobStatus.progress_message);
         }
-      } catch (error) {
-        console.error('Failed to poll job status:', error);
-        // Don't stop polling on network errors, might be temporary
+        if (jobStatus.status === 'error') {
+          setStatus('error');
+        }
+      },
+      onComplete: (data: any) => {
+        setStatus('completed');
+        setProgress(100);
+        onJobComplete(data);
+      },
+      onError: (error: string) => {
+        setStatus('error');
+        onJobError(error);
       }
-    };
+    });
 
-    // Poll immediately, then every 3 seconds
-    pollStatus();
-    const pollInterval = setInterval(pollStatus, 3000);
-    
-    return () => clearInterval(pollInterval);
-  }, [message.jobId, message.jobType, polling, status, elapsedTime, onJobComplete, onJobError]);
+    pollerRef.current = poller;
+    poller.start();
+
+    return () => {
+      poller.stop();
+      pollerRef.current = null;
+    };
+  }, [message.jobId, message.jobType, status, onJobComplete, onJobError]);
 
   // Elapsed time counter
   useEffect(() => {
@@ -96,11 +92,16 @@ export const JobLoadingPill: React.FC<JobLoadingPillProps> = ({
     
     try {
       const endpoint = message.jobType === 'rfdiffusion' 
-        ? `/rfdiffusion/cancel/${message.jobId}`
-        : `/alphafold/cancel/${message.jobId}`;
+        ? `/api/rfdiffusion/cancel/${message.jobId}`
+        : `/api/alphafold/cancel/${message.jobId}`;
         
       await api.post(endpoint);
-      setPolling(false);
+      
+      // Stop poller
+      if (pollerRef.current) {
+        pollerRef.current.stop();
+      }
+      
       setStatus('error');
       onCancel?.();
     } catch (error) {
@@ -150,6 +151,13 @@ export const JobLoadingPill: React.FC<JobLoadingPillProps> = ({
                 {Math.round(progress)}%
               </span>
             </div>
+            
+            {/* Progress Message */}
+            {progressMessage && (
+              <div className="mt-1 text-xs text-blue-600 italic">
+                {progressMessage}
+              </div>
+            )}
             
             {/* Time Info */}
             <div className="mt-1 flex items-center space-x-4 text-xs text-blue-600">

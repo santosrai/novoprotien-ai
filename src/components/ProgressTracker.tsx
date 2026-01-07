@@ -301,12 +301,3 @@ export const useProteinMPNNProgress = createProgressHook({
   errorMessage: 'Sequence design failed',
   cancelMessage: 'Sequence design cancelled'
 });
-
-export const useRFdiffusionProgress = createProgressHook({
-  eventName: 'rfdiffusion-progress',
-  title: 'RFdiffusion Protein Design',
-  startMessage: 'Starting protein design...',
-  successMessage: 'Design completed successfully!',
-  errorMessage: 'Design failed',
-  cancelMessage: 'Design cancelled'
-});

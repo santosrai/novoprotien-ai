@@ -296,3 +296,30 @@ CREATE TABLE IF NOT EXISTS admin_preferences (
     FOREIGN KEY (admin_id) REFERENCES users(id)
 );
 
+-- AlphaFold jobs table (for long-running job persistence)
+CREATE TABLE IF NOT EXISTS alphafold_jobs (
+    id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL,
+    session_id TEXT,
+    sequence TEXT NOT NULL,
+    sequence_length INTEGER NOT NULL,
+    parameters TEXT, -- JSON parameters
+    status TEXT NOT NULL DEFAULT 'queued', -- 'queued'|'running'|'completed'|'error'|'cancelled'
+    nvidia_req_id TEXT, -- NVIDIA API request ID for recovery
+    result_filepath TEXT, -- Path to result PDB file
+    error_message TEXT, -- Error details if failed
+    progress REAL DEFAULT 0.0, -- Progress percentage (0-100)
+    progress_message TEXT, -- Current status message
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    started_at TIMESTAMP,
+    completed_at TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+    FOREIGN KEY (session_id) REFERENCES chat_sessions(id) ON DELETE SET NULL
+);
+
+CREATE INDEX idx_alphafold_jobs_user_id ON alphafold_jobs(user_id);
+CREATE INDEX idx_alphafold_jobs_status ON alphafold_jobs(status);
+CREATE INDEX idx_alphafold_jobs_created_at ON alphafold_jobs(created_at);
+CREATE INDEX idx_alphafold_jobs_nvidia_req_id ON alphafold_jobs(nvidia_req_id);
+
