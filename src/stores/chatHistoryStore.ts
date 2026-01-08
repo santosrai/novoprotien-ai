@@ -163,7 +163,8 @@ interface ChatHistoryState {
   
   // Visualization Code Management
   saveVisualizationCode: (sessionId: string, code: string, messageId?: string) => Promise<void>;
-  getVisualizationCode: (sessionId: string) => string | undefined;
+  getVisualizationCode: (sessionId?: string) => Promise<string | undefined>;
+  getUserLatestVisualizationCode: () => Promise<string | undefined>;
   
   // Viewer Visibility Management
   saveViewerVisibility: (sessionId: string, visible: boolean) => void;
@@ -510,13 +511,28 @@ export const useChatHistoryStore = create<ChatHistoryState>()(
           return;
         }
         
-        // If messageId is provided, create message-scoped canvas
+        // Save to session-scoped localStorage cache for fast access
+        if (sessionId) {
+          try {
+            const cacheKey = `novoprotein-session-code-${sessionId}`;
+            const cacheData = {
+              code: code,
+              timestamp: new Date().toISOString(),
+            };
+            localStorage.setItem(cacheKey, JSON.stringify(cacheData));
+            console.log(`[saveVisualizationCode] Cached code in session localStorage: ${sessionId}`);
+          } catch (error) {
+            console.warn('[saveVisualizationCode] Failed to cache in localStorage:', error);
+          }
+        }
+        
+        // If messageId is provided, create message-scoped canvas (backend - user-scoped via messages)
         if (messageId) {
           try {
             await api.post(`/conversations/${sessionId}/messages/${messageId}/canvas`, {
               scene_data: code,
             });
-            console.log(`[saveVisualizationCode] Canvas created for message ${messageId} in session ${sessionId}`);
+            console.log(`[saveVisualizationCode] Canvas created for message ${messageId} in session ${sessionId} (user-scoped via backend)`);
             
             // Update local message state
             set((state) => ({
@@ -567,9 +583,85 @@ export const useChatHistoryStore = create<ChatHistoryState>()(
         }
       },
       
-      getVisualizationCode: (_sessionId) => {
-        // visualizationCode is now message-scoped in threeDCanvas, not session-scoped
-        // This method is kept for backward compatibility but returns undefined
+      getVisualizationCode: async (sessionId?: string) => {
+        const user = useAuthStore.getState().user;
+        if (!user) {
+          console.warn('[getVisualizationCode] User not authenticated');
+          return undefined;
+        }
+        
+        // Step 1: If sessionId provided, check session-scoped localStorage cache first
+        if (sessionId) {
+          try {
+            const cacheKey = `novoprotein-session-code-${sessionId}`;
+            const cached = localStorage.getItem(cacheKey);
+            if (cached) {
+              const cacheData = JSON.parse(cached);
+              console.log(`[getVisualizationCode] Found code in session cache: ${sessionId}`);
+              return cacheData.code;
+            }
+          } catch (error) {
+            console.warn('[getVisualizationCode] Failed to read from session cache:', error);
+          }
+        }
+        
+        // Step 2: Fallback to backend query (user-scoped) - gets latest across all user's messages
+        try {
+          const response = await api.get('/user/canvases/latest');
+          if (response.data.status === 'success' && response.data.canvas) {
+            const canvas = response.data.canvas;
+            const code = canvas.sceneData || (canvas.scene_data?.molstar_code || '');
+            
+            if (code) {
+              console.log('[getVisualizationCode] Retrieved latest code from backend (user-scoped)');
+              
+              // Cache in session localStorage if sessionId provided
+              if (sessionId) {
+                try {
+                  const cacheKey = `novoprotein-session-code-${sessionId}`;
+                  const cacheData = {
+                    code: code,
+                    canvasId: canvas.id,
+                    messageId: canvas.message_id,
+                    timestamp: canvas.updated_at || new Date().toISOString(),
+                  };
+                  localStorage.setItem(cacheKey, JSON.stringify(cacheData));
+                  console.log(`[getVisualizationCode] Cached backend result in session: ${sessionId}`);
+                } catch (error) {
+                  console.warn('[getVisualizationCode] Failed to cache backend result:', error);
+                }
+              }
+              
+              return code;
+            }
+          }
+        } catch (error: any) {
+          console.error('[getVisualizationCode] Failed to fetch from backend:', error);
+        }
+        
+        return undefined;
+      },
+      
+      getUserLatestVisualizationCode: async () => {
+        // Always queries backend (user-scoped), no localStorage cache
+        const user = useAuthStore.getState().user;
+        if (!user) {
+          console.warn('[getUserLatestVisualizationCode] User not authenticated');
+          return undefined;
+        }
+        
+        try {
+          const response = await api.get('/user/canvases/latest');
+          if (response.data.status === 'success' && response.data.canvas) {
+            const canvas = response.data.canvas;
+            const code = canvas.sceneData || (canvas.scene_data?.molstar_code || '');
+            console.log('[getUserLatestVisualizationCode] Retrieved latest code from backend');
+            return code;
+          }
+        } catch (error: any) {
+          console.error('[getUserLatestVisualizationCode] Failed to fetch from backend:', error);
+        }
+        
         return undefined;
       },
       

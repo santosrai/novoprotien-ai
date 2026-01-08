@@ -1,6 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { Folder, File, ChevronRight, ChevronDown, Search, Loader2, Trash2, Eye } from 'lucide-react';
-import { useChatHistoryStore } from '../stores/chatHistoryStore';
 import { api } from '../utils/api';
 
 interface FileMetadata {
@@ -18,7 +17,6 @@ interface FileBrowserProps {
 }
 
 export const FileBrowser: React.FC<FileBrowserProps> = ({ onFileSelect }) => {
-  const { activeSessionId } = useChatHistoryStore();
   const [files, setFiles] = useState<FileMetadata[]>([]);
   const [loading, setLoading] = useState(false);
   const [expandedFolders, setExpandedFolders] = useState<Set<string>>(new Set(['uploads', 'rfdiffusion', 'alphafold', 'proteinmpnn']));

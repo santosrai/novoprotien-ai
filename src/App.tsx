@@ -9,7 +9,7 @@ import { ErrorDashboard, useErrorDashboard } from './components/ErrorDashboard';
 import { FileBrowser } from './components/FileBrowser';
 import { FileEditor } from './components/FileEditor';
 import { PipelineCanvas, PipelineManager, PipelineExecution } from './components/pipeline-canvas';
-import { api, getAuthHeaders } from './utils/api';
+import { api } from './utils/api';
 import { Eye, Code2, Settings, FolderOpen, Workflow } from 'lucide-react';
 import { useAppStore } from './stores/appStore';
 import { useSettingsStore } from './stores/settingsStore';

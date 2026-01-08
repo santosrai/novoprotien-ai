@@ -532,6 +532,25 @@ npm run dev:all          # Runs both frontend and backend
 
 ---
 
+## Data Scoping and Persistence
+
+### ⚠️ CRITICAL: User-Scoped vs Session-Scoped Storage
+
+**Important Rule**: Always use **user-scoped storage in backend**, **session-scoped storage in localStorage only**.
+
+**Why**: Session IDs change on page refresh, causing data loss if used as primary keys in backend.
+
+**Pattern**:
+- **Backend**: Query by `user_id` (through messages if needed) - persists across sessions
+- **LocalStorage**: Use `sessionId` for caching only - fast access, lost on refresh
+
+**Example**: Visualization code storage
+- ✅ Backend: `three_d_canvases` linked to messages → messages have `user_id` → user-scoped
+- ✅ LocalStorage: `novoprotein-session-code-${sessionId}` → session-scoped cache
+- ❌ Wrong: Backend query by `session_id` → lost on refresh
+
+**See**: [User-Scoped Visualization Code Storage](./docs/USER_SCOPED_VISUALIZATION_CODE.md) for detailed implementation guide and common mistakes to avoid.
+
 ## Performance Optimizations
 
 - **Code Caching**: Builder instance cached per plugin

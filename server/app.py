@@ -109,6 +109,7 @@ app.include_router(credits.router)
 app.include_router(reports.router)
 app.include_router(admin.router)
 app.include_router(three_d_canvases.router)
+app.include_router(three_d_canvases.user_router)
 app.include_router(attachments.router)
 
 
@@ -284,6 +285,7 @@ async def route(request: Request):
             history=body.get("history"),
             selection=body.get("selection"),
             selections=body.get("selections"),
+            current_structure_origin=body.get("currentStructureOrigin"),
             model_override=model_override,
         )
         

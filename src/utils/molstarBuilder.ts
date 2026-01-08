@@ -9,7 +9,7 @@ export interface ResidueSelector {
 }
 
 export interface MolstarBuilder {
-  loadStructure: (pdbIdOrUrl: string) => Promise<void>;
+  loadStructure: (pdbId: string) => Promise<void>;
   addCartoonRepresentation: (options?: any) => Promise<void>;
   addBallAndStickRepresentation: (options?: any) => Promise<void>;
   addSurfaceRepresentation: (options?: any) => Promise<void>;
@@ -31,17 +31,16 @@ export const createMolstarBuilder = (
 
   return {
     async loadStructure(pdbIdOrUrl: string) {
-      let url: string;
+      // Check if it's a URL (http, https, blob, or data URL)
+      const isUrl = pdbIdOrUrl.startsWith('http://') || 
+                    pdbIdOrUrl.startsWith('https://') || 
+                    pdbIdOrUrl.startsWith('blob:') ||
+                    pdbIdOrUrl.startsWith('data:') ||
+                    pdbIdOrUrl.startsWith('/api/');
       
-      // Check if input is a URL (http, https, or blob)
-      if (pdbIdOrUrl.startsWith('http://') || pdbIdOrUrl.startsWith('https://') || pdbIdOrUrl.startsWith('blob:')) {
-        url = pdbIdOrUrl; // Use as-is for URLs
-      } else {
-        // Validate and convert PDB ID to URL
-        if (!validatePDBId(pdbIdOrUrl)) {
-          throw new Error(`Invalid PDB ID: ${pdbIdOrUrl}`);
-        }
-        url = getPDBUrl(pdbIdOrUrl);
+      // If it's not a URL, validate as PDB ID
+      if (!isUrl && !validatePDBId(pdbIdOrUrl)) {
+        throw new Error(`Invalid PDB ID or URL: ${pdbIdOrUrl}`);
       }
 
       try {
@@ -49,6 +48,9 @@ export const createMolstarBuilder = (
         // This avoids having multiple proteins displayed at once if a default or
         // previous structure was loaded outside of this builder's lifecycle.
         await this.clearStructure();
+        
+        // Use URL directly if it's a URL, otherwise convert PDB ID to URL
+        const url = isUrl ? pdbIdOrUrl : getPDBUrl(pdbIdOrUrl);
         
         const data = await plugin.builders.data.download({
           url,
@@ -58,7 +60,11 @@ export const createMolstarBuilder = (
         const trajectory = await plugin.builders.structure.parseTrajectory(data, 'pdb');
         const model = await plugin.builders.structure.createModel(trajectory);
         currentStructure = await plugin.builders.structure.createStructure(model);
-        if (onPdbLoaded) onPdbLoaded(pdbIdOrUrl);
+        
+        // Only call onPdbLoaded callback if it was a PDB ID (not a URL)
+        if (!isUrl && onPdbLoaded) {
+          onPdbLoaded(pdbIdOrUrl);
+        }
 
         return currentStructure;
       } catch (error) {

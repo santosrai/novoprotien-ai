@@ -17,6 +17,9 @@ except ImportError:
 
 router = APIRouter(prefix="/api/conversations/{conversation_id}/messages", tags=["three_d_canvases"])
 
+# User-scoped router for getting canvases by user (not conversation)
+user_router = APIRouter(prefix="/api/user", tags=["user_canvases"])
+
 
 @router.post("/{message_id}/canvas")
 async def create_canvas(
@@ -317,6 +320,111 @@ async def list_conversation_canvases(
                 "version": canvas.get('version', 1),
                 "created_at": canvas.get('created_at'),
                 "updated_at": canvas.get('updated_at'),
+            })
+    
+    return {
+        "status": "success",
+        "canvases": canvases,
+        "count": len(canvases),
+    }
+
+
+@user_router.get("/canvases/latest")
+async def get_user_latest_canvas(
+    user: Dict[str, Any] = Depends(get_current_user),
+) -> Dict[str, Any]:
+    """Get the latest canvas code for the current user across all messages."""
+    user_id = user["id"]
+    
+    with get_db() as conn:
+        # Query latest canvas by joining with messages to filter by user_id
+        canvas_row = conn.execute(
+            """SELECT c.*, m.id as message_id, m.conversation_id, m.session_id
+               FROM three_d_canvases c
+               JOIN chat_messages m ON c.message_id = m.id
+               WHERE m.user_id = ?
+               ORDER BY c.updated_at DESC
+               LIMIT 1""",
+            (user_id,)
+        ).fetchone()
+        
+        if not canvas_row:
+            return {
+                "status": "success",
+                "canvas": None,
+                "message": "No canvas found for user",
+            }
+        
+        canvas = dict(canvas_row)
+        # Parse scene_data JSON
+        try:
+            scene_data = json.loads(canvas['scene_data']) if canvas.get('scene_data') else {}
+        except json.JSONDecodeError:
+            scene_data = {"molstar_code": canvas.get('scene_data', '')}
+        
+        # Extract molstar_code from scene_data
+        molstar_code = scene_data.get('molstar_code', '') if isinstance(scene_data, dict) else str(scene_data)
+        
+        return {
+            "status": "success",
+            "canvas": {
+                "id": canvas['id'],
+                "message_id": canvas['message_id'],
+                "conversation_id": canvas.get('conversation_id'),
+                "session_id": canvas.get('session_id'),
+                "scene_data": scene_data,
+                "sceneData": molstar_code,  # For backward compatibility
+                "preview_url": canvas.get('preview_url'),
+                "version": canvas.get('version', 1),
+                "created_at": canvas.get('created_at'),
+                "updated_at": canvas.get('updated_at'),
+            },
+        }
+
+
+@user_router.get("/canvases")
+async def get_user_canvases(
+    user: Dict[str, Any] = Depends(get_current_user),
+    limit: Optional[int] = 50,
+    offset: Optional[int] = 0,
+) -> Dict[str, Any]:
+    """Get all canvas codes for the current user across all messages."""
+    user_id = user["id"]
+    
+    with get_db() as conn:
+        # Query all canvases for this user, ordered by most recent
+        rows = conn.execute(
+            """SELECT c.*, m.id as message_id, m.conversation_id, m.session_id, m.created_at as message_created_at
+               FROM three_d_canvases c
+               JOIN chat_messages m ON c.message_id = m.id
+               WHERE m.user_id = ?
+               ORDER BY c.updated_at DESC
+               LIMIT ? OFFSET ?""",
+            (user_id, limit or 50, offset or 0)
+        ).fetchall()
+        
+        canvases = []
+        for row in rows:
+            canvas = dict(row)
+            try:
+                scene_data = json.loads(canvas['scene_data']) if canvas.get('scene_data') else {}
+            except json.JSONDecodeError:
+                scene_data = {"molstar_code": canvas.get('scene_data', '')}
+            
+            molstar_code = scene_data.get('molstar_code', '') if isinstance(scene_data, dict) else str(scene_data)
+            
+            canvases.append({
+                "id": canvas['id'],
+                "message_id": canvas['message_id'],
+                "conversation_id": canvas.get('conversation_id'),
+                "session_id": canvas.get('session_id'),
+                "scene_data": scene_data,
+                "sceneData": molstar_code,  # For backward compatibility
+                "preview_url": canvas.get('preview_url'),
+                "version": canvas.get('version', 1),
+                "created_at": canvas.get('created_at'),
+                "updated_at": canvas.get('updated_at'),
+                "message_created_at": canvas.get('message_created_at'),
             })
     
     return {

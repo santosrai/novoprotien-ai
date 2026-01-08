@@ -8,7 +8,7 @@ import { v4 as uuidv4 } from 'uuid';
 import { AlphaFoldDialog } from './AlphaFoldDialog';
 import { RFdiffusionDialog } from './RFdiffusionDialog';
 import { ProteinMPNNDialog } from './ProteinMPNNDialog';
-import { ProgressTracker, useAlphaFoldProgress, useProteinMPNNProgress, useRFdiffusionProgress } from './ProgressTracker';
+import { ProgressTracker, useAlphaFoldProgress, useProteinMPNNProgress } from './ProgressTracker';
 import { ErrorDisplay } from './ErrorDisplay';
 import { ErrorDetails, AlphaFoldErrorHandler, RFdiffusionErrorHandler, ErrorCategory, ErrorSeverity } from '../utils/errorHandler';
 import { logAlphaFoldError } from '../utils/errorLogger';
@@ -41,13 +41,6 @@ interface ExtendedMessage extends Message {
       raw?: string;
     };
     metadata?: Record<string, any>;
-  };
-  rfdiffusionResult?: {
-    pdbContent?: string;
-    fileId?: string; // File ID for loading from server
-    filename?: string;
-    parameters?: any;
-    metadata?: any;
   };
   thinkingProcess?: {
     steps: Array<{
@@ -289,7 +282,6 @@ export const ChatPanel: React.FC = () => {
   // PDB file upload state - track files with their upload status
   interface FileUploadState {
     file: File;
-    id: string; // Unique ID for reliable matching
     status: 'uploading' | 'uploaded' | 'error';
     fileInfo?: {
       file_id: string;
@@ -381,19 +373,22 @@ export const ChatPanel: React.FC = () => {
       console.log('[ChatPanel] Saved viewer visibility to previous session:', previousSessionIdRef.current, isViewerVisibleRef.current);
     }
     
-    // Restore code for new session
-    const savedCode = getVisualizationCode(activeSessionId);
-    if (savedCode && savedCode.trim()) {
-      console.log('[ChatPanel] Restoring visualization code for session:', activeSessionId);
-      setCurrentCode(savedCode);
-    } else {
-      // Clear code if session has no saved visualization
-      // Use ref to check current state
-      if (currentCodeRef.current && currentCodeRef.current.trim()) {
-        console.log('[ChatPanel] Clearing code for session without visualization:', activeSessionId);
-        setCurrentCode('');
+    // Restore code for new session (async - checks session cache first, then backend user-scoped)
+    getVisualizationCode(activeSessionId).then((savedCode) => {
+      if (savedCode && savedCode.trim()) {
+        console.log('[ChatPanel] Restoring visualization code for session:', activeSessionId);
+        setCurrentCode(savedCode);
+      } else {
+        // Clear code if session has no saved visualization
+        // Use ref to check current state
+        if (currentCodeRef.current && currentCodeRef.current.trim()) {
+          console.log('[ChatPanel] Clearing code for session without visualization:', activeSessionId);
+          setCurrentCode('');
+        }
       }
-    }
+    }).catch((error) => {
+      console.error('[ChatPanel] Failed to restore visualization code:', error);
+    });
     
     // Restore viewer visibility for new session
     const savedVisibility = getViewerVisibility(activeSessionId);
@@ -449,7 +444,6 @@ export const ChatPanel: React.FC = () => {
   // RFdiffusion state
   const [showRFdiffusionDialog, setShowRFdiffusionDialog] = useState(false);
   const [rfdiffusionData, setRfdiffusionData] = useState<any>(null);
-  const rfdiffusionProgress = useRFdiffusionProgress();
 
   // Agent and model selection state
   const [agents, setAgents] = useState<Agent[]>([]);
@@ -567,10 +561,11 @@ export const ChatPanel: React.FC = () => {
       setIsExecuting(true);
       const executor = new CodeExecutor(plugin);
       
-      // Fetch file content and create blob URL (like AlphaFold does)
-      const fileResponse = await fetch(fileInfo.file_url);
+      // Fetch file content with authentication headers
+      const headers = getAuthHeaders();
+      const fileResponse = await fetch(fileInfo.file_url, { headers });
       if (!fileResponse.ok) {
-        throw new Error('Failed to fetch uploaded file');
+        throw new Error(`Failed to fetch uploaded file: ${fileResponse.status} ${fileResponse.statusText}`);
       }
       const fileContent = await fileResponse.text();
       
@@ -761,179 +756,6 @@ try {
           <button
             onClick={loadInViewer}
             disabled={!plugin}
-            className="flex items-center space-x-1 px-3 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed text-sm"
-          >
-            <Play className="w-4 h-4" />
-            <span>View 3D</span>
-          </button>
-        </div>
-      </div>
-    );
-  };
-
-  const renderRFdiffusionResult = (result: ExtendedMessage['rfdiffusionResult']) => {
-    if (!result) {
-      return null;
-    }
-    
-    // Debug logging
-    console.log('[ChatPanel] Rendering RFdiffusion result:', {
-      hasFileId: !!result.fileId,
-      hasPdbContent: !!result.pdbContent,
-      filename: result.filename
-    });
-
-    const downloadPDB = async () => {
-      try {
-        let pdbContent: string;
-        
-        // If we have fileId, fetch from server (preferred for large files)
-        if (result.fileId) {
-          try {
-            const fileResponse = await api.get(`/files/${result.fileId}`);
-            if (fileResponse.data.status === 'success') {
-              pdbContent = fileResponse.data.content;
-            } else {
-              throw new Error('Failed to fetch file from server');
-            }
-          } catch (fetchError) {
-            console.error('Failed to fetch file for download:', fetchError);
-            // Fallback to pdbContent if available
-            if (result.pdbContent) {
-              pdbContent = result.pdbContent;
-            } else {
-              alert('File not available for download. It may have been deleted.');
-              return;
-            }
-          }
-        } else if (result.pdbContent) {
-          pdbContent = result.pdbContent;
-        } else {
-          alert('No file content available for download.');
-          return;
-        }
-        
-        const blob = new Blob([pdbContent], { type: 'text/plain' });
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        a.href = url;
-        a.download = result.filename || 'rfdiffusion_result.pdb';
-        document.body.appendChild(a);
-        a.click();
-        document.body.removeChild(a);
-        URL.revokeObjectURL(url);
-      } catch (err) {
-        console.error('Failed to download PDB:', err);
-        alert(`Failed to download file: ${err instanceof Error ? err.message : 'Unknown error'}`);
-      }
-    };
-
-    const loadInViewer = async () => {
-      if (!plugin) {
-        alert('3D viewer is not ready yet. Please wait a moment and try again.');
-        return;
-      }
-      
-      try {
-        setIsExecuting(true);
-        const executor = new CodeExecutor(plugin);
-        
-        // Get file content - either from saved file or use existing pdbContent
-        let pdbContent: string;
-        if (result.fileId) {
-          // Fetch file content from server with authentication
-          try {
-            const fileResponse = await api.get(`/files/${result.fileId}`);
-            if (fileResponse.data.status === 'success') {
-              pdbContent = fileResponse.data.content;
-            } else {
-              throw new Error('Failed to fetch file content from server');
-            }
-          } catch (fetchError) {
-            console.error('Failed to fetch file from server:', fetchError);
-            // Fallback to pdbContent if available
-            if (result.pdbContent) {
-              pdbContent = result.pdbContent;
-            } else {
-              throw new Error('No file content available');
-            }
-          }
-        } else if (result.pdbContent) {
-          pdbContent = result.pdbContent;
-        } else {
-          throw new Error('No file content or file ID available');
-        }
-        
-        // Create blob URL from content
-        const pdbBlob = new Blob([pdbContent], { type: 'text/plain' });
-        const blobUrl = URL.createObjectURL(pdbBlob);
-        
-        // Load structure in viewer using blob URL
-        const code = `
-try {
-  await builder.clearStructure();
-  await builder.loadStructure('${blobUrl}');
-  await builder.addCartoonRepresentation({ color: 'secondary-structure' });
-  builder.focusView();
-  console.log('RFdiffusion result loaded successfully');
-} catch (e) { 
-  console.error('Failed to load RFdiffusion result:', e); 
-}`;
-        
-        await executor.executeCode(code);
-        setViewerVisibleAndSave(true);
-        setActivePane('viewer');
-        
-        // Keep blob URL alive for a bit longer to ensure structure loads
-        setTimeout(() => {
-          URL.revokeObjectURL(blobUrl);
-        }, 5000);
-      } catch (err) {
-        console.error('Failed to load RFdiffusion result in viewer:', err);
-        alert(`Failed to load structure: ${err instanceof Error ? err.message : 'Unknown error'}`);
-      } finally {
-        setIsExecuting(false);
-      }
-    };
-
-    return (
-      <div className="mt-3 p-4 bg-gradient-to-r from-purple-50 to-blue-50 border border-purple-200 rounded-lg">
-        <div className="flex items-center space-x-2 mb-3">
-          <div className="w-8 h-8 bg-purple-600 rounded-full flex items-center justify-center">
-            <span className="text-white text-sm font-bold">RF</span>
-          </div>
-          <div>
-            <h4 className="font-medium text-gray-900">RFdiffusion Protein Design</h4>
-            <p className="text-xs text-gray-600">
-              Structure designed
-            </p>
-          </div>
-        </div>
-        
-        {result.metadata && (
-          <div className="mb-3 text-xs text-gray-600">
-            <div className="grid grid-cols-2 gap-2">
-              {result.parameters?.design_mode && (
-                <span>Mode: {result.parameters.design_mode}</span>
-              )}
-              {result.parameters?.contigs && (
-                <span>Contigs: {result.parameters.contigs}</span>
-              )}
-            </div>
-          </div>
-        )}
-        
-        <div className="flex space-x-2">
-          <button
-            onClick={downloadPDB}
-            className="flex items-center space-x-1 px-3 py-2 bg-purple-600 text-white rounded-md hover:bg-purple-700 text-sm"
-          >
-            <Download className="w-4 h-4" />
-            <span>Download PDB</span>
-          </button>
-          
-          <button
-            onClick={loadInViewer}
             className="flex items-center space-x-1 px-3 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed text-sm"
           >
             <Play className="w-4 h-4" />
@@ -1361,65 +1183,31 @@ try {
     setShowRFdiffusionDialog(false);
     
     const jobId = `rf_${Date.now()}`;
-    console.log('🚀 [RFdiffusion] User confirmed design request');
-    console.log('⚙️ [RFdiffusion] Parameters:', parameters);
-    console.log('🆔 [RFdiffusion] Generated job ID:', jobId);
     
-    rfdiffusionProgress.startProgress(jobId, 'Submitting protein design request...');
-    console.log('📡 [RFdiffusion] Starting progress tracking for job:', jobId);
-
-    const startTime = Date.now();
-    const estimatedDuration = 480; // 8 minutes estimated for RFdiffusion
-    
-    // Update progress while waiting for response
-    const progressInterval = setInterval(() => {
-      const elapsed = (Date.now() - startTime) / 1000;
-      const progress = Math.min(90, Math.round((elapsed / estimatedDuration) * 90));
-      rfdiffusionProgress.updateProgress(`Designing protein structure... (${Math.round(elapsed)}s)`, progress);
-    }, 2000); // Update every 2 seconds
-
     try {
-      console.log('🌐 [RFdiffusion] Making API call to /api/rfdiffusion/design');
       const response = await api.post('/rfdiffusion/design', {
         parameters,
-        jobId,
-        sessionId: activeSessionId
+        jobId
       });
 
-      clearInterval(progressInterval);
-      console.log('📨 [RFdiffusion] API response received:', response.status, response.data);
-
-      // Handle success response
       if (response.data.status === 'success') {
         const result = response.data.data;
         
-        // Dispatch event to notify file browser to refresh
-        window.dispatchEvent(new CustomEvent('session-file-added'));
-        
+        // Add result message to chat
         const aiMessage: ExtendedMessage = {
           id: (Date.now() + 1).toString(),
           content: `RFdiffusion protein design completed successfully! The designed structure is ready for download and visualization.`,
           type: 'ai',
           timestamp: new Date(),
-          rfdiffusionResult: {
-            // Only include pdbContent if it's small enough (under 1MB to avoid database issues)
-            // For larger files, we'll fetch from server using fileId
-            pdbContent: result.pdbContent && result.pdbContent.length < 1000000 ? result.pdbContent : undefined,
-            fileId: result.fileId || jobId, // File ID for loading from server (always include)
+          alphafoldResult: { // Reuse the same result format for display
+            pdbContent: result.pdbContent,
             filename: result.filename || `designed_${Date.now()}.pdb`,
             parameters,
             metadata: result.metadata
           }
         };
         
-        console.log('[RFdiffusion] Saving result message:', {
-          hasFileId: !!aiMessage.rfdiffusionResult?.fileId,
-          hasPdbContent: !!aiMessage.rfdiffusionResult?.pdbContent,
-          pdbContentLength: aiMessage.rfdiffusionResult?.pdbContent?.length || 0
-        });
-        
         addMessage(aiMessage);
-        rfdiffusionProgress.completeProgress();
       } else {
         // Handle API error response
         const apiError = RFdiffusionErrorHandler.handleError(response.data, {
@@ -1437,11 +1225,9 @@ try {
         };
         
         addMessage(errorMessage);
-        rfdiffusionProgress.errorProgress(apiError.userMessage);
       }
     } catch (error: any) {
-      clearInterval(progressInterval);
-      console.error('❌ [RFdiffusion] Request failed:', error);
+      console.error('RFdiffusion request failed:', error);
       
       // Handle different types of errors
       const structuredError = RFdiffusionErrorHandler.handleError(error, {
@@ -1459,7 +1245,6 @@ try {
       };
       
       addMessage(errorMessage);
-      rfdiffusionProgress.errorProgress(structuredError.userMessage);
     }
   };
 
@@ -1518,10 +1303,10 @@ try {
   };
 
   // Upload file immediately when selected
-  const uploadFile = async (fileId: string, file: File) => {
-    // Update status to uploading
+  const uploadFile = async (file: File) => {
+    // Find the file in state by reference
     setFileUploads(prev => prev.map(item => 
-      item.id === fileId ? { ...item, status: 'uploading' } : item
+      item.file === file ? { ...item, status: 'uploading' } : item
     ));
 
     try {
@@ -1540,7 +1325,7 @@ try {
       });
 
       if (!response.ok) {
-        const errorData = await response.json().catch(() => ({ detail: 'Upload failed' }));
+        const errorData = await response.json();
         throw new Error(errorData.detail || 'Upload failed');
       }
 
@@ -1554,23 +1339,16 @@ try {
         size: result.file_info.size || 0,
       };
 
-      // Mark file as uploaded using the unique ID
+      // Mark file as uploaded
       let isFirstFile = false;
       setFileUploads(prev => {
         const updated = prev.map(item => 
-          item.id === fileId 
+          item.file === file 
             ? { ...item, status: 'uploaded' as const, fileInfo } 
             : item
         );
         // Check if this is the first uploaded file
         isFirstFile = updated.findIndex(item => item.status === 'uploaded') === 0;
-        console.log('[ChatPanel] File uploaded successfully:', {
-          fileId,
-          filename: fileInfo.filename,
-          file_id: fileInfo.file_id,
-          totalUploads: updated.length,
-          uploadedCount: updated.filter(item => item.status === 'uploaded').length,
-        });
         return updated;
       });
 
@@ -1637,12 +1415,11 @@ try {
       }
     } catch (error: any) {
       console.error('File upload failed:', error);
-      const errorMessage = error instanceof Error ? error.message : 'Upload failed';
-      setUploadError(errorMessage);
-      // Mark file as error using the unique ID
+      setUploadError(error.message);
+      // Mark file as error
       setFileUploads(prev => prev.map(item => 
-        item.id === fileId 
-          ? { ...item, status: 'error', error: errorMessage } 
+        item.file === file 
+          ? { ...item, status: 'error', error: error.message } 
           : item
       ));
     }
@@ -1650,40 +1427,25 @@ try {
 
   // Handle file selection - add to list and start upload immediately
   const handleFileSelected = (file: File) => {
-    const fileId = `${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
     const newFileState: FileUploadState = {
       file,
-      id: fileId,
       status: 'uploading',
     };
-    console.log('[ChatPanel] File selected for upload:', {
-      fileId,
-      filename: file.name,
-      size: file.size,
-    });
-    setFileUploads(prev => {
-      const updated = [...prev, newFileState];
-      console.log('[ChatPanel] File added to state, total files:', updated.length);
-      return updated;
-    });
-    // Start upload immediately using the unique ID
-    uploadFile(fileId, file);
+    setFileUploads(prev => [...prev, newFileState]);
+    // Start upload immediately (file reference will be used to find it in state)
+    uploadFile(file);
   };
 
   // Handle multiple files selected
   const handleFilesSelected = (files: File[]) => {
-    const newFileStates: FileUploadState[] = files.map(file => {
-      const fileId = `${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
-      return {
-        file,
-        id: fileId,
-        status: 'uploading' as const,
-      };
-    });
+    const newFileStates: FileUploadState[] = files.map(file => ({
+      file,
+      status: 'uploading',
+    }));
     setFileUploads(prev => [...prev, ...newFileStates]);
     // Start uploads immediately for all files
-    newFileStates.forEach(({ id, file }) => {
-      uploadFile(id, file);
+    files.forEach(file => {
+      uploadFile(file);
     });
   };
 
@@ -2082,7 +1844,6 @@ try {
                     return null;
                   })()}
                   {renderAlphaFoldResult(message.alphafoldResult)}
-                  {renderRFdiffusionResult(message.rfdiffusionResult)}
                   {renderProteinMPNNResult(message.proteinmpnnResult)}
                   {message.error && (
                     <div className="mt-3">
@@ -2189,13 +1950,6 @@ try {
           title={proteinmpnnProgress.title}
           eventName={proteinmpnnProgress.eventName}
         />
-        <ProgressTracker
-          isVisible={rfdiffusionProgress.isVisible}
-          onCancel={rfdiffusionProgress.cancelProgress}
-          className="mb-1.5"
-          title={rfdiffusionProgress.title}
-          eventName={rfdiffusionProgress.eventName}
-        />
 
         {!showCenteredLayout && (
           <div className="mb-1.5">
@@ -2234,14 +1988,14 @@ try {
           {/* File uploads display with status */}
           {fileUploads.length > 0 && (
             <div className="flex items-center space-x-1.5 px-2 py-1 bg-blue-50 border border-blue-200 rounded-lg flex-wrap gap-1.5 mb-1.5">
-              {fileUploads.map((fileState) => {
+              {fileUploads.map((fileState, index) => {
                 const isUploading = fileState.status === 'uploading';
                 const isUploaded = fileState.status === 'uploaded';
                 const isError = fileState.status === 'error';
                 
                 return (
                   <div 
-                    key={fileState.id} 
+                    key={index} 
                     className={`flex items-center space-x-1 px-2 py-1 rounded-md border ${
                       isUploading 
                         ? 'bg-yellow-50 border-yellow-300' 
@@ -2271,14 +2025,9 @@ try {
                           ? 'text-red-700'
                           : 'text-blue-700'
                       }`} 
-                      title={fileState.fileInfo?.filename || fileState.file.name}
+                      title={fileState.file.name}
                     >
-                      📎 {fileState.fileInfo?.filename || fileState.file.name}
-                      {isUploaded && fileState.fileInfo && (
-                        <span className="ml-1 text-[10px] opacity-75">
-                          ({fileState.fileInfo.size > 0 ? `${(fileState.fileInfo.size / 1024).toFixed(1)} KB` : ''})
-                        </span>
-                      )}
+                      📎 {fileState.file.name}
                     </span>
                     {isError && fileState.error && (
                       <span className="text-xs text-red-600 ml-1" title={fileState.error}>
@@ -2288,7 +2037,7 @@ try {
                     <button
                       type="button"
                       onClick={() => {
-                        setFileUploads(prev => prev.filter(item => item.id !== fileState.id));
+                        setFileUploads(prev => prev.filter((_, i) => i !== index));
                         setUploadError(null);
                       }}
                       className={`p-0.5 rounded ml-1 ${
