@@ -51,7 +51,8 @@ async def create_pipeline(
             
             # Use conversation_id from message if not provided
             if not conversation_id:
-                conversation_id = message.get('conversation_id') or message.get('session_id')
+                message_dict = dict(message)
+                conversation_id = message_dict.get('conversation_id') or message_dict.get('session_id')
         
         if conversation_id:
             # Verify conversation ownership
@@ -166,15 +167,17 @@ async def list_pipelines(
         
         pipelines = []
         for row in rows:
+            # Convert sqlite3.Row to dict for easier access with .get()
+            row_dict = dict(row)
             pipelines.append({
-                "id": row["id"],
-                "name": row["name"],
-                "description": row["description"],
-                "status": row["status"],
-                "message_id": row.get("message_id"),
-                "conversation_id": row.get("conversation_id"),
-                "created_at": row["created_at"],
-                "updated_at": row["updated_at"],
+                "id": row_dict["id"],
+                "name": row_dict.get("name"),
+                "description": row_dict.get("description"),
+                "status": row_dict.get("status", "draft"),
+                "message_id": row_dict.get("message_id"),
+                "conversation_id": row_dict.get("conversation_id"),
+                "created_at": row_dict.get("created_at"),
+                "updated_at": row_dict.get("updated_at"),
             })
         
         return {

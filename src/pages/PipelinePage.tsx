@@ -1,9 +1,23 @@
 import { useEffect, useState } from 'react';
 import { PipelineCanvas, PipelineManager, PipelineExecution } from '../components/pipeline-canvas';
+import { usePipelineStore } from '../components/pipeline-canvas/store/pipelineStore';
+import { useAuthStore } from '../stores/authStore';
 import { api } from '../utils/api';
 
 export function PipelinePage() {
   const [isPipelineManagerOpen, setIsPipelineManagerOpen] = useState(false);
+  const { syncPipelines } = usePipelineStore();
+  const user = useAuthStore((state) => state.user);
+
+  // Sync pipelines from backend when component mounts and user is authenticated
+  useEffect(() => {
+    if (user) {
+      console.log('[PipelinePage] Syncing pipelines from backend...');
+      syncPipelines().catch((error) => {
+        console.error('[PipelinePage] Failed to sync pipelines:', error);
+      });
+    }
+  }, [user, syncPipelines]);
 
   // Listen for pipeline manager open event
   useEffect(() => {

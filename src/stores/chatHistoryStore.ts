@@ -1174,12 +1174,15 @@ export const useChatHistoryStore = create<ChatHistoryState>()(
         }
         
         try {
+          console.log(`[syncSessions] Fetching sessions from backend for user: ${user.id}`);
           const response = await api.get('/chat/sessions');
+          console.log('[syncSessions] API response:', response.data);
           const backendSessions = response.data.sessions || [];
+          console.log(`[syncSessions] Found ${backendSessions.length} sessions in backend`);
           
           // If no sessions in backend, keep empty array (already cleared above)
           if (backendSessions.length === 0) {
-            console.log('No sessions found in backend, initializing with empty chat history');
+            console.log('[syncSessions] No sessions found in backend, initializing with empty chat history');
             set({ _isSyncing: false });
             return;
           }
@@ -1219,7 +1222,7 @@ export const useChatHistoryStore = create<ChatHistoryState>()(
             recentSessionIds: sessions.slice(0, 5).map(s => s.id),
             selectedSessionIds: [],
           });
-          console.log(`Synced ${sessions.length} unique sessions from backend for user ${user.id}`);
+          console.log(`[syncSessions] Synced ${sessions.length} unique sessions from backend for user ${user.id}`);
           
           // Load messages for ALL sessions (not just active) to ensure messages are available
           // This is important for app refresh - we need to load all messages
@@ -1242,7 +1245,11 @@ export const useChatHistoryStore = create<ChatHistoryState>()(
             console.log(`[syncSessions] Finished loading messages and state for all sessions`);
           }
         } catch (error: any) {
-          console.error('Failed to sync sessions from backend:', error);
+          console.error('[syncSessions] Failed to sync sessions from backend:', error);
+          if (error.response) {
+            console.error('[syncSessions] Error response status:', error.response.status);
+            console.error('[syncSessions] Error response data:', error.response.data);
+          }
           // On error, ensure sessions are cleared (already cleared above, but be explicit)
           set({ 
             sessions: [], 

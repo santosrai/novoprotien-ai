@@ -99,6 +99,62 @@ app.add_middleware(
 @app.on_event("startup")
 async def startup():
     await init_router(list(agents.values()))
+    
+    # Suppress harmless Windows asyncio connection reset errors
+    # These occur when clients close connections abruptly (browser refresh, tab close, etc.)
+    import asyncio
+    import logging
+    import sys
+    
+    # Configure logging to filter out Windows connection reset errors
+    class ConnectionResetFilter(logging.Filter):
+        """Filter out harmless Windows connection reset errors."""
+        def filter(self, record):
+            # Suppress ConnectionResetError messages on Windows
+            if sys.platform == 'win32':
+                msg = record.getMessage()
+                if 'ConnectionResetError' in msg or 'WinError 10054' in msg:
+                    if '_call_connection_lost' in msg or '_ProactorBasePipeTransport' in msg:
+                        return False  # Suppress this log
+            return True
+    
+    # Add filter to asyncio logger
+    asyncio_logger = logging.getLogger('asyncio')
+    asyncio_logger.addFilter(ConnectionResetFilter())
+    
+    def handle_exception(loop, context):
+        """Handle asyncio exceptions, suppressing harmless connection reset errors on Windows."""
+        exception = context.get('exception')
+        # Suppress Windows connection reset errors (WinError 10054)
+        # These are harmless and occur when clients close connections abruptly
+        if isinstance(exception, ConnectionResetError):
+            # Check if it's the specific Windows error code
+            if hasattr(exception, 'winerror') and exception.winerror == 10054:
+                # Suppress this specific error - it's harmless
+                return
+            # Also suppress generic ConnectionResetError on Windows
+            if sys.platform == 'win32':
+                return
+        # Log other exceptions normally
+        if loop.default_exception_handler:
+            loop.default_exception_handler(context)
+        else:
+            # Fallback: log to Python logger
+            logging.error(f"Unhandled exception in event loop: {context}")
+    
+    # Set custom exception handler for the event loop
+    try:
+        loop = asyncio.get_running_loop()
+        loop.set_exception_handler(handle_exception)
+    except RuntimeError:
+        # No running loop yet, set it when we get one
+        try:
+            loop = asyncio.get_event_loop()
+            if loop.is_running():
+                loop.set_exception_handler(handle_exception)
+        except Exception:
+            # If we can't set the handler, continue anyway
+            pass
 
 # Register API routers
 app.include_router(auth.router)

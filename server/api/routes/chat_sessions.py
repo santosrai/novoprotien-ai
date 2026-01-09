@@ -101,10 +101,14 @@ async def list_sessions(
         ).fetchall()
         
         if conversations:
+            # Convert sqlite3.Row to dict for proper JSON serialization
             sessions = [dict(row) for row in conversations]
         else:
             # Fallback to chat_sessions for backward compatibility
             sessions = get_user_sessions(user["id"])
+            # Ensure sessions from fallback are also dicts
+            if sessions:
+                sessions = [dict(s) if not isinstance(s, dict) else s for s in sessions]
     
     return {
         "status": "success",
