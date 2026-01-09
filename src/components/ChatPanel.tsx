@@ -17,6 +17,12 @@ import { ModelSelector } from './ModelSelector';
 import { useAgentSettings } from '../stores/settingsStore';
 import { ThinkingProcessDisplay } from './ThinkingProcessDisplay';
 import { AttachmentMenu } from './AttachmentMenu';
+import { JobLoadingPill } from './JobLoadingPill';
+import { PipelineBlueprintDisplay } from './PipelineBlueprintDisplay';
+import { PipelineSelectionModal } from './PipelineSelectionModal';
+import { ServerFilesDialog } from './ServerFilesDialog';
+import { usePipelineStore } from '../components/pipeline-canvas';
+import { PipelineBlueprint } from '../components/pipeline-canvas';
 
 // Extended message metadata for structured agent results
 interface ExtendedMessage extends Message {
@@ -54,6 +60,9 @@ interface ExtendedMessage extends Message {
     totalSteps: number;
   };
   error?: ErrorDetails;
+  blueprint?: PipelineBlueprint;
+  blueprintRationale?: string;
+  blueprintApproved?: boolean;
 }
 
 const renderProteinMPNNResult = (result: ExtendedMessage['proteinmpnnResult']) => {
@@ -254,6 +263,7 @@ export const ChatPanel: React.FC = () => {
   const selections = useAppStore(state => state.selections);
   const removeSelection = useAppStore(state => state.removeSelection);
   const clearSelections = useAppStore(state => state.clearSelections);
+  const { setGhostBlueprint } = usePipelineStore();
 
   // Chat history store
   const { createSession, activeSessionId, saveVisualizationCode, getVisualizationCode, saveViewerVisibility, getViewerVisibility } = useChatHistoryStore();
@@ -266,7 +276,7 @@ export const ChatPanel: React.FC = () => {
       saveViewerVisibility(activeSessionId, visible);
     }
   };
-  const { activeSession, addMessage } = useActiveSession();
+  const { activeSession, addMessage, updateMessages } = useActiveSession();
 
   // Agent and model settings
   const { settings: agentSettings } = useAgentSettings();
@@ -295,6 +305,10 @@ export const ChatPanel: React.FC = () => {
   }
   const [fileUploads, setFileUploads] = useState<FileUploadState[]>([]);
   const [uploadError, setUploadError] = useState<string | null>(null);
+  // Pipeline selection state
+  const [showPipelineModal, setShowPipelineModal] = useState(false);
+  const [showServerFilesDialog, setShowServerFilesDialog] = useState(false);
+  const [selectedPipeline, setSelectedPipeline] = useState<{ id: string; name: string } | null>(null);
   // Refs to track latest values for session switching (avoid stale closures)
   const currentCodeRef = useRef<string | null>(currentCode);
   const isViewerVisibleRef = useRef<boolean>(isViewerVisible);
@@ -662,6 +676,45 @@ try {
             <span>View in 3D</span>
           </button>
         </div>
+      </div>
+    );
+  };
+
+  const renderPipelineAttachment = (pipeline: ExtendedMessage['pipeline'], isUserMessage: boolean = false) => {
+    if (!pipeline) return null;
+
+    // Use different styling for user vs AI messages
+    const bgClass = isUserMessage 
+      ? 'bg-white bg-opacity-20 border-white border-opacity-30' 
+      : 'bg-gradient-to-r from-purple-50 to-indigo-50 border border-purple-200';
+    const textClass = isUserMessage ? 'text-white' : 'text-gray-900';
+    const textSecondaryClass = isUserMessage ? 'text-white text-opacity-80' : 'text-gray-600';
+
+    const statusColors: Record<string, string> = {
+      draft: 'bg-gray-100 text-gray-700',
+      running: 'bg-blue-100 text-blue-700',
+      completed: 'bg-green-100 text-green-700',
+      failed: 'bg-red-100 text-red-700',
+    };
+
+    return (
+      <div className={`mt-3 p-4 ${bgClass} rounded-lg`}>
+        <div className="flex items-center space-x-2 mb-3">
+          <div className={`w-8 h-8 ${isUserMessage ? 'bg-white bg-opacity-30' : 'bg-purple-600'} rounded-full flex items-center justify-center`}>
+            <span className={`${isUserMessage ? 'text-white' : 'text-white'} text-sm font-bold`}>⚙️</span>
+          </div>
+          <div className="flex-1">
+            <h4 className={`font-medium ${textClass}`}>Pipeline: {pipeline.name}</h4>
+            <div className="flex items-center gap-2 mt-1">
+              <span className={`text-xs px-2 py-0.5 rounded-full ${statusColors[pipeline.status] || statusColors.draft}`}>
+                {pipeline.status}
+              </span>
+            </div>
+          </div>
+        </div>
+        <p className={`text-xs ${textSecondaryClass} mt-2`}>
+          Ask questions about this pipeline's nodes, execution history, or output files.
+        </p>
       </div>
     );
   };
@@ -1184,6 +1237,19 @@ try {
     
     const jobId = `rf_${Date.now()}`;
     
+    // Create pending message immediately with jobId and jobType
+    const pendingMessageId = uuidv4();
+    const pendingMessage: ExtendedMessage = {
+      id: pendingMessageId,
+      content: 'RFdiffusion protein design in progress...',
+      type: 'ai',
+      timestamp: new Date(),
+      jobId,
+      jobType: 'rfdiffusion'
+    };
+    addMessage(pendingMessage);
+    
+    // Make API call in background (it will wait for completion)
     try {
       const response = await api.post('/rfdiffusion/design', {
         parameters,
@@ -1193,21 +1259,27 @@ try {
       if (response.data.status === 'success') {
         const result = response.data.data;
         
-        // Add result message to chat
-        const aiMessage: ExtendedMessage = {
-          id: (Date.now() + 1).toString(),
-          content: `RFdiffusion protein design completed successfully! The designed structure is ready for download and visualization.`,
-          type: 'ai',
-          timestamp: new Date(),
-          alphafoldResult: { // Reuse the same result format for display
-            pdbContent: result.pdbContent,
-            filename: result.filename || `designed_${Date.now()}.pdb`,
-            parameters,
-            metadata: result.metadata
+        // Update the pending message with the result
+        if (activeSession) {
+          const messages = activeSession.messages || [];
+          const messageIndex = messages.findIndex(m => m.id === pendingMessageId);
+          if (messageIndex !== -1) {
+            const updatedMessages = [...messages];
+            updatedMessages[messageIndex] = {
+              ...updatedMessages[messageIndex],
+              content: `RFdiffusion protein design completed successfully! The designed structure is ready for download and visualization.`,
+              alphafoldResult: {
+                pdbContent: result.pdbContent,
+                filename: result.filename || `designed_${Date.now()}.pdb`,
+                parameters,
+                metadata: result.metadata
+              },
+              jobId: undefined,
+              jobType: undefined
+            };
+            updateMessages(updatedMessages);
           }
-        };
-        
-        addMessage(aiMessage);
+        }
       } else {
         // Handle API error response
         const apiError = RFdiffusionErrorHandler.handleError(response.data, {
@@ -1216,15 +1288,22 @@ try {
           feature: 'RFdiffusion'
         });
         
-        const errorMessage: ExtendedMessage = {
-          id: (Date.now() + 1).toString(),
-          content: apiError.userMessage,
-          type: 'ai',
-          timestamp: new Date(),
-          error: apiError
-        };
-        
-        addMessage(errorMessage);
+        // Update the pending message with error
+        if (activeSession) {
+          const messages = activeSession.messages || [];
+          const messageIndex = messages.findIndex(m => m.id === pendingMessageId);
+          if (messageIndex !== -1) {
+            const updatedMessages = [...messages];
+            updatedMessages[messageIndex] = {
+              ...updatedMessages[messageIndex],
+              content: apiError.userMessage,
+              error: apiError,
+              jobId: undefined,
+              jobType: undefined
+            };
+            updateMessages(updatedMessages);
+          }
+        }
       }
     } catch (error: any) {
       console.error('RFdiffusion request failed:', error);
@@ -1236,15 +1315,22 @@ try {
         feature: 'RFdiffusion'
       });
       
-      const errorMessage: ExtendedMessage = {
-        id: (Date.now() + 1).toString(),
-        content: structuredError.userMessage,
-        type: 'ai',
-        timestamp: new Date(),
-        error: structuredError
-      };
-      
-      addMessage(errorMessage);
+      // Update the pending message with error
+      if (activeSession) {
+        const messages = activeSession.messages || [];
+        const messageIndex = messages.findIndex(m => m.id === pendingMessageId);
+        if (messageIndex !== -1) {
+          const updatedMessages = [...messages];
+          updatedMessages[messageIndex] = {
+            ...updatedMessages[messageIndex],
+            content: structuredError.userMessage,
+            error: structuredError,
+            jobId: undefined,
+            jobType: undefined
+          };
+          updateMessages(updatedMessages);
+        }
+      }
     }
   };
 
@@ -1449,6 +1535,28 @@ try {
     });
   };
 
+  // Handle pipeline selection
+  const handlePipelineSelect = () => {
+    setShowPipelineModal(true);
+  };
+
+  // Handle server files selection
+  const handleServerFilesSelect = () => {
+    setShowServerFilesDialog(true);
+  };
+
+  const handlePipelineSelected = (pipelineId: string) => {
+    const { savedPipelines } = usePipelineStore.getState();
+    const pipeline = savedPipelines.find(p => p.id === pipelineId);
+    if (pipeline) {
+      setSelectedPipeline({
+        id: pipeline.id,
+        name: pipeline.name,
+      });
+    }
+    setShowPipelineModal(false);
+  };
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!input.trim() || isLoading) return;
@@ -1463,6 +1571,12 @@ try {
       type: 'user',
       timestamp: new Date(),
       uploadedFile: uploadedFileInfo || undefined,
+      pipeline: selectedPipeline ? {
+        id: selectedPipeline.id,
+        name: selectedPipeline.name,
+        workflowDefinition: null, // Will be fetched by backend if needed
+        status: 'draft' as const,
+      } : undefined,
     };
 
     // Add user message to chat immediately (before any async operations)
@@ -1471,8 +1585,10 @@ try {
     setInput('');
     setIsLoading(true);
 
-    // Clear uploaded files from state after message is sent
+    // Clear uploaded files and pipeline from state after message is sent
     setFileUploads([]);
+    const pipelineIdToSend = selectedPipeline?.id;
+    setSelectedPipeline(null);
     
     try {
       const text = messageInput;
@@ -1488,6 +1604,7 @@ try {
           selections: selections, // Full selections array for new multi-selection support
           agentId: agentSettings.selectedAgentId || undefined, // Only send if manually selected
           model: agentSettings.selectedModel || undefined, // Only send if manually selected
+          pipeline_id: pipelineIdToSend || undefined, // Pass pipeline ID to backend
         };
         console.log('[AI] route:request', payload);
         console.log('[DEBUG] currentCode length:', currentCode?.length || 0);
@@ -1640,6 +1757,75 @@ try {
               // Handle the fallback data
               handleAlphaFoldResponse(JSON.stringify(fallbackData));
               return;
+            }
+          }
+
+          // Check if this is a pipeline-agent response with blueprint
+          if (agentId === 'pipeline-agent') {
+            console.log('🔧 [Pipeline] Agent detected, processing response');
+            console.log('📄 [Pipeline] Agent response text:', aiText.slice(0, 200) + '...');
+            console.log('📦 [Pipeline] Full response data:', response.data);
+            
+            // Try to parse blueprint from response
+            try {
+              let blueprintData: any = null;
+              
+              // First, check if blueprint is already in response.data (structured response)
+              if (response.data?.blueprint || (response.data?.type === 'blueprint' && response.data?.blueprint)) {
+                blueprintData = response.data;
+                console.log('✅ [Pipeline] Blueprint found in response.data');
+              } else {
+                // Try to parse from text response
+                // First, try to parse the entire response as JSON
+                try {
+                  blueprintData = JSON.parse(aiText);
+                } catch {
+                  // If not valid JSON, try to extract JSON from markdown code blocks
+                  const jsonMatch = aiText.match(/```(?:json)?\s*(\{[\s\S]*?\})\s*```/);
+                  if (jsonMatch) {
+                    blueprintData = JSON.parse(jsonMatch[1]);
+                  } else {
+                    // Try to find JSON object in the text
+                    const jsonObjectMatch = aiText.match(/\{[\s\S]*"type"\s*:\s*"blueprint"[\s\S]*\}/);
+                    if (jsonObjectMatch) {
+                      blueprintData = JSON.parse(jsonObjectMatch[0]);
+                    }
+                  }
+                }
+              }
+
+              if (blueprintData && blueprintData.type === 'blueprint' && blueprintData.blueprint) {
+                console.log('✅ [Pipeline] Blueprint detected in response');
+                console.log('📋 [Pipeline] Blueprint nodes:', blueprintData.blueprint.nodes?.length || 0);
+                
+                // Set blueprint in pipeline store
+                setGhostBlueprint(blueprintData.blueprint);
+                console.log('💾 [Pipeline] Blueprint set in pipeline store');
+                
+                // Create message with blueprint
+                const chatMsg: ExtendedMessage = {
+                  id: uuidv4(),
+                  content: blueprintData.message || aiText,
+                  type: 'ai',
+                  timestamp: new Date(),
+                  blueprint: blueprintData.blueprint,
+                  blueprintRationale: blueprintData.rationale || blueprintData.blueprint.rationale,
+                };
+                
+                // Add thinking process if available
+                if (thinkingProcess) {
+                  chatMsg.thinkingProcess = thinkingProcess;
+                }
+                
+                addMessage(chatMsg);
+                console.log('💬 [Pipeline] Message with blueprint added to chat');
+                return; // Exit early - blueprint displayed
+              } else {
+                console.warn('⚠️ [Pipeline] Blueprint data found but invalid structure:', blueprintData);
+              }
+            } catch (error) {
+              console.warn('⚠️ [Pipeline] Failed to parse blueprint from response:', error);
+              // Fall through to regular text message
             }
           }
           
@@ -1824,7 +2010,100 @@ try {
                       currentStep={message.thinkingProcess.steps.findIndex(s => s.status === 'processing') + 1}
                     />
                   )}
+                  {/* Show JobLoadingPill for messages with jobId and jobType */}
+                  {message.jobId && message.jobType && (
+                    <JobLoadingPill
+                      message={message}
+                      onJobComplete={(data: any) => {
+                        // Update message with result
+                        if (activeSession) {
+                          const messages = activeSession.messages || [];
+                          const messageIndex = messages.findIndex(m => m.id === message.id);
+                          if (messageIndex !== -1) {
+                            const updatedMessages = [...messages];
+                            updatedMessages[messageIndex] = {
+                              ...updatedMessages[messageIndex],
+                              content: `RFdiffusion protein design completed successfully! The designed structure is ready for download and visualization.`,
+                              alphafoldResult: {
+                                pdbContent: data.pdbContent,
+                                filename: data.filename || `designed_${Date.now()}.pdb`,
+                                parameters: data.parameters,
+                                metadata: data.metadata
+                              },
+                              jobId: undefined,
+                              jobType: undefined
+                            };
+                            updateMessages(updatedMessages);
+                          }
+                        }
+                      }}
+                      onJobError={(error: string) => {
+                        // Update message with error
+                        if (activeSession) {
+                          const messages = activeSession.messages || [];
+                          const messageIndex = messages.findIndex(m => m.id === message.id);
+                          if (messageIndex !== -1) {
+                            const updatedMessages = [...messages];
+                            updatedMessages[messageIndex] = {
+                              ...updatedMessages[messageIndex],
+                              content: error,
+                              error: RFdiffusionErrorHandler.handleError({ error }, { jobId: message.jobId, feature: 'RFdiffusion' }),
+                              jobId: undefined,
+                              jobType: undefined
+                            };
+                            updateMessages(updatedMessages);
+                          }
+                        }
+                      }}
+                    />
+                  )}
                   {renderMessageContent(message.content)}
+                  {/* Show pipeline blueprint if present */}
+                  {message.blueprint && (
+                    <div className="mt-3">
+                      <PipelineBlueprintDisplay
+                        blueprint={message.blueprint}
+                        rationale={message.blueprintRationale}
+                        isApproved={message.blueprintApproved || false}
+                        onApprove={(selectedNodeIds) => {
+                          console.log('[ChatPanel] Blueprint approved with nodes:', selectedNodeIds);
+                          
+                          // Update the message to show it's been approved
+                          if (activeSession) {
+                            const messages = activeSession.messages || [];
+                            const messageIndex = messages.findIndex(m => m.id === message.id);
+                            if (messageIndex !== -1) {
+                              const updatedMessages = [...messages];
+                              updatedMessages[messageIndex] = {
+                                ...updatedMessages[messageIndex],
+                                blueprintApproved: true,
+                                content: `Pipeline blueprint approved! Created pipeline with ${selectedNodeIds.length} node${selectedNodeIds.length === 1 ? '' : 's'}. You can now configure parameters in the pipeline canvas.`,
+                              } as ExtendedMessage;
+                              updateMessages(updatedMessages);
+                            }
+                          }
+                        }}
+                        onReject={() => {
+                          console.log('[ChatPanel] Blueprint rejected');
+                          
+                          // Update the message to show it's been rejected
+                          if (activeSession) {
+                            const messages = activeSession.messages || [];
+                            const messageIndex = messages.findIndex(m => m.id === message.id);
+                            if (messageIndex !== -1) {
+                              const updatedMessages = [...messages];
+                              updatedMessages[messageIndex] = {
+                                ...updatedMessages[messageIndex],
+                                blueprintApproved: false,
+                                content: message.content + '\n\nPipeline blueprint rejected.',
+                              } as ExtendedMessage;
+                              updateMessages(updatedMessages);
+                            }
+                          }
+                        }}
+                      />
+                    </div>
+                  )}
                   {/* Show uploaded file attachment if the immediately previous message was a user message with a file */}
                   {(() => {
                     const messageIndex = messages.findIndex(m => m.id === message.id);
@@ -1868,11 +2147,13 @@ try {
                       {renderFileAttachment(message.uploadedFile, true)}
                     </div>
                   )}
+                  {message.pipeline && (
+                    <div className="mt-1.5">
+                      {renderPipelineAttachment(message.pipeline, true)}
+                    </div>
+                  )}
                 </>
               )}
-              <div className="text-[10px] mt-0.5 opacity-60">
-                {new Date(message.timestamp).toLocaleTimeString()}
-              </div>
             </div>
           </div>
         ))}
@@ -2071,6 +2352,26 @@ try {
               <p className="text-[10px] text-red-700">{uploadError}</p>
             </div>
           )}
+
+          {/* Selected pipeline display */}
+          {selectedPipeline && (
+            <div className="flex items-center space-x-1.5 px-2 py-1 bg-purple-50 border border-purple-200 rounded-lg flex-wrap gap-1.5 mb-1.5">
+              <div className="flex items-center space-x-1 px-2 py-1 rounded-md bg-purple-100 border border-purple-300">
+                <span className="text-purple-600 mr-1">⚙️</span>
+                <span className="text-xs text-purple-700 truncate max-w-[200px]" title={selectedPipeline.name}>
+                  {selectedPipeline.name}
+                </span>
+                <button
+                  type="button"
+                  onClick={() => setSelectedPipeline(null)}
+                  className="p-0.5 rounded ml-1 hover:bg-purple-200"
+                  title="Remove pipeline"
+                >
+                  <X className="w-3 h-3 text-purple-600" />
+                </button>
+              </div>
+            </div>
+          )}
           
           {/* Large text input area with integrated controls */}
           <div className="relative bg-white border border-gray-300 rounded-lg focus-within:ring-2 focus-within:ring-blue-500 focus-within:border-transparent">
@@ -2130,6 +2431,8 @@ try {
                     setUploadError(error);
                     console.error('File upload error:', error);
                   }}
+                  onPipelineSelect={handlePipelineSelect}
+                  onServerFilesSelect={handleServerFilesSelect}
                   disabled={isLoading}
                   pendingFiles={fileUploads.map(f => f.file)}
                   sessionId={activeSessionId}
@@ -2205,6 +2508,27 @@ try {
         onClose={() => setShowProteinMPNNDialog(false)}
         onConfirm={handleProteinMPNNConfirm}
         initialData={proteinmpnnData}
+      />
+
+      {/* Pipeline Selection Modal */}
+      <PipelineSelectionModal
+        isOpen={showPipelineModal}
+        onClose={() => setShowPipelineModal(false)}
+        onPipelineSelect={handlePipelineSelected}
+      />
+
+      {/* Server Files Dialog */}
+      <ServerFilesDialog
+        isOpen={showServerFilesDialog}
+        onClose={() => setShowServerFilesDialog(false)}
+        onFileSelect={(file) => {
+          handleFileSelected(file);
+          setUploadError(null);
+        }}
+        onError={(error) => {
+          setUploadError(error);
+          console.error('Server file selection error:', error);
+        }}
       />
     </div>
   );

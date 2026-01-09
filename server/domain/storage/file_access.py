@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import sqlite3
 from pathlib import Path
 from typing import Dict, List, Optional
 
@@ -16,6 +17,16 @@ except ImportError:
     from database.db import get_db
 
 BASE_DIR = Path(__file__).parent.parent.parent
+
+
+def _row_to_dict(row) -> Dict:
+    """Convert sqlite3.Row to dict safely."""
+    if isinstance(row, sqlite3.Row):
+        return {key: row[key] for key in row.keys()}
+    elif isinstance(row, dict):
+        return row
+    else:
+        return dict(row)
 
 
 def verify_file_ownership(file_id: str, user_id: str) -> bool:
@@ -66,7 +77,8 @@ def get_file_metadata(file_id: str, user_id: Optional[str] = None) -> Optional[D
         if not row:
             return None
         
-        metadata = dict(row)
+        # Convert Row to dict safely
+        metadata = _row_to_dict(row)
         
         # Parse JSON metadata
         if metadata.get("metadata"):
@@ -95,7 +107,8 @@ def list_user_files(user_id: str, file_type: Optional[str] = None) -> List[Dict]
         results = []
         
         for row in rows:
-            metadata = dict(row)
+            # Convert Row to dict safely
+            metadata = _row_to_dict(row)
             
             # Parse JSON metadata
             if metadata.get("metadata"):

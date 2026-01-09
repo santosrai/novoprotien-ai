@@ -475,8 +475,8 @@ export class SandboxExecutor {
         throw new Error(`Unknown object: ${call.object}`);
       }
 
-      // Send success response (skip for console)
-      if (call.object !== 'console' && this.iframe?.contentWindow) {
+      // Send success response (console case already returned above)
+      if (this.iframe?.contentWindow) {
         // Serialize result to ensure it can be sent through postMessage
         const serializedResult = this.serializeForPostMessage(result);
         
@@ -512,7 +512,7 @@ export class SandboxExecutor {
     // Wait for iframe to be ready
     await this.ready;
 
-    return new Promise((resolve, reject) => {
+    return new Promise((resolve, _reject) => {
       const executionId = 'exec-' + Date.now() + '-' + Math.random();
 
       // Set up timeout

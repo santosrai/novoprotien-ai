@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import sqlite3
 import uuid
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
@@ -19,6 +20,16 @@ except ImportError:
 
 BASE_DIR = Path(__file__).parent.parent.parent
 STORAGE_DIR = BASE_DIR / "storage"
+
+
+def _row_to_dict(row) -> Dict[str, object]:
+    """Convert sqlite3.Row to dict safely."""
+    if isinstance(row, sqlite3.Row):
+        return {key: row[key] for key in row.keys()}
+    elif isinstance(row, dict):
+        return row
+    else:
+        return dict(row)
 
 
 def _get_user_storage_dir(user_id: str) -> Path:
@@ -177,7 +188,9 @@ def get_uploaded_pdb(file_id: str, user_id: Optional[str] = None) -> Optional[Di
         if not row:
             return None
         
-        metadata = dict(row)
+        # Convert Row to dict safely
+        metadata = _row_to_dict(row)
+        
         stored_path = BASE_DIR / metadata["stored_path"]
         if not stored_path.exists():
             return None
@@ -206,7 +219,9 @@ def list_uploaded_pdbs(user_id: str) -> List[Dict[str, object]]:
         
         results: List[Dict[str, object]] = []
         for row in rows:
-            metadata = dict(row)
+            # Convert Row to dict safely
+            metadata = _row_to_dict(row)
+            
             stored_path = BASE_DIR / metadata["stored_path"]
             if not stored_path.exists():
                 continue

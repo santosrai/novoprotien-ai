@@ -60,8 +60,9 @@ class SimpleRouterGraph:
         has_selection = (selections and len(selections) > 0) or selection
         uploaded_file_id = state.get("uploadedFileId")
         has_uploaded_file = bool(uploaded_file_id)
-        pipeline_context = state.get("pipelineContext")
-        has_pipeline_context = bool(pipeline_context)
+        pipeline_id = state.get("pipeline_id")
+        pipeline_context = state.get("pipelineContext")  # Keep for backward compatibility
+        has_pipeline_context = bool(pipeline_id) or bool(pipeline_context)
         
         low = input_text.lower().strip()
         
@@ -91,6 +92,7 @@ class SimpleRouterGraph:
         has_viz_command = any(cmd in low for cmd in visualization_commands)
         
         # Pipeline context detection - early routing for pipeline questions
+        # Check pipeline Q&A BEFORE pipeline creation intent
         pipeline_question_keywords = [
             "what is happening", "what's happening", "what happened",
             "describe pipeline", "explain pipeline", "pipeline status",
@@ -98,7 +100,11 @@ class SimpleRouterGraph:
             "workflow status", "pipeline progress", "what is in this pipeline",
             "what's in this pipeline", "what does this pipeline", "how does this pipeline",
             "how is this pipeline", "what are the nodes", "show me the pipeline",
-            "tell me about the pipeline", "describe this pipeline", "explain this pipeline"
+            "tell me about the pipeline", "describe this pipeline", "explain this pipeline",
+            # Add more specific patterns for better detection
+            "nodes in", "nodes are", "nodes does", "nodes have",
+            "nodes were", "nodes will", "node configuration", "node config",
+            "execution history", "output files", "pipeline results",
         ]
         
         # When pipeline context exists and user asks pipeline-related questions, route to bio-chat

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import sqlite3
 import uuid
 from pathlib import Path
 from typing import Dict, List, Optional
@@ -14,6 +15,16 @@ try:
 except ImportError:
     # Fallback to absolute import (when running directly)
     from database.db import get_db
+
+
+def _row_to_dict(row) -> Dict:
+    """Convert sqlite3.Row to dict safely."""
+    if isinstance(row, sqlite3.Row):
+        return {key: row[key] for key in row.keys()}
+    elif isinstance(row, dict):
+        return row
+    else:
+        return dict(row)
 
 
 def create_chat_session(user_id: str, title: Optional[str] = None) -> str:
@@ -37,7 +48,7 @@ def get_user_sessions(user_id: str) -> List[Dict[str, any]]:
                ORDER BY updated_at DESC""",
             (user_id,),
         ).fetchall()
-        return [dict(row) for row in rows]
+        return [_row_to_dict(row) for row in rows]
 
 
 def associate_file_with_session(
@@ -108,7 +119,8 @@ def get_session_files(session_id: str, user_id: Optional[str] = None) -> List[Di
         
         results = []
         for row in rows:
-            file_data = dict(row)
+            # Convert Row to dict safely
+            file_data = _row_to_dict(row)
             # Parse JSON metadata
             if file_data.get("metadata"):
                 try:

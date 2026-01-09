@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { Check, X, Workflow, FileInput, Sparkles, Dna, Layers } from 'lucide-react';
 import { PipelineBlueprint } from '../components/pipeline-canvas';
 import { usePipelineStore } from '../components/pipeline-canvas';
+import { useAppStore } from '../stores/appStore';
 
 interface PipelineBlueprintDisplayProps {
   blueprint: PipelineBlueprint;
@@ -32,8 +33,10 @@ export const PipelineBlueprintDisplay: React.FC<PipelineBlueprintDisplayProps> =
   onReject,
   isApproved = false,
 }) => {
-  const { rejectBlueprint } = usePipelineStore();
+  const { rejectBlueprint, approveBlueprintWithSelection } = usePipelineStore();
+  const { setActivePane } = useAppStore();
   const [selectedNodes, setSelectedNodes] = useState<Set<string>>(new Set());
+  const [localApproved, setLocalApproved] = useState(isApproved);
 
   // Initialize with all nodes selected by default
   React.useEffect(() => {
@@ -41,6 +44,11 @@ export const PipelineBlueprintDisplay: React.FC<PipelineBlueprintDisplayProps> =
       setSelectedNodes(new Set(blueprint.nodes.map(n => n.id)));
     }
   }, [blueprint.nodes]);
+
+  // Update local approved state when prop changes
+  React.useEffect(() => {
+    setLocalApproved(isApproved);
+  }, [isApproved]);
 
   const handleNodeToggle = (nodeId: string) => {
     const newSelected = new Set(selectedNodes);
@@ -57,8 +65,28 @@ export const PipelineBlueprintDisplay: React.FC<PipelineBlueprintDisplayProps> =
       return; // Don't allow approval with no nodes selected
     }
     
-    if (onApprove) {
-      onApprove(Array.from(selectedNodes));
+    // Approve blueprint with selected nodes (empty configs for now, user will configure later)
+    const pipeline = approveBlueprintWithSelection(Array.from(selectedNodes), {});
+    
+    if (pipeline) {
+      console.log('[PipelineBlueprintDisplay] Blueprint approved, pipeline created:', pipeline.id);
+      console.log('[PipelineBlueprintDisplay] Navigating to pipeline canvas for configuration');
+      
+      // Mark as approved locally
+      setLocalApproved(true);
+      
+      // Dispatch event to signal blueprint approval (for auto-selection)
+      window.dispatchEvent(new CustomEvent('blueprint-approved'));
+      
+      // Navigate to pipeline canvas so user can configure node parameters
+      setActivePane('pipeline');
+      
+      // Call optional callback (this will update the chat message)
+      if (onApprove) {
+        onApprove(Array.from(selectedNodes));
+      }
+    } else {
+      console.warn('[PipelineBlueprintDisplay] Failed to approve blueprint');
     }
   };
 
@@ -153,7 +181,7 @@ export const PipelineBlueprintDisplay: React.FC<PipelineBlueprintDisplayProps> =
         </div>
       )}
 
-      {!isApproved && (
+      {!localApproved && (
         <div className="flex items-center space-x-2 mt-4">
           <button
             onClick={handleApprove}
@@ -176,9 +204,16 @@ export const PipelineBlueprintDisplay: React.FC<PipelineBlueprintDisplayProps> =
           </button>
         </div>
       )}
-      {isApproved && (
-        <div className="mt-4 p-2 bg-green-50 border border-green-200 rounded text-sm text-green-800">
-          ✓ Pipeline approved. Please configure parameters for each node.
+      {localApproved && (
+        <div className="mt-4 p-3 bg-green-50 border border-green-200 rounded-lg">
+          <div className="flex items-center space-x-2 mb-1">
+            <Check className="w-5 h-5 text-green-600" />
+            <span className="text-sm font-medium text-green-800">Pipeline Approved</span>
+          </div>
+          <p className="text-xs text-green-700 mt-1">
+            Pipeline created successfully with {selectedNodes.size} node{selectedNodes.size === 1 ? '' : 's'}. 
+            You can now configure parameters for each node in the pipeline canvas.
+          </p>
         </div>
       )}
     </div>

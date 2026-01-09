@@ -244,7 +244,7 @@ export const FileBrowser: React.FC<FileBrowserProps> = ({ onFileSelect }) => {
       </div>
 
       {/* File tree */}
-      <div className="flex-1 overflow-y-auto p-3">
+      <div className="flex-1 overflow-y-auto p-3 file-browser-scrollbar">
         {files.length === 0 ? (
           <div className="text-center text-gray-400 mt-8">
             <File className="w-12 h-12 mx-auto mb-2 opacity-50" />

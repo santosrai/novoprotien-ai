@@ -1,5 +1,5 @@
 import React, { useRef, useState, useEffect } from 'react';
-import { Plus, Paperclip, Workflow } from 'lucide-react';
+import { Plus, Paperclip, Workflow, Folder } from 'lucide-react';
 
 interface FileUploadResult {
   status: string;
@@ -31,6 +31,7 @@ interface AttachmentMenuProps {
     file_path: string;
   } | null; // Currently selected file from session
   onPipelineSelect?: () => void; // Called when "Pipeline" option is clicked
+  onServerFilesSelect?: () => void; // Called when "Server files" option is clicked
 }
 
 export const AttachmentMenu: React.FC<AttachmentMenuProps> = ({
@@ -44,6 +45,7 @@ export const AttachmentMenu: React.FC<AttachmentMenuProps> = ({
   pendingFiles: _pendingFiles = [],
   currentFile: _currentFile = null,
   onPipelineSelect,
+  onServerFilesSelect,
 }) => {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const dropdownRef = useRef<HTMLDivElement>(null);
@@ -145,6 +147,13 @@ export const AttachmentMenu: React.FC<AttachmentMenuProps> = ({
     onPipelineSelect?.();
   };
 
+  const handleServerFilesClick = (e: React.MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDropdownOpen(false);
+    onServerFilesSelect?.();
+  };
+
   return (
     <>
       {/* Always show attachment button with dropdown - file pills are shown in parent component */}
@@ -180,6 +189,17 @@ export const AttachmentMenu: React.FC<AttachmentMenuProps> = ({
                 >
                   <Workflow className="w-4 h-4 text-gray-500" />
                   <span>Pipeline</span>
+                </button>
+              )}
+              {/* Server files option */}
+              {onServerFilesSelect && (
+                <button
+                  type="button"
+                  onClick={handleServerFilesClick}
+                  className="w-full px-4 py-2 text-left text-sm text-gray-700 hover:bg-gray-100 flex items-center gap-3"
+                >
+                  <Folder className="w-4 h-4 text-gray-500" />
+                  <span>Server files</span>
                 </button>
               )}
             </div>

@@ -3,7 +3,7 @@ import os
 import traceback
 import time
 import json
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -58,7 +58,7 @@ try:
     from .domain.storage.pdb_storage import save_uploaded_pdb, get_uploaded_pdb
     from .domain.storage.file_access import list_user_files, verify_file_ownership, get_file_metadata, get_user_file_path
     from .database.db import get_db
-    from .api.middleware.auth import get_current_user
+    from .api.middleware.auth import get_current_user, get_current_user_optional
     from .api.routes import auth, chat_sessions, chat_messages, pipelines, credits, reports, admin, three_d_canvases, attachments
 except ImportError:
     # When running directly (not as module)
@@ -76,7 +76,7 @@ except ImportError:
     from domain.storage.pdb_storage import save_uploaded_pdb, get_uploaded_pdb
     from domain.storage.file_access import list_user_files, verify_file_ownership, get_file_metadata, get_user_file_path
     from database.db import get_db
-    from api.middleware.auth import get_current_user
+    from api.middleware.auth import get_current_user, get_current_user_optional
     from api.routes import auth, chat_sessions, chat_messages, pipelines, credits, reports, admin, three_d_canvases, attachments
 
 DEBUG_API = os.getenv("DEBUG_API", "0") == "1"
@@ -218,7 +218,7 @@ async def invoke(request: Request):
 
 @app.post("/api/agents/route")
 @limiter.limit("60/minute")
-async def route(request: Request):
+async def route(request: Request, user: Optional[Dict[str, Any]] = Depends(get_current_user_optional)):
     try:
         body = await request.json()
         input_text = body.get("input")
@@ -229,6 +229,52 @@ async def route(request: Request):
         # Check for manual agent override
         manual_agent_id = body.get("agentId")
         model_override = body.get("model")
+        pipeline_id = body.get("pipeline_id")  # Extract pipeline_id early for router
+        
+        # Fetch pipeline data if pipeline_id is provided and user is authenticated
+        pipeline_data = None
+        if pipeline_id:
+            if user:
+                try:
+                    from .database.db import get_db
+                    import json
+                    with get_db() as conn:
+                        row = conn.execute(
+                            "SELECT * FROM pipelines WHERE id = ? AND user_id = ?",
+                            (pipeline_id, user["id"]),
+                        ).fetchone()
+                        if row:
+                            # Parse pipeline JSON
+                            pipeline_data = json.loads(row["pipeline_json"])
+                            pipeline_data["id"] = row["id"]
+                            pipeline_data["name"] = row["name"]
+                            pipeline_data["description"] = row["description"]
+                            pipeline_data["status"] = row["status"]
+                            pipeline_data["created_at"] = row["created_at"]
+                            pipeline_data["updated_at"] = row["updated_at"]
+                            log_line("agent_route:pipeline_fetched", {
+                                "pipeline_id": pipeline_id,
+                                "pipeline_name": pipeline_data.get("name"),
+                                "node_count": len(pipeline_data.get("nodes", [])),
+                                "has_user": True,
+                            })
+                        else:
+                            log_line("agent_route:pipeline_not_found", {
+                                "pipeline_id": pipeline_id,
+                                "user_id": user["id"],
+                            })
+                except Exception as e:
+                    log_line("agent_route:pipeline_fetch_error", {
+                        "pipeline_id": pipeline_id,
+                        "error": str(e),
+                        "traceback": traceback.format_exc(),
+                    })
+                    # Continue without pipeline data if fetch fails
+            else:
+                log_line("agent_route:pipeline_no_auth", {
+                    "pipeline_id": pipeline_id,
+                    "note": "User not authenticated, pipeline data cannot be fetched",
+                })
         
         # Log the input for debugging
         log_line("agent_route_input", {
@@ -236,6 +282,7 @@ async def route(request: Request):
             "input_length": len(input_text),
             "has_selection": bool(body.get("selection")),
             "has_code": bool(body.get("currentCode")),
+            "has_pipeline_id": bool(pipeline_id),
             "manual_agent": manual_agent_id,
             "model_override": model_override
         })
@@ -255,6 +302,7 @@ async def route(request: Request):
                     "selections": body.get("selections"),
                     "currentCode": body.get("currentCode"),
                     "history": body.get("history"),
+                    "pipeline_id": pipeline_id,  # Pass pipeline_id to router
                 }
             )
             agent_id = routed.get("routedAgentId")
@@ -286,6 +334,9 @@ async def route(request: Request):
             selection=body.get("selection"),
             selections=body.get("selections"),
             current_structure_origin=body.get("currentStructureOrigin"),
+            uploaded_file_context=body.get("uploadedFile"),  # Pass uploaded file context if available
+            pipeline_id=pipeline_id,  # Pass pipeline_id to agent
+            pipeline_data=pipeline_data,  # Pass fetched pipeline data to agent
             model_override=model_override,
         )
         

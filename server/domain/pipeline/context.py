@@ -3,23 +3,24 @@ Context gathering for pipeline agent.
 Collects information about available files, canvas state, and chat history.
 """
 from typing import Dict, Any, List, Optional
-from .pdb_storage import get_uploaded_pdb, list_uploaded_pdbs
+from ..storage.pdb_storage import get_uploaded_pdb, list_uploaded_pdbs
 
 
 async def get_pipeline_context(state: Dict[str, Any]) -> Dict[str, Any]:
     """
-    Gather all context the pipeline agent needs to create pipelines.
+    Gather all context the pipeline agent needs to create pipelines or answer questions about pipelines.
     
     Args:
-        state: Request state containing uploadedFileId, canvasStructure, history, etc.
+        state: Request state containing uploadedFileId, canvasStructure, history, pipeline_id, etc.
     
     Returns:
-        Context dictionary with available resources and information
+        Context dictionary with available resources and information, including pipeline data if pipeline_id is provided
     """
     context: Dict[str, Any] = {
         "uploaded_files": [],
         "canvas_structure": None,
         "recent_chat_history": [],
+        "pipeline": None,  # Will be populated if pipeline_id is provided
         "available_node_types": [
             "input_node",
             "rfdiffusion_node",
@@ -48,6 +49,61 @@ async def get_pipeline_context(state: Dict[str, Any]) -> Dict[str, Any]:
             }
         }
     }
+    
+    # Check for pipeline_id - if provided, fetch pipeline data
+    pipeline_id = state.get("pipeline_id")
+    if pipeline_id:
+        try:
+            # If pipeline_data is provided in state, use it to create full summary
+            pipeline_data = state.get("pipeline_data")
+            if pipeline_data:
+                summary = await get_pipeline_summary(pipeline_id, pipeline_data)
+                context["pipeline"] = summary
+                
+                # Extract output files from node result_metadata
+                output_files = []
+                nodes = pipeline_data.get("nodes", [])
+                for node in nodes:
+                    result_metadata = node.get("result_metadata", {})
+                    if result_metadata.get("output_file"):
+                        output_files.append({
+                            "node_id": node.get("id"),
+                            "node_label": node.get("label"),
+                            "node_type": node.get("type"),
+                            "file": result_metadata["output_file"],
+                        })
+                    # Also check for sequence outputs
+                    if result_metadata.get("sequence"):
+                        output_files.append({
+                            "node_id": node.get("id"),
+                            "node_label": node.get("label"),
+                            "node_type": node.get("type"),
+                            "type": "sequence",
+                            "sequence": result_metadata["sequence"],
+                        })
+                
+                if output_files:
+                    context["pipeline"]["output_files"] = output_files
+            else:
+                # If no pipeline_data, create a basic structure indicating pipeline is attached
+                # This ensures the agent knows a pipeline is referenced even if full data isn't available
+                context["pipeline"] = {
+                    "id": pipeline_id,
+                    "name": "Attached Pipeline",
+                    "status": "unknown",
+                    "node_count": 0,
+                    "note": f"Pipeline ID {pipeline_id} is attached to this message. Full pipeline details are not available (user may not be authenticated or pipeline may not exist in database). The user is asking about this pipeline.",
+                }
+        except Exception as e:
+            # If pipeline fetching fails, log but continue without pipeline context
+            import logging
+            logging.warning(f"Failed to fetch pipeline context for {pipeline_id}: {e}")
+            context["pipeline"] = {
+                "id": pipeline_id,
+                "name": "Attached Pipeline",
+                "error": "Failed to load pipeline data",
+                "note": f"Pipeline ID {pipeline_id} is attached but could not be loaded. The user is asking about this pipeline.",
+            }
     
     # Check for uploaded file ID
     uploaded_file_id = state.get("uploadedFileId")

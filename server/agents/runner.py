@@ -753,6 +753,8 @@ async def run_agent(
     selections: Optional[List[Dict[str, Any]]] = None,
     current_structure_origin: Optional[Dict[str, Any]] = None,
     uploaded_file_context: Optional[Dict[str, Any]] = None,
+    pipeline_id: Optional[str] = None,
+    pipeline_data: Optional[Dict[str, Any]] = None,
     model_override: Optional[str] = None,
 ) -> Dict[str, Any]:
     # Use model_override if provided, otherwise fall back to agent's default
@@ -840,8 +842,9 @@ async def run_agent(
             log_line("agent:proteinmpnn:failed", {"error": str(e), "userText": user_text})
             return {"type": "text", "text": f"ProteinMPNN processing failed: {str(e)}"}
 
-    # Special handling for Pipeline agent - gather context and enhance prompt
-    if agent.get("id") == "pipeline-agent":
+    # Gather pipeline context for pipeline-agent and bio-chat (when pipeline_id is provided)
+    # This allows agents to answer questions about attached pipelines
+    if pipeline_id or agent.get("id") == "pipeline-agent":
         try:
             from ..domain.pipeline.context import get_pipeline_context
             
@@ -852,7 +855,9 @@ async def run_agent(
                 "currentStructureOrigin": current_structure_origin,
                 "history": history or [],
                 "selection": selection,
-                "selections": selections
+                "selections": selections,
+                "pipeline_id": pipeline_id,  # Pass pipeline_id to context gathering
+                "pipeline_data": pipeline_data,  # Pass fetched pipeline data to context gathering
             }
             
             context = await get_pipeline_context(pipeline_state)
@@ -869,15 +874,65 @@ async def run_agent(
                 elif canvas.get("file_id"):
                     context_summary.append(f"Current structure in 3D viewer: {canvas.get('filename', 'uploaded file')}")
             
+            # Add detailed pipeline context if available
+            if context.get("pipeline"):
+                pipeline_info = context["pipeline"]
+                # Build comprehensive pipeline context for bio-chat
+                pipeline_context_parts = [
+                    f"Pipeline Context: {pipeline_info.get('name', 'Unnamed Pipeline')} (ID: {pipeline_info.get('id')})"
+                ]
+                
+                if pipeline_info.get("status"):
+                    pipeline_context_parts.append(f"Status: {pipeline_info['status']}")
+                
+                if pipeline_info.get("node_count"):
+                    pipeline_context_parts.append(f"Nodes: {pipeline_info['node_count']}")
+                
+                # Add node details if available
+                if pipeline_info.get("node_details"):
+                    node_details = pipeline_info["node_details"]
+                    node_list = []
+                    for node in node_details:
+                        node_desc = f"{node.get('label', node.get('id'))} ({node.get('type')}, status: {node.get('status', 'idle')})"
+                        node_list.append(node_desc)
+                    if node_list:
+                        pipeline_context_parts.append(f"Node details: {', '.join(node_list)}")
+                
+                # Add execution flow if available
+                if pipeline_info.get("execution_flow"):
+                    flow = pipeline_info["execution_flow"]
+                    if isinstance(flow, list) and flow:
+                        pipeline_context_parts.append(f"Execution flow: {'; '.join(flow)}")
+                
+                # Add nodes by type if available
+                if pipeline_info.get("nodes_by_type"):
+                    nodes_by_type = pipeline_info["nodes_by_type"]
+                    type_summary = []
+                    for node_type, nodes in nodes_by_type.items():
+                        type_summary.append(f"{len(nodes)} {node_type}")
+                    if type_summary:
+                        pipeline_context_parts.append(f"Node types: {', '.join(type_summary)}")
+                
+                # Add output files if available
+                if pipeline_info.get("output_files"):
+                    output_files = pipeline_info["output_files"]
+                    file_list = [f.get("node_label", f.get("node_id")) for f in output_files]
+                    if file_list:
+                        pipeline_context_parts.append(f"Output files from: {', '.join(file_list)}")
+                
+                context_summary.append("; ".join(pipeline_context_parts))
+            
             enhanced_user_text = user_text
             if context_summary:
                 enhanced_user_text = f"{user_text}\n\nContext: {'; '.join(context_summary)}"
             
             # Include context in the system message or as additional context
-            # The agent will use this to generate appropriate blueprints
+            # The agent will use this to generate appropriate blueprints or answer questions
             log_line("agent:pipeline:context", {
                 "has_files": len(context.get("uploaded_files", [])) > 0,
                 "has_canvas": context.get("canvas_structure") is not None,
+                "has_pipeline": bool(context.get("pipeline")),
+                "pipeline_id": pipeline_id,
                 "userText": user_text
             })
             
@@ -886,7 +941,7 @@ async def run_agent(
             user_text = enhanced_user_text
             
         except Exception as e:
-            log_line("agent:pipeline:context_error", {"error": str(e), "userText": user_text})
+            log_line("agent:pipeline:context_error", {"error": str(e), "userText": user_text, "pipeline_id": pipeline_id})
             # Continue without context enhancement if gathering fails
 
     # Deterministic UniProt search agent (no LLM call)
@@ -1223,10 +1278,88 @@ async def run_agent(
     greeting_patterns = ["hi", "hello", "hey", "greetings", "good morning", "good afternoon", "good evening", "thanks", "thank you", "ok", "okay"]
     is_greeting = any(pattern in user_text_lower for pattern in greeting_patterns) and len(user_text.strip()) < 30
     
+    # Add pipeline context for text agents (bio-chat) if pipeline_id is provided
+    pipeline_context_info = ""
+    if pipeline_id:
+        # Try to use pipeline_data if available, otherwise create basic context
+        if pipeline_data:
+            try:
+                from ..domain.pipeline.context import get_pipeline_context, get_pipeline_summary
+                
+                # Create pipeline summary
+                summary = await get_pipeline_summary(pipeline_id, pipeline_data)
+                
+                # Build detailed pipeline context
+                pipeline_context_lines = [
+                    f"Pipeline Context: {summary.get('name', 'Unnamed Pipeline')} (ID: {summary.get('pipeline_id')})"
+                ]
+                
+                if summary.get("status"):
+                    pipeline_context_lines.append(f"Status: {summary['status']}")
+                
+                if summary.get("node_count"):
+                    pipeline_context_lines.append(f"Total nodes: {summary['node_count']}")
+                
+                # Add node details
+                if summary.get("node_details"):
+                    node_details = summary["node_details"]
+                    node_list = []
+                    for node in node_details:
+                        node_desc = f"{node.get('label', node.get('id'))} (type: {node.get('type')}, status: {node.get('status', 'idle')})"
+                        node_list.append(node_desc)
+                    if node_list:
+                        pipeline_context_lines.append(f"Nodes: {', '.join(node_list)}")
+                
+                # Add execution flow
+                if summary.get("execution_flow"):
+                    flow = summary["execution_flow"]
+                    if isinstance(flow, list) and flow:
+                        pipeline_context_lines.append(f"Execution flow: {' → '.join(flow)}")
+                
+                # Add nodes by type
+                if summary.get("nodes_by_type"):
+                    nodes_by_type = summary["nodes_by_type"]
+                    type_summary = []
+                    for node_type, nodes in nodes_by_type.items():
+                        type_summary.append(f"{len(nodes)} {node_type}")
+                    if type_summary:
+                        pipeline_context_lines.append(f"Node types: {', '.join(type_summary)}")
+                
+                # Extract and add output files
+                output_files = []
+                nodes = pipeline_data.get("nodes", [])
+                for node in nodes:
+                    result_metadata = node.get("result_metadata", {})
+                    if result_metadata.get("output_file"):
+                        output_files.append(f"{node.get('label', node.get('id'))}: {result_metadata['output_file'].get('filename', 'output file')}")
+                    if result_metadata.get("sequence"):
+                        output_files.append(f"{node.get('label', node.get('id'))}: sequence output")
+                
+                if output_files:
+                    pipeline_context_lines.append(f"Output files: {', '.join(output_files)}")
+                
+                pipeline_context_info = "Pipeline Context:\n" + "\n".join(pipeline_context_lines)
+            except Exception as e:
+                log_line("agent:text:pipeline_context_error", {
+                    "error": str(e),
+                    "pipeline_id": pipeline_id,
+                    "has_pipeline_data": bool(pipeline_data),
+                })
+                # Continue without pipeline context if fetching fails
+        else:
+            # If no pipeline_data, still provide basic context with pipeline_id
+            pipeline_context_info = f"Pipeline Context: Pipeline ID {pipeline_id} is attached to this message. The user is asking about this pipeline, but full pipeline details could not be loaded (user may not be authenticated or pipeline may not exist in database)."
+            log_line("agent:text:pipeline_basic_context", {
+                "pipeline_id": pipeline_id,
+                "note": "Using basic context without full pipeline data",
+            })
+    
     messages: List[Dict[str, Any]] = []
     context_parts = []
     if uploaded_file_info:
         context_parts.append(uploaded_file_info)
+    if pipeline_context_info:
+        context_parts.append(pipeline_context_info)
     if history_context_lines:
         context_parts.append("Recent Structure Generation History:\n" + "\n".join(history_context_lines))
     if selection_context:

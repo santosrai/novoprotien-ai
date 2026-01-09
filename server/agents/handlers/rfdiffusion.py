@@ -238,7 +238,7 @@ class RFdiffusionHandler:
         
         return base_time
     
-    def _resolve_pdb_content(self, parameters: Dict[str, Any]) -> Optional[str]:
+    def _resolve_pdb_content(self, parameters: Dict[str, Any], user_id: Optional[str] = None) -> Optional[str]:
         """
         Resolve PDB content from multiple sources with priority:
         1. uploadId (uploaded file) - highest priority
@@ -255,20 +255,24 @@ class RFdiffusionHandler:
         upload_id = parameters.get("uploadId") or parameters.get("upload_file_id")
         if upload_id:
             try:
-                metadata = get_uploaded_pdb(upload_id)
+                logger.info(f"Attempting to resolve PDB from uploadId: {upload_id}, user_id: {user_id}")
+                # Use user_id parameter passed to this function (from job_data)
+                metadata = get_uploaded_pdb(upload_id, user_id=user_id)
+                logger.info(f"get_uploaded_pdb returned: {metadata is not None}, has absolute_path: {metadata and 'absolute_path' in metadata if metadata else False}")
                 if metadata and metadata.get("absolute_path"):
                     pdb_path = Path(metadata["absolute_path"])
+                    logger.info(f"PDB file path: {pdb_path}, exists: {pdb_path.exists()}")
                     if pdb_path.exists():
                         pdb_content = pdb_path.read_text()
                         if pdb_content and pdb_content.strip():
-                            logger.info(f"Retrieved PDB from uploaded file: {upload_id} ({len(pdb_content)} chars)")
+                            logger.info(f"Successfully retrieved PDB from uploaded file: {upload_id} ({len(pdb_content)} chars)")
                             return pdb_content
                         else:
                             logger.warning(f"Uploaded PDB file is empty: {metadata.get('absolute_path')}")
                     else:
-                        logger.warning(f"Uploaded PDB file not found: {metadata.get('absolute_path')}")
+                        logger.warning(f"Uploaded PDB file not found at path: {metadata.get('absolute_path')}")
                 else:
-                    logger.warning(f"Uploaded PDB metadata not found for ID: {upload_id}")
+                    logger.warning(f"Uploaded PDB metadata not found for ID: {upload_id}, user_id: {user_id}")
             except Exception as e:
                 logger.error(f"Error retrieving uploaded PDB {upload_id}: {e}", exc_info=True)
                 # Fall through to next priority
@@ -335,10 +339,12 @@ class RFdiffusionHandler:
             self.active_jobs[job_id] = "running"
             
             # Resolve PDB content from multiple sources
-            logger.info(f"Resolving PDB content for job {job_id}, parameters keys: {list(parameters.keys())}")
-            pdb_content = self._resolve_pdb_content(parameters)
+            user_id = job_data.get("userId")
+            logger.info(f"Resolving PDB content for job {job_id}, parameters keys: {list(parameters.keys())}, user_id: {user_id}")
+            logger.info(f"Parameters uploadId: {parameters.get('uploadId')}, upload_file_id: {parameters.get('upload_file_id')}, pdb_id: {parameters.get('pdb_id')}")
+            pdb_content = self._resolve_pdb_content(parameters, user_id=user_id)
             design_mode = parameters.get("design_mode", "unconditional")
-            logger.info(f"PDB resolution result: content_length={len(pdb_content) if pdb_content else 0}, design_mode={design_mode}")
+            logger.info(f"PDB resolution result: content_length={len(pdb_content) if pdb_content else 0}, design_mode={design_mode}, has_content={bool(pdb_content)}")
             
             # Prepare parameters for RFdiffusion client
             # If PDB content was resolved, pass it as input_pdb
@@ -355,23 +361,25 @@ class RFdiffusionHandler:
             
             if pdb_content:
                 client_params["input_pdb"] = pdb_content
+                logger.info(f"Set input_pdb in client_params, length: {len(pdb_content)}")
                 # Remove source identifiers since we have the content
                 client_params.pop("uploadId", None)
                 client_params.pop("upload_file_id", None)
                 client_params.pop("pdb_id", None)
             elif design_mode != "unconditional":
                 # For non-unconditional designs, PDB is required
+                logger.warning(f"No PDB content resolved for job {job_id}, design_mode: {design_mode}")
                 return {
                     "status": "error",
                     "error": "PDB template is required for motif_scaffolding and partial_diffusion modes. Please provide a PDB ID, upload a file, or use unconditional design mode."
                 }
             else:
                 # For unconditional design without PDB, ensure all PDB-related params are removed
+                logger.info(f"Unconditional design without PDB - removed all PDB-related params. Remaining keys: {list(client_params.keys())}")
                 client_params.pop("uploadId", None)
                 client_params.pop("upload_file_id", None)
                 client_params.pop("pdb_id", None)
                 client_params.pop("input_pdb", None)
-                logger.info(f"Unconditional design without PDB - removed all PDB-related params. Remaining keys: {list(client_params.keys())}")
             
             # Submit to RFdiffusion API
             try:
