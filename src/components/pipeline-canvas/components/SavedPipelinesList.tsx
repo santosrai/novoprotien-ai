@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { usePipelineStore } from '../store/pipelineStore';
+import { usePipelineContext } from '../context/PipelineContext';
 import { Pipeline } from '../types/index';
 import { Trash2, Edit2, FolderOpen, Plus, X, Menu } from 'lucide-react';
 
@@ -13,6 +14,7 @@ export const SavedPipelinesList: React.FC = () => {
     isPipelinesSidebarCollapsed,
     togglePipelinesSidebar
   } = usePipelineStore();
+  const { apiClient, authState } = usePipelineContext();
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editName, setEditName] = useState('');
 
@@ -25,7 +27,7 @@ export const SavedPipelinesList: React.FC = () => {
   }, [savedPipelines]);
 
   const handleLoad = (pipeline: Pipeline) => {
-    loadPipeline(pipeline.id);
+    loadPipeline(pipeline.id, { apiClient, authState });
   };
 
   const handleNewPipeline = () => {
@@ -62,10 +64,13 @@ export const SavedPipelinesList: React.FC = () => {
     const pipeline = savedPipelines.find((p) => p.id === pipelineId);
     if (pipeline && editName.trim()) {
       // Load the pipeline first to set it as current, then save with new name
-      loadPipeline(pipelineId);
+      loadPipeline(pipelineId, { apiClient, authState });
       // Use setTimeout to ensure the pipeline is loaded before saving
       setTimeout(() => {
-        usePipelineStore.getState().savePipeline(editName.trim());
+        usePipelineStore.getState().savePipeline(editName.trim(), undefined, undefined, {
+          apiClient,
+          authState,
+        });
       }, 0);
       setEditingId(null);
       setEditName('');

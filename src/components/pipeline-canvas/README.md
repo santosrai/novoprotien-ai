@@ -43,43 +43,152 @@ Make sure you have these installed in your consuming project:
 npm install react react-dom reactflow zustand lucide-react
 ```
 
+### shadcn/ui Components (Required)
+
+This library uses shadcn/ui components. You need to install the required Radix UI packages and utilities:
+
+```bash
+npm install @radix-ui/react-dialog @radix-ui/react-dropdown-menu @radix-ui/react-label @radix-ui/react-select @radix-ui/react-slot @radix-ui/react-tooltip class-variance-authority clsx tailwind-merge
+```
+
+**Note**: The library includes shadcn component implementations in `components/ui/`, but you must install the peer dependencies above for them to work.
+
 ## Usage
 
-### Basic Example
+### Basic Example (Standalone - No Dependencies)
+
+The library works completely standalone without any dependencies:
 
 ```tsx
-import { PipelineCanvas, PipelineManager } from '@novoprotein/pipeline-canvas';
+import { PipelineCanvas, PipelineCanvasProvider } from '@novoprotein/pipeline-canvas';
 import '@novoprotein/pipeline-canvas/style.css';
 
 function App() {
   return (
-    <div style={{ width: '100vw', height: '100vh' }}>
-      <PipelineCanvas />
-      <PipelineManager />
-    </div>
+    <PipelineCanvasProvider>
+      <div style={{ width: '100vw', height: '100vh' }}>
+        <PipelineCanvas />
+      </div>
+    </PipelineCanvasProvider>
   );
 }
 ```
 
-### With Custom API Client
+**Note**: Without dependencies, the library works in "offline mode":
+- Pipelines are saved locally (localStorage)
+- No backend sync
+- No authentication required
+- File uploads work if your API supports unauthenticated requests
+
+### With Authentication and API Client
+
+For full functionality (backend sync, authenticated operations):
 
 ```tsx
-import { PipelineExecution } from '@novoprotein/pipeline-canvas';
-import { usePipelineStore } from '@novoprotein/pipeline-canvas/store';
+import { 
+  PipelineCanvas, 
+  PipelineCanvasProvider,
+  type ApiClient,
+  type AuthState 
+} from '@novoprotein/pipeline-canvas';
+import '@novoprotein/pipeline-canvas/style.css';
 
-function MyApp() {
-  const apiClient = {
-    post: async (url: string, data: any) => {
-      return fetch(url, { 
-        method: 'POST', 
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(data) 
+function App() {
+  // Your API client (compatible with axios, fetch, or custom)
+  const apiClient: ApiClient = {
+    get: async (url: string) => {
+      const response = await fetch(`/api${url}`, {
+        headers: { 'Authorization': `Bearer ${token}` }
       });
+      return { data: await response.json() };
+    },
+    post: async (url: string, data: any) => {
+      const response = await fetch(`/api${url}`, {
+        method: 'POST',
+        headers: { 
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
+        body: JSON.stringify(data)
+      });
+      return { data: await response.json() };
     },
   };
 
-  return <PipelineExecution apiClient={apiClient} />;
+  // Your auth state
+  const authState: AuthState = {
+    user: { id: 'user-123', email: 'user@example.com' },
+    isAuthenticated: true,
+    accessToken: token,
+  };
+
+  // Session ID for execution context
+  const sessionId = 'session-456';
+
+  // Auth headers function for file uploads
+  const getAuthHeaders = () => ({
+    'Authorization': `Bearer ${token}`
+  });
+
+  return (
+    <PipelineCanvasProvider
+      apiClient={apiClient}
+      authState={authState}
+      sessionId={sessionId}
+      getAuthHeaders={getAuthHeaders}
+    >
+      <div style={{ width: '100vw', height: '100vh' }}>
+        <PipelineCanvas />
+      </div>
+    </PipelineCanvasProvider>
+  );
 }
+```
+
+### With Axios API Client
+
+If you're using axios:
+
+```tsx
+import axios from 'axios';
+import { PipelineCanvasProvider, type ApiClient } from '@novoprotein/pipeline-canvas';
+
+const apiClient: ApiClient = {
+  get: (url: string, config?) => axios.get(url, config),
+  post: (url: string, data?: any, config?) => axios.post(url, data, config),
+  put: (url: string, data?: any, config?) => axios.put(url, data, config),
+  patch: (url: string, data?: any, config?) => axios.patch(url, data, config),
+  delete: (url: string, config?) => axios.delete(url, config),
+};
+
+function App() {
+  return (
+    <PipelineCanvasProvider apiClient={apiClient}>
+      <PipelineCanvas />
+    </PipelineCanvasProvider>
+  );
+}
+```
+
+### Partial Dependencies
+
+You can provide only the dependencies you need:
+
+```tsx
+// Only API client (no auth)
+<PipelineCanvasProvider apiClient={myApiClient}>
+  <PipelineCanvas />
+</PipelineCanvasProvider>
+
+// Only auth state (local operations only)
+<PipelineCanvasProvider authState={authState}>
+  <PipelineCanvas />
+</PipelineCanvasProvider>
+
+// Everything optional - works standalone
+<PipelineCanvasProvider>
+  <PipelineCanvas />
+</PipelineCanvasProvider>
 ```
 
 ### Using the Store
@@ -101,9 +210,255 @@ function MyComponent() {
 }
 ```
 
+### Using Context Directly
+
+You can also access dependencies directly from context:
+
+```tsx
+import { usePipelineContext } from '@novoprotein/pipeline-canvas';
+
+function MyComponent() {
+  const { apiClient, authState, sessionId, getAuthHeaders } = usePipelineContext();
+  
+  // Use dependencies as needed
+  if (authState?.user) {
+    // User is authenticated
+  }
+  
+  return <div>...</div>;
+}
+```
+
+## Dependency Injection
+
+The library uses dependency injection to remain standalone and flexible. All dependencies are **optional**:
+
+- **`apiClient`**: For backend operations (save, load, sync pipelines)
+- **`authState`**: For user-specific features and authentication
+- **`sessionId`**: For execution context and session tracking
+- **`getAuthHeaders`**: For authenticated file uploads
+- **`logger`**: For structured logging (optional, uses console by default)
+- **`errorReporter`**: For error tracking (Sentry, LogRocket, etc.)
+
+### Graceful Degradation
+
+When dependencies are not provided:
+- ✅ Pipelines work locally (localStorage)
+- ✅ All UI features work
+- ✅ Pipeline execution works (with provided apiClient or external APIs)
+- ⚠️ Backend sync is skipped
+- ⚠️ User-specific features are disabled
+- ⚠️ File uploads may fail if API requires authentication
+
+### Integration Examples
+
+#### With Zustand Auth Store
+
+```tsx
+import { useAuthStore } from './stores/authStore';
+import { PipelineCanvasProvider } from '@novoprotein/pipeline-canvas';
+
+function App() {
+  const user = useAuthStore(state => state.user);
+  const token = useAuthStore(state => state.accessToken);
+  
+  const authState = {
+    user,
+    isAuthenticated: !!user,
+    accessToken: token,
+  };
+  
+  return (
+    <PipelineCanvasProvider authState={authState}>
+      <PipelineCanvas />
+    </PipelineCanvasProvider>
+  );
+}
+```
+
+#### With React Context Auth
+
+```tsx
+import { useContext } from 'react';
+import { AuthContext } from './AuthContext';
+import { PipelineCanvasProvider } from '@novoprotein/pipeline-canvas';
+
+function App() {
+  const { user, token } = useContext(AuthContext);
+  
+  return (
+    <PipelineCanvasProvider
+      authState={{ user, isAuthenticated: !!user, accessToken: token }}
+    >
+      <PipelineCanvas />
+    </PipelineCanvasProvider>
+  );
+}
+```
+
+## Logging and Error Tracking
+
+The library supports structured logging and error tracking through dependency injection. This allows you to integrate with your own logging systems (Sentry, LogRocket, Bugsnag, etc.) or use the default console logger.
+
+### Basic Usage (Default Logger)
+
+By default, the library uses a console logger that only logs in development mode:
+
+```tsx
+import { PipelineCanvasProvider } from '@novoprotein/pipeline-canvas';
+
+// No logger needed - uses default console logger (development only)
+<PipelineCanvasProvider>
+  <PipelineCanvas />
+</PipelineCanvasProvider>
+```
+
+### Custom Logger
+
+Provide your own logger for structured logging:
+
+```tsx
+import { 
+  PipelineCanvasProvider,
+  type Logger 
+} from '@novoprotein/pipeline-canvas';
+
+const myLogger: Logger = {
+  debug: (message, data) => {
+    // Your debug logging logic
+    console.debug(`[Pipeline] ${message}`, data);
+  },
+  info: (message, data) => {
+    // Your info logging logic
+    console.info(`[Pipeline] ${message}`, data);
+  },
+  warn: (message, data) => {
+    // Your warning logging logic
+    console.warn(`[Pipeline] ${message}`, data);
+  },
+  error: (message, error, data) => {
+    // Your error logging logic
+    console.error(`[Pipeline] ${message}`, error, data);
+  },
+};
+
+<PipelineCanvasProvider logger={myLogger}>
+  <PipelineCanvas />
+</PipelineCanvasProvider>
+```
+
+### Error Tracking (Sentry Example)
+
+Integrate with error tracking services:
+
+```tsx
+import * as Sentry from '@sentry/react';
+import { 
+  PipelineCanvasProvider,
+  type ErrorReporter 
+} from '@novoprotein/pipeline-canvas';
+
+const errorReporter: ErrorReporter = {
+  captureException: (error, context) => {
+    Sentry.captureException(error, {
+      extra: context,
+      tags: {
+        component: 'pipeline-canvas',
+      },
+    });
+  },
+  captureMessage: (message, level, context) => {
+    Sentry.captureMessage(message, {
+      level: level === 'error' ? 'error' : level === 'warning' ? 'warning' : 'info',
+      extra: context,
+      tags: {
+        component: 'pipeline-canvas',
+      },
+    });
+  },
+  setUser: (user) => {
+    Sentry.setUser({
+      id: user.id,
+      email: user.email,
+    });
+  },
+  setContext: (key, context) => {
+    Sentry.setContext(key, context);
+  },
+};
+
+<PipelineCanvasProvider errorReporter={errorReporter}>
+  <PipelineCanvas />
+</PipelineCanvasProvider>
+```
+
+### LogRocket Example
+
+```tsx
+import LogRocket from 'logrocket';
+import { PipelineCanvasProvider, type ErrorReporter } from '@novoprotein/pipeline-canvas';
+
+const errorReporter: ErrorReporter = {
+  captureException: (error, context) => {
+    LogRocket.captureException(error, {
+      extra: context,
+    });
+  },
+  captureMessage: (message, level, context) => {
+    LogRocket.captureMessage(message, {
+      level,
+      extra: context,
+    });
+  },
+  setUser: (user) => {
+    LogRocket.identify(user.id, {
+      email: user.email,
+    });
+  },
+};
+
+<PipelineCanvasProvider errorReporter={errorReporter}>
+  <PipelineCanvas />
+</PipelineCanvasProvider>
+```
+
+### Using Logger in Your Code
+
+You can access the logger from context:
+
+```tsx
+import { usePipelineContext } from '@novoprotein/pipeline-canvas';
+
+function MyComponent() {
+  const { logger } = usePipelineContext();
+  
+  const handleAction = () => {
+    logger?.info('Action performed', { action: 'click' });
+  };
+  
+  return <button onClick={handleAction}>Click me</button>;
+}
+```
+
+### What Gets Logged
+
+The library logs:
+- **Pipeline execution events**: Start, completion, errors
+- **Node execution**: Status changes, errors, results
+- **API requests**: Request/response details (if enabled)
+- **User actions**: Pipeline save, load, delete operations
+- **Errors**: All errors with full context (node ID, pipeline ID, error details)
+
+### Privacy and Security
+
+- **No automatic data collection**: Logging is opt-in via dependency injection
+- **You control what gets logged**: Provide your own logger/error reporter
+- **No external calls**: Default logger only uses console (no network requests)
+- **Context-aware**: All logs include relevant context (pipeline ID, node ID, etc.)
+
 ### Styling
 
-The library uses Tailwind CSS classes. Make sure Tailwind is configured in your project:
+The library uses Tailwind CSS classes and shadcn/ui CSS variables. Make sure Tailwind is configured in your project:
 
 ```js
 // tailwind.config.js
@@ -112,6 +467,11 @@ module.exports = {
     './src/**/*.{js,jsx,ts,tsx}',
     './node_modules/@novoprotein/pipeline-canvas/**/*.{js,jsx,ts,tsx}',
   ],
+  theme: {
+    extend: {
+      // shadcn/ui theme variables are included in the library's style.css
+    },
+  },
   // ... rest of config
 };
 ```
@@ -122,6 +482,8 @@ Also import the CSS file in your main entry:
 // main.tsx or App.tsx
 import '@novoprotein/pipeline-canvas/style.css';
 ```
+
+The library includes shadcn/ui CSS variables for theming. The components support both light and dark themes via CSS variables.
 
 ## Development
 

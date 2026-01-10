@@ -1,6 +1,6 @@
 import React, { useEffect } from 'react';
 import { usePipelineStore } from '../store/pipelineStore';
-import { useChatHistoryStore } from '../../../stores/chatHistoryStore';
+import { usePipelineContext } from '../context/PipelineContext';
 import { Loader2, CheckCircle2, XCircle, AlertCircle } from 'lucide-react';
 import { executeNode } from '../utils/executionEngine';
 
@@ -22,16 +22,17 @@ export const PipelineExecution: React.FC<PipelineExecutionProps> = ({ apiClient 
     stopExecution,
   } = usePipelineStore();
   
-  const { activeSessionId } = useChatHistoryStore();
+  const { sessionId } = usePipelineContext();
+  const effectiveSessionId = sessionId;
   
   // Debug: Log session ID
   useEffect(() => {
-    if (activeSessionId) {
-      console.log('[PipelineExecution] Active session ID:', activeSessionId);
+    if (effectiveSessionId) {
+      console.log('[PipelineExecution] Active session ID:', effectiveSessionId);
     } else {
       console.warn('[PipelineExecution] No active session ID found');
     }
-  }, [activeSessionId]);
+  }, [effectiveSessionId]);
 
   useEffect(() => {
     if (!isExecuting || !currentPipeline || executionOrder.length === 0) {
@@ -104,7 +105,7 @@ export const PipelineExecution: React.FC<PipelineExecutionProps> = ({ apiClient 
             executionResult = await executeNode(node, {
               pipeline: currentPipeline,
               apiClient: nodeApiClient,
-              sessionId: activeSessionId,
+              sessionId: effectiveSessionId,
             });
           } catch (execError: any) {
             console.error(`[PipelineExecution] Error executing node ${nodeId}:`, execError);
@@ -117,38 +118,15 @@ export const PipelineExecution: React.FC<PipelineExecutionProps> = ({ apiClient 
           // Extract request/response details from execution result
           let result: any;
           try {
-            // #region agent log
-            const logEntry12 = {location:'PipelineExecution.tsx:69',message:'extracting result from executionResult',data:{hasExecutionResult:!!executionResult,hasData:!!executionResult?.data,executionResultType:typeof executionResult},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'H4'};
-            console.log('[DEBUG]', logEntry12);
-            fetch('http://127.0.0.1:7243/ingest/e128561e-dec0-450c-a8ea-2bf15be2e2f5',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(logEntry12)}).catch((e)=>console.warn('[DEBUG] Log fetch failed:',e));
-            // #endregion
-            
             result = executionResult?.data || executionResult;
-            
-            // #region agent log
-            const logEntry13 = {location:'PipelineExecution.tsx:72',message:'result extracted',data:{resultType:typeof result,resultIsObject:typeof result==='object',resultKeys:result&&typeof result==='object'?Object.keys(result):null},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'H4'};
-            console.log('[DEBUG]', logEntry13);
-            fetch('http://127.0.0.1:7243/ingest/e128561e-dec0-450c-a8ea-2bf15be2e2f5',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(logEntry13)}).catch((e)=>console.warn('[DEBUG] Log fetch failed:',e));
-            // #endregion
             
             // Safety check: ensure result is an object or can be safely handled
             if (result && typeof result !== 'object') {
               console.warn(`[PipelineExecution] Unexpected result type for node ${nodeId}:`, typeof result, result);
               // Convert to object if it's a primitive
               result = { value: result };
-              
-              // #region agent log
-              const logEntry14 = {location:'PipelineExecution.tsx:77',message:'converted primitive to object',data:{result},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'H4'};
-              console.log('[DEBUG]', logEntry14);
-              fetch('http://127.0.0.1:7243/ingest/e128561e-dec0-450c-a8ea-2bf15be2e2f5',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(logEntry14)}).catch((e)=>console.warn('[DEBUG] Log fetch failed:',e));
-              // #endregion
             }
           } catch (resultError: any) {
-            // #region agent log
-            const logEntry15 = {location:'PipelineExecution.tsx:80',message:'error extracting result',data:{error:resultError.message},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'H4'};
-            console.error('[DEBUG]', logEntry15);
-            fetch('http://127.0.0.1:7243/ingest/e128561e-dec0-450c-a8ea-2bf15be2e2f5',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(logEntry15)}).catch((e)=>console.warn('[DEBUG] Log fetch failed:',e));
-            // #endregion
             console.error(`[PipelineExecution] Error extracting result for node ${nodeId}:`, resultError);
             result = { error: 'Failed to extract result' };
           }
@@ -156,12 +134,6 @@ export const PipelineExecution: React.FC<PipelineExecutionProps> = ({ apiClient 
           // Store result metadata if available
           if (result) {
             try {
-              // #region agent log
-              const logEntry16 = {location:'PipelineExecution.tsx:87',message:'storing result metadata',data:{resultKeys:Object.keys(result),hasOutputFile:!!result.output_file,hasSequence:!!result.sequence,hasMessage:!!result.message,hasData:!!result.data},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'H5'};
-              console.log('[DEBUG]', logEntry16);
-              fetch('http://127.0.0.1:7243/ingest/e128561e-dec0-450c-a8ea-2bf15be2e2f5',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(logEntry16)}).catch((e)=>console.warn('[DEBUG] Log fetch failed:',e));
-              // #endregion
-              
               const resultMetadata: Record<string, any> = {};
               
               // For input nodes, store all file metadata
@@ -226,12 +198,6 @@ export const PipelineExecution: React.FC<PipelineExecutionProps> = ({ apiClient 
                 }
               }
 
-              // #region agent log
-              const logEntry17 = {location:'PipelineExecution.tsx:109',message:'result metadata prepared',data:{metadataKeys:Object.keys(resultMetadata),metadataPreview:JSON.stringify(resultMetadata).substring(0,100)},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'H5'};
-              console.log('[DEBUG]', logEntry17);
-              fetch('http://127.0.0.1:7243/ingest/e128561e-dec0-450c-a8ea-2bf15be2e2f5',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(logEntry17)}).catch((e)=>console.warn('[DEBUG] Log fetch failed:',e));
-              // #endregion
-
               // Update node with result metadata
               usePipelineStore.getState().updateNode(nodeId, {
                 result_metadata: resultMetadata,
@@ -239,25 +205,14 @@ export const PipelineExecution: React.FC<PipelineExecutionProps> = ({ apiClient 
               
               // Trigger file refresh event for RFdiffusion nodes (so FileBrowser updates)
               if (node.type === 'rfdiffusion_node' && resultMetadata.filepath) {
-                console.log('[PipelineExecution] RFdiffusion completed, triggering file refresh. Active session:', activeSessionId);
+                console.log('[PipelineExecution] RFdiffusion completed, triggering file refresh. Active session:', effectiveSessionId);
                 // Small delay to ensure backend has saved the file and associated it with session
                 setTimeout(() => {
                   window.dispatchEvent(new CustomEvent('session-file-added'));
                   console.log('[PipelineExecution] Dispatched session-file-added event');
                 }, 1000); // Increased delay to ensure backend processing completes
               }
-              
-              // #region agent log
-              const logEntry18 = {location:'PipelineExecution.tsx:115',message:'result metadata stored in node',data:{nodeId},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'H5'};
-              console.log('[DEBUG]', logEntry18);
-              fetch('http://127.0.0.1:7243/ingest/e128561e-dec0-450c-a8ea-2bf15be2e2f5',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(logEntry18)}).catch((e)=>console.warn('[DEBUG] Log fetch failed:',e));
-              // #endregion
             } catch (metadataError: any) {
-            // #region agent log
-            const logEntry19 = {location:'PipelineExecution.tsx:118',message:'error storing metadata',data:{error:metadataError.message},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'H5'};
-            console.error('[DEBUG]', logEntry19);
-            fetch('http://127.0.0.1:7243/ingest/e128561e-dec0-450c-a8ea-2bf15be2e2f5',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(logEntry19)}).catch((e)=>console.warn('[DEBUG] Log fetch failed:',e));
-            // #endregion
               console.error(`[PipelineExecution] Error storing metadata for node ${nodeId}:`, metadataError);
             }
           }

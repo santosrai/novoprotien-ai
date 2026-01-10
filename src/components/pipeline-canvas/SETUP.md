@@ -8,7 +8,10 @@ This library is prepared for publishing to a private GitHub repository.
 - `vite.config.ts` - Build configuration
 - `package.json` - Updated with build scripts and proper exports
 - `tsconfig.json` - Configured for declaration file generation
-- `style.css` - CSS file for styling
+- `style.css` - CSS file with shadcn/ui variables
+- `components.json` - shadcn/ui configuration
+- `lib/utils.ts` - Utility functions (cn helper)
+- `components/ui/` - shadcn/ui component implementations
 - `README.md` - Installation and usage documentation
 - `.gitignore` - Git ignore rules
 
@@ -97,8 +100,11 @@ Or add to `package.json`:
 
 - **Always build before committing**: The `dist/` folder should be committed to the repository so users can install without building
 - **Update version**: Use `npm version patch|minor|major` to bump versions
-- **Peer dependencies**: Users must install peer dependencies in their projects
+- **Peer dependencies**: Users must install peer dependencies in their projects, including:
+  - React, React DOM, React Flow, Zustand, Lucide React
+  - **shadcn/ui dependencies**: Radix UI packages, class-variance-authority, clsx, tailwind-merge
 - **CSS import**: Users need to import `@novoprotein/pipeline-canvas/style.css` in their projects
+- **shadcn/ui components**: The library includes shadcn component implementations, but consumers must install the Radix UI peer dependencies
 
 ## Testing the Build Locally
 

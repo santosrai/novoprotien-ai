@@ -1,8 +1,14 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { usePipelineStore, ExecutionLogEntry } from '../store/pipelineStore';
+import { usePipelineContext } from '../context/PipelineContext';
 import { PipelineNode } from '../types/index';
 import { Trash2, Upload, X, File, ArrowLeft, Play, CheckCircle2, Info, Copy, Search, AlertCircle } from 'lucide-react';
-import { getAuthHeaders } from '../../../utils/api';
+import { Input } from './ui/input';
+import { Label } from './ui/label';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from './ui/select';
+import { Button } from './ui/button';
+import { Alert, AlertDescription } from './ui/alert';
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from './ui/tooltip';
 
 interface PipelineNodeConfigProps {
   nodeId: string;
@@ -94,6 +100,7 @@ export const PipelineNodeConfig: React.FC<PipelineNodeConfigProps> = ({
   onClose,
 }) => {
   const { currentPipeline, currentExecution, executeSingleNode } = usePipelineStore();
+  const { getAuthHeaders } = usePipelineContext();
   const node = currentPipeline?.nodes.find((n) => n.id === nodeId);
   
   // Debug: Log when node config changes
@@ -246,8 +253,8 @@ export const PipelineNodeConfig: React.FC<PipelineNodeConfigProps> = ({
       const formData = new FormData();
       formData.append('file', file);
 
-      // Get auth headers for the request
-      const headers = getAuthHeaders();
+      // Get auth headers for the request (if available)
+      const headers = getAuthHeaders ? getAuthHeaders() : {};
 
       const response = await fetch('/api/upload/pdb', {
         method: 'POST',
@@ -419,20 +426,22 @@ export const PipelineNodeConfig: React.FC<PipelineNodeConfigProps> = ({
                     </button>
                   </div>
                 ) : (
-                  <button
+                  <Button
                     type="button"
                     onClick={handleUploadClick}
                     disabled={isUploading}
-                    className="w-full px-3 py-2 text-sm bg-gray-800/50 border border-gray-600/50 rounded-lg text-gray-200 hover:bg-gray-800/70 hover:border-gray-500/50 disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2 transition-colors"
+                    variant="outline"
+                    className="w-full bg-gray-800/50 border-gray-600/50 text-gray-200 hover:bg-gray-800/70"
                   >
-                    <Upload className="w-4 h-4" />
-                    <span>Upload PDB File</span>
-                  </button>
+                    <Upload className="w-4 h-4 mr-2" />
+                    Upload PDB File
+                  </Button>
                 )}
                 {uploadError && (
-                  <div className="text-xs text-red-400 bg-red-900/20 px-3 py-2 rounded-lg border border-red-700/50">
-                    {uploadError}
-                  </div>
+                  <Alert variant="destructive" className="mt-2">
+                    <AlertCircle className="h-4 w-4" />
+                    <AlertDescription className="text-xs">{uploadError}</AlertDescription>
+                  </Alert>
                 )}
                 <input
                   ref={fileInputRef}
@@ -511,45 +520,58 @@ export const PipelineNodeConfig: React.FC<PipelineNodeConfigProps> = ({
           <div className="space-y-4">
             {/* HTTP Method */}
             <div>
-              <label className="block text-xs font-medium text-gray-400 mb-2">
+              <Label className="text-xs font-medium text-gray-400 mb-2">
                 Method
-              </label>
-              <select
+              </Label>
+              <Select
                 value={node.config?.method || 'POST'}
-                onChange={(e) => handleConfigChange('method', e.target.value)}
-                className={inputClassName}
+                onValueChange={(value) => handleConfigChange('method', value)}
               >
-                <option value="GET">GET</option>
-                <option value="POST">POST</option>
-                <option value="PUT">PUT</option>
-                <option value="PATCH">PATCH</option>
-                <option value="DELETE">DELETE</option>
-              </select>
+                <SelectTrigger className={inputClassName}>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="GET">GET</SelectItem>
+                  <SelectItem value="POST">POST</SelectItem>
+                  <SelectItem value="PUT">PUT</SelectItem>
+                  <SelectItem value="PATCH">PATCH</SelectItem>
+                  <SelectItem value="DELETE">DELETE</SelectItem>
+                </SelectContent>
+              </Select>
             </div>
 
             {/* URL */}
             <div>
-              <label className="block text-xs font-medium text-gray-400 mb-2">
+              <Label className="text-xs font-medium text-gray-400 mb-2">
                 URL
-              </label>
-              <input
+              </Label>
+              <Input
                 type="text"
                 value={node.config?.url || '/rfdiffusion/run'}
                 onChange={(e) => handleConfigChange('url', e.target.value)}
                 className={inputClassName}
                 placeholder="/rfdiffusion/run"
               />
-              <p className="text-xs text-gray-500 mt-1.5">
-                API endpoint URL (relative or absolute)
-              </p>
+              <TooltipProvider>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <p className="text-xs text-gray-500 mt-1.5 cursor-help">
+                      API endpoint URL (relative or absolute)
+                    </p>
+                  </TooltipTrigger>
+                  <TooltipContent>
+                    <p>Enter the API endpoint URL. Can be relative (e.g., /api/endpoint) or absolute (e.g., https://api.example.com/endpoint)</p>
+                  </TooltipContent>
+                </Tooltip>
+              </TooltipProvider>
             </div>
 
             {/* API Key */}
             <div>
-              <label className="block text-xs font-medium text-gray-400 mb-2">
+              <Label className="text-xs font-medium text-gray-400 mb-2">
                 API Key
-              </label>
-              <input
+              </Label>
+              <Input
                 type="password"
                 value={node.config?.api_key || ''}
                 onChange={(e) => handleConfigChange('api_key', e.target.value)}
@@ -563,18 +585,22 @@ export const PipelineNodeConfig: React.FC<PipelineNodeConfigProps> = ({
 
             {/* Design Mode */}
             <div>
-              <label className="block text-xs font-medium text-gray-400 mb-2">
+              <Label className="text-xs font-medium text-gray-400 mb-2">
                 Design Mode
-              </label>
-              <select
+              </Label>
+              <Select
                 value={node.config?.design_mode || 'unconditional'}
-                onChange={(e) => handleConfigChange('design_mode', e.target.value)}
-                className={inputClassName}
+                onValueChange={(value) => handleConfigChange('design_mode', value)}
               >
-                <option value="unconditional">Unconditional Design</option>
-                <option value="motif_scaffolding">Motif Scaffolding</option>
-                <option value="partial_diffusion">Partial Diffusion</option>
-              </select>
+                <SelectTrigger className={inputClassName}>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="unconditional">Unconditional Design</SelectItem>
+                  <SelectItem value="motif_scaffolding">Motif Scaffolding</SelectItem>
+                  <SelectItem value="partial_diffusion">Partial Diffusion</SelectItem>
+                </SelectContent>
+              </Select>
               <p className="text-xs text-gray-500 mt-1.5">
                 Unconditional: new proteins | Motif: around structures | Partial: modify regions
               </p>
@@ -582,10 +608,10 @@ export const PipelineNodeConfig: React.FC<PipelineNodeConfigProps> = ({
 
             {/* PDB ID */}
             <div>
-              <label className="block text-xs font-medium text-gray-400 mb-2">
+              <Label className="text-xs font-medium text-gray-400 mb-2">
                 PDB ID (optional)
-              </label>
-              <input
+              </Label>
+              <Input
                 type="text"
                 value={node.config?.pdb_id || ''}
                 onChange={(e) => handleConfigChange('pdb_id', e.target.value)}
@@ -599,10 +625,10 @@ export const PipelineNodeConfig: React.FC<PipelineNodeConfigProps> = ({
 
             {/* Contigs */}
             <div>
-              <label className="block text-xs font-medium text-gray-400 mb-2">
+              <Label className="text-xs font-medium text-gray-400 mb-2">
                 Contigs *
-              </label>
-              <input
+              </Label>
+              <Input
                 type="text"
                 value={node.config?.contigs || 'A50-150'}
                 onChange={(e) => handleConfigChange('contigs', e.target.value)}
@@ -616,10 +642,10 @@ export const PipelineNodeConfig: React.FC<PipelineNodeConfigProps> = ({
 
             {/* Hotspot Residues */}
             <div>
-              <label className="block text-xs font-medium text-gray-400 mb-2">
+              <Label className="text-xs font-medium text-gray-400 mb-2">
                 Hotspot Residues (optional)
-              </label>
-              <input
+              </Label>
+              <Input
                 type="text"
                 value={node.config?.hotspot_res || ''}
                 onChange={(e) => handleConfigChange('hotspot_res', e.target.value)}
@@ -633,10 +659,10 @@ export const PipelineNodeConfig: React.FC<PipelineNodeConfigProps> = ({
 
             {/* Diffusion Steps */}
             <div>
-              <label className="block text-xs font-medium text-gray-400 mb-2">
+              <Label className="text-xs font-medium text-gray-400 mb-2">
                 Diffusion Steps
-              </label>
-              <input
+              </Label>
+              <Input
                 type="number"
                 min="1"
                 max="100"
@@ -651,10 +677,10 @@ export const PipelineNodeConfig: React.FC<PipelineNodeConfigProps> = ({
 
             {/* Number of Designs */}
             <div>
-              <label className="block text-xs font-medium text-gray-400 mb-2">
+              <Label className="text-xs font-medium text-gray-400 mb-2">
                 Number of Designs
-              </label>
-              <input
+              </Label>
+              <Input
                 type="number"
                 min="1"
                 max="10"
@@ -773,35 +799,43 @@ export const PipelineNodeConfig: React.FC<PipelineNodeConfigProps> = ({
               <>
                 {/* Body Content Type */}
                 <div>
-                  <label className="block text-xs font-medium text-gray-400 mb-2">
+                  <Label className="text-xs font-medium text-gray-400 mb-2">
                     Body Content Type
-                  </label>
-                  <select
+                  </Label>
+                  <Select
                     value={node.config?.body_content_type || 'json'}
-                    onChange={(e) => handleConfigChange('body_content_type', e.target.value)}
-                    className={inputClassName}
+                    onValueChange={(value) => handleConfigChange('body_content_type', value)}
                   >
-                    <option value="json">JSON</option>
-                    <option value="form-data">Form Data</option>
-                    <option value="x-www-form-urlencoded">Form URL Encoded</option>
-                    <option value="raw">Raw</option>
-                  </select>
+                    <SelectTrigger className={inputClassName}>
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="json">JSON</SelectItem>
+                      <SelectItem value="form-data">Form Data</SelectItem>
+                      <SelectItem value="x-www-form-urlencoded">Form URL Encoded</SelectItem>
+                      <SelectItem value="raw">Raw</SelectItem>
+                    </SelectContent>
+                  </Select>
                 </div>
 
                 {/* Specify Body */}
                 <div>
-                  <label className="block text-xs font-medium text-gray-400 mb-2">
+                  <Label className="text-xs font-medium text-gray-400 mb-2">
                     Specify Body
-                  </label>
-                  <select
+                  </Label>
+                  <Select
                     value={node.config?.body_specify || 'json'}
-                    onChange={(e) => handleConfigChange('body_specify', e.target.value)}
-                    className={inputClassName}
+                    onValueChange={(value) => handleConfigChange('body_specify', value)}
                   >
-                    <option value="json">Using JSON</option>
-                    <option value="expression">Using Expression</option>
-                    <option value="fixed">Fixed</option>
-                  </select>
+                    <SelectTrigger className={inputClassName}>
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="json">Using JSON</SelectItem>
+                      <SelectItem value="expression">Using Expression</SelectItem>
+                      <SelectItem value="fixed">Fixed</SelectItem>
+                    </SelectContent>
+                  </Select>
                 </div>
 
                 {/* JSON Body */}
@@ -828,10 +862,10 @@ export const PipelineNodeConfig: React.FC<PipelineNodeConfigProps> = ({
               <p className="text-xs font-medium text-gray-400 mb-3">Legacy Parameters</p>
               
               <div>
-                <label className="block text-xs font-medium text-gray-400 mb-2">
+                <Label className="text-xs font-medium text-gray-400 mb-2">
                   Contigs
-                </label>
-                <input
+                </Label>
+                <Input
                   type="text"
                   value={node.config?.contigs || '50'}
                   onChange={(e) => handleConfigChange('contigs', e.target.value)}
@@ -844,10 +878,10 @@ export const PipelineNodeConfig: React.FC<PipelineNodeConfigProps> = ({
               </div>
 
               <div className="mt-4">
-                <label className="block text-xs font-medium text-gray-400 mb-2">
+                <Label className="text-xs font-medium text-gray-400 mb-2">
                   Number of Designs
-                </label>
-                <input
+                </Label>
+                <Input
                   type="number"
                   value={node.config?.num_designs || 1}
                   onChange={(e) => handleConfigChange('num_designs', parseInt(e.target.value) || 1)}
@@ -864,10 +898,10 @@ export const PipelineNodeConfig: React.FC<PipelineNodeConfigProps> = ({
         return (
           <div className="space-y-4">
             <div>
-              <label className="block text-xs font-medium text-gray-400 mb-2">
+              <Label className="text-xs font-medium text-gray-400 mb-2">
                 Number of Sequences
-              </label>
-              <input
+              </Label>
+              <Input
                 type="number"
                 value={node.config?.num_sequences || 8}
                 onChange={(e) => handleConfigChange('num_sequences', parseInt(e.target.value) || 8)}
@@ -877,10 +911,10 @@ export const PipelineNodeConfig: React.FC<PipelineNodeConfigProps> = ({
               />
             </div>
             <div>
-              <label className="block text-xs font-medium text-gray-400 mb-2">
+              <Label className="text-xs font-medium text-gray-400 mb-2">
                 Temperature
-              </label>
-              <input
+              </Label>
+              <Input
                 type="number"
                 step="0.1"
                 value={node.config?.temperature || 0.1}
@@ -897,10 +931,10 @@ export const PipelineNodeConfig: React.FC<PipelineNodeConfigProps> = ({
         return (
           <div className="space-y-4">
             <div>
-              <label className="block text-xs font-medium text-gray-400 mb-2">
+              <Label className="text-xs font-medium text-gray-400 mb-2">
                 Recycle Count
-              </label>
-              <input
+              </Label>
+              <Input
                 type="number"
                 value={node.config?.recycle_count || 3}
                 onChange={(e) => handleConfigChange('recycle_count', parseInt(e.target.value) || 3)}
@@ -910,10 +944,10 @@ export const PipelineNodeConfig: React.FC<PipelineNodeConfigProps> = ({
               />
             </div>
             <div>
-              <label className="block text-xs font-medium text-gray-400 mb-2">
+              <Label className="text-xs font-medium text-gray-400 mb-2">
                 Number of Relax Steps
-              </label>
-              <input
+              </Label>
+              <Input
                 type="number"
                 value={node.config?.num_relax || 0}
                 onChange={(e) => handleConfigChange('num_relax', parseInt(e.target.value) || 0)}
@@ -1382,12 +1416,14 @@ return {
       <div className="px-4 py-3 border-b border-gray-700/50 bg-gray-800/30 flex items-center justify-between">
         <div className="flex items-center gap-3">
           {onClose && (
-            <button
+            <Button
+              variant="ghost"
+              size="icon"
               onClick={onClose}
-              className="text-gray-400 hover:text-gray-200 transition-colors"
+              className="text-gray-400 hover:text-gray-200"
             >
               <ArrowLeft className="w-4 h-4" />
-            </button>
+            </Button>
           )}
           <div>
             <h3 className="text-sm font-semibold text-gray-200">{node.label}</h3>
@@ -1395,21 +1431,24 @@ return {
           </div>
         </div>
         <div className="flex items-center gap-2">
-          <button
+          <Button
             onClick={handleExecuteStep}
-            className="px-3 py-1.5 text-xs bg-orange-600 text-white rounded-lg hover:bg-orange-500 flex items-center gap-1.5 transition-colors"
+            size="sm"
+            className="bg-orange-600 hover:bg-orange-500 text-white"
           >
-            <Play className="w-3.5 h-3.5" />
+            <Play className="w-3.5 h-3.5 mr-1.5" />
             Execute step
-          </button>
+          </Button>
           {onClose && (
-            <button
+            <Button
+              variant="ghost"
+              size="icon"
               onClick={onClose}
-              className="p-1.5 text-gray-400 hover:text-gray-200 hover:bg-gray-700/50 rounded transition-colors"
+              className="text-gray-400 hover:text-gray-200"
               title="Close panel"
             >
               <X className="w-4 h-4" />
-            </button>
+            </Button>
           )}
         </div>
       </div>
