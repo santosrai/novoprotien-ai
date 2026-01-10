@@ -2,9 +2,7 @@ import { create } from 'zustand';
 import { persist, createJSONStorage } from 'zustand/middleware';
 import { Pipeline, PipelineNode, PipelineBlueprint, NodeStatus } from '../types/index';
 import { topologicalSort } from '../utils/topologicalSort';
-import { api } from '../../../utils/api';
-import { useAuthStore } from '../../../stores/authStore';
-import { useChatHistoryStore } from '../../../stores/chatHistoryStore';
+import { ApiClient, AuthState } from '../types/dependencies';
 
 // Execution log entry for tracking node execution history
 export interface ExecutionLogEntry {
@@ -83,10 +81,10 @@ interface PipelineState {
   deleteNode: (nodeId: string) => void;
   addEdge: (source: string, target: string) => void;
   deleteEdge: (source: string, target: string) => void;
-  savePipeline: (name: string, messageId?: string, conversationId?: string) => Promise<void>;
-  loadPipeline: (pipelineId: string) => Promise<void>;
-  deletePipeline: (pipelineId: string) => Promise<void>;
-  syncPipelines: () => Promise<void>;
+  savePipeline: (name: string, messageId?: string, conversationId?: string, deps?: { apiClient?: ApiClient; authState?: AuthState; sessionId?: string }) => Promise<void>;
+  loadPipeline: (pipelineId: string, deps?: { apiClient?: ApiClient; authState?: AuthState }) => Promise<void>;
+  deletePipeline: (pipelineId: string, deps?: { apiClient?: ApiClient; authState?: AuthState }) => Promise<void>;
+  syncPipelines: (deps?: { apiClient?: ApiClient; authState?: AuthState }) => Promise<void>;
   startExecution: () => void;
   executeSingleNode: (nodeId: string) => void;
   stopExecution: () => void;
@@ -105,6 +103,30 @@ interface PipelineState {
   addExecutionLog: (entry: Omit<ExecutionLogEntry, 'startedAt'>) => void;
   updateExecutionLog: (nodeId: string, updates: Partial<ExecutionLogEntry>) => void;
 }
+
+// Module-level dependency store (set by PipelineProvider)
+let globalDependencies: {
+  apiClient?: ApiClient;
+  authState?: AuthState;
+  sessionId?: string;
+} = {};
+
+/**
+ * Set dependencies for the pipeline store
+ * Called by PipelineProvider when context is available
+ */
+export const setPipelineDependencies = (deps: {
+  apiClient?: ApiClient;
+  authState?: AuthState;
+  sessionId?: string;
+}) => {
+  globalDependencies = deps;
+};
+
+/**
+ * Get current dependencies
+ */
+const getDependencies = () => globalDependencies;
 
 // Debounce timer for auto-save (shared across store instances)
 let autoSaveTimer: NodeJS.Timeout | null = null;
@@ -130,12 +152,15 @@ const debouncedAutoSave = (get: () => PipelineState, set: (partial: Partial<Pipe
       };
       localStorage.setItem(DRAFT_KEY, JSON.stringify(draft));
       
-      // Also save draft to backend if user is authenticated
-      const user = useAuthStore.getState().user;
-      if (user) {
+      // Also save draft to backend if dependencies are available
+      const deps = getDependencies();
+      const user = deps.authState?.user;
+      const apiClient = deps.apiClient;
+      
+      if (user && apiClient) {
         try {
           // Save as draft pipeline (status='draft')
-          await api.post('/pipelines', {
+          await apiClient.post('/pipelines', {
             ...draft,
             status: 'draft',
           });
@@ -450,7 +475,7 @@ export const usePipelineStore = create<PipelineState>()(
         debouncedAutoSave(get, set);
       },
       
-      savePipeline: async (name, messageId?: string, conversationId?: string) => {
+      savePipeline: async (name, messageId?: string, conversationId?: string, deps?: { apiClient?: ApiClient; authState?: AuthState; sessionId?: string }) => {
         const { currentPipeline, savedPipelines } = get();
         if (!currentPipeline) return;
         
@@ -460,9 +485,14 @@ export const usePipelineStore = create<PipelineState>()(
           updatedAt: new Date(),
         };
         
+        // Get dependencies from parameter or global store
+        const effectiveDeps = deps || getDependencies();
+        const user = effectiveDeps.authState?.user;
+        const apiClient = effectiveDeps.apiClient;
+        const sessionId = effectiveDeps.sessionId;
+        
         // Check if user is authenticated and save to backend
-        const user = useAuthStore.getState().user;
-        if (user) {
+        if (user && apiClient) {
           try {
             // Include message_id and conversation_id if provided (for message-scoped pipelines)
             const pipelineData: any = { ...pipelineToSave };
@@ -471,15 +501,12 @@ export const usePipelineStore = create<PipelineState>()(
             }
             if (conversationId) {
               pipelineData.conversation_id = conversationId;
-            } else if (!conversationId && messageId) {
-              // Try to get conversationId from active session if messageId is provided
-              const { activeSessionId } = useChatHistoryStore.getState();
-              if (activeSessionId) {
-                pipelineData.conversation_id = activeSessionId;
-              }
+            } else if (!conversationId && messageId && sessionId) {
+              // Use provided sessionId if available
+              pipelineData.conversation_id = sessionId;
             }
             
-            await api.post('/pipelines', pipelineData);
+            await apiClient.post('/pipelines', pipelineData);
             console.log('Pipeline saved to backend', messageId ? `(linked to message ${messageId})` : '');
           } catch (error: any) {
             console.error('Failed to save pipeline to backend:', error);
@@ -513,14 +540,18 @@ export const usePipelineStore = create<PipelineState>()(
         }
       },
       
-      loadPipeline: async (pipelineId) => {
+      loadPipeline: async (pipelineId, deps?: { apiClient?: ApiClient; authState?: AuthState }) => {
         const { savedPipelines } = get();
         
+        // Get dependencies from parameter or global store
+        const effectiveDeps = deps || getDependencies();
+        const user = effectiveDeps.authState?.user;
+        const apiClient = effectiveDeps.apiClient;
+        
         // Check if user is authenticated and try to load from backend
-        const user = useAuthStore.getState().user;
-        if (user) {
+        if (user && apiClient) {
           try {
-            const response = await api.get(`/pipelines/${pipelineId}`);
+            const response = await apiClient.get(`/pipelines/${pipelineId}`);
             const backendPipeline = response.data.pipeline;
             
             // Convert dates
@@ -567,16 +598,28 @@ export const usePipelineStore = create<PipelineState>()(
         }
       },
       
-      deletePipeline: async (pipelineId) => {
+      deletePipeline: async (pipelineId, deps?: { apiClient?: ApiClient; authState?: AuthState }) => {
+        // Get dependencies from parameter or global store
+        const effectiveDeps = deps || getDependencies();
+        const user = effectiveDeps.authState?.user;
+        const apiClient = effectiveDeps.apiClient;
+        
         // Check if user is authenticated and delete from backend
-        const user = useAuthStore.getState().user;
-        if (user) {
+        if (user && apiClient && apiClient.delete) {
           try {
-            await api.delete(`/pipelines/${pipelineId}`);
+            await apiClient.delete(`/pipelines/${pipelineId}`);
             console.log('Pipeline deleted from backend');
           } catch (error: any) {
             console.warn('Failed to delete pipeline from backend:', error);
             // Continue with local delete even if backend fails
+          }
+        } else if (user && apiClient) {
+          // Fallback: use post with method override if delete is not available
+          try {
+            await apiClient.post(`/pipelines/${pipelineId}`, {}, { headers: { 'X-HTTP-Method-Override': 'DELETE' } });
+            console.log('Pipeline deleted from backend');
+          } catch (error: any) {
+            console.warn('Failed to delete pipeline from backend:', error);
           }
         }
         
@@ -587,16 +630,20 @@ export const usePipelineStore = create<PipelineState>()(
         });
       },
       
-      syncPipelines: async () => {
-        const user = useAuthStore.getState().user;
-        if (!user) {
-          console.log('[syncPipelines] User not authenticated, skipping pipeline sync');
+      syncPipelines: async (deps?: { apiClient?: ApiClient; authState?: AuthState }) => {
+        // Get dependencies from parameter or global store
+        const effectiveDeps = deps || getDependencies();
+        const user = effectiveDeps.authState?.user;
+        const apiClient = effectiveDeps.apiClient;
+        
+        if (!user || !apiClient) {
+          console.log('[syncPipelines] User not authenticated or API client not available, skipping pipeline sync');
           return;
         }
         
         try {
           console.log('[syncPipelines] Fetching pipelines from backend for user:', user.id);
-          const response = await api.get('/pipelines');
+          const response = await apiClient.get('/pipelines');
           console.log('[syncPipelines] API response:', response.data);
           const backendPipelines = response.data.pipelines || [];
           console.log(`[syncPipelines] Found ${backendPipelines.length} pipelines in backend`);
@@ -607,7 +654,7 @@ export const usePipelineStore = create<PipelineState>()(
               try {
                 console.log(`[syncPipelines] Loading full pipeline data for: ${bp.id}`);
                 // Fetch full pipeline data
-                const fullResponse = await api.get(`/pipelines/${bp.id}`);
+                const fullResponse = await apiClient.get(`/pipelines/${bp.id}`);
                 const fullPipeline = fullResponse.data.pipeline;
                 
                 // Convert dates
@@ -1013,9 +1060,11 @@ export const usePipelineStore = create<PipelineState>()(
           
           // Sync with backend after rehydration (if user is authenticated)
           setTimeout(() => {
-            const user = useAuthStore.getState().user;
-            if (user && state.syncPipelines) {
-              state.syncPipelines().catch(console.error);
+            const deps = getDependencies();
+            const user = deps.authState?.user;
+            const apiClient = deps.apiClient;
+            if (user && apiClient && state.syncPipelines) {
+              state.syncPipelines({ apiClient, authState: deps.authState }).catch(console.error);
             }
           }, 1000); // Delay to ensure auth is loaded
         }

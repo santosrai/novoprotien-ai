@@ -1,6 +1,18 @@
 import React, { useState, useEffect } from 'react';
 import { usePipelineStore } from '../store/pipelineStore';
-import { X, Save, AlertCircle, CheckCircle2 } from 'lucide-react';
+import { usePipelineContext } from '../context/PipelineContext';
+import { Save, AlertCircle, CheckCircle2 } from 'lucide-react';
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogFooter,
+} from './ui/dialog';
+import { Input } from './ui/input';
+import { Label } from './ui/label';
+import { Button } from './ui/button';
+import { Alert, AlertDescription } from './ui/alert';
 
 interface SavePipelineDialogProps {
   isOpen: boolean;
@@ -14,6 +26,7 @@ export const SavePipelineDialog: React.FC<SavePipelineDialogProps> = ({
   onSave,
 }) => {
   const { currentPipeline, savedPipelines } = usePipelineStore();
+  const { apiClient, authState, sessionId } = usePipelineContext();
   const [pipelineName, setPipelineName] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [isSaving, setIsSaving] = useState(false);
@@ -58,7 +71,11 @@ export const SavePipelineDialog: React.FC<SavePipelineDialogProps> = ({
       if (onSave) {
         onSave(trimmedName);
       } else {
-        usePipelineStore.getState().savePipeline(trimmedName);
+        usePipelineStore.getState().savePipeline(trimmedName, undefined, undefined, {
+          apiClient,
+          authState,
+          sessionId,
+        });
       }
       
       // Show success state briefly
@@ -91,29 +108,17 @@ export const SavePipelineDialog: React.FC<SavePipelineDialogProps> = ({
     }
   };
 
-  if (!isOpen) return null;
-
   return (
-    <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-[100]">
-      <div className="bg-[#1e1e32] border border-gray-700/50 rounded-xl shadow-2xl w-full max-w-md mx-4">
-        {/* Header */}
-        <div className="flex items-center justify-between p-4 border-b border-gray-700/50">
-          <div className="flex items-center gap-2">
-            <Save className="w-5 h-5 text-gray-300" />
-            <h2 className="text-lg font-semibold text-gray-200">
-              {isEditing ? 'Update Pipeline' : 'Save Pipeline'}
-            </h2>
-          </div>
-          <button
-            onClick={handleCancel}
-            className="text-gray-400 hover:text-gray-200 transition-colors"
-          >
-            <X className="w-5 h-5" />
-          </button>
-        </div>
+    <Dialog open={isOpen} onOpenChange={(open) => !open && handleCancel()}>
+      <DialogContent className="sm:max-w-md bg-[#1e1e32] border-gray-700/50">
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-2 text-gray-200">
+            <Save className="w-5 h-5" />
+            {isEditing ? 'Update Pipeline' : 'Save Pipeline'}
+          </DialogTitle>
+        </DialogHeader>
 
-        {/* Content */}
-        <div className="p-4 space-y-4">
+        <div className="space-y-4">
           {showSuccess ? (
             <div className="flex flex-col items-center justify-center py-8 space-y-3">
               <div className="w-16 h-16 rounded-full bg-green-500/20 flex items-center justify-center">
@@ -130,11 +135,12 @@ export const SavePipelineDialog: React.FC<SavePipelineDialogProps> = ({
             </div>
           ) : (
             <>
-              <div>
-                <label className="block text-sm font-medium text-gray-300 mb-2">
+              <div className="space-y-2">
+                <Label htmlFor="pipeline-name" className="text-gray-300">
                   Pipeline Name
-                </label>
-                <input
+                </Label>
+                <Input
+                  id="pipeline-name"
                   type="text"
                   value={pipelineName}
                   onChange={(e) => {
@@ -143,15 +149,15 @@ export const SavePipelineDialog: React.FC<SavePipelineDialogProps> = ({
                   }}
                   onKeyDown={handleKeyDown}
                   placeholder="Enter pipeline name..."
-                  className="w-full px-3 py-2 bg-gray-800 border border-gray-600 rounded-lg text-gray-200 placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent disabled:opacity-50 disabled:cursor-not-allowed"
+                  className="bg-gray-800 border-gray-600 text-gray-200 placeholder-gray-500"
                   autoFocus
                   disabled={isSaving}
                 />
                 {error && (
-                  <div className="mt-2 flex items-center gap-2 text-sm text-red-400">
-                    <AlertCircle className="w-4 h-4" />
-                    <span>{error}</span>
-                  </div>
+                  <Alert variant="destructive" className="mt-2">
+                    <AlertCircle className="h-4 w-4" />
+                    <AlertDescription>{error}</AlertDescription>
+                  </Alert>
                 )}
               </div>
 
@@ -177,37 +183,37 @@ export const SavePipelineDialog: React.FC<SavePipelineDialogProps> = ({
           )}
         </div>
 
-        {/* Footer */}
         {!showSuccess && (
-          <div className="flex items-center justify-end gap-2 p-4 border-t border-gray-700/50">
-            <button
+          <DialogFooter>
+            <Button
+              variant="outline"
               onClick={handleCancel}
               disabled={isSaving}
-              className="px-4 py-2 text-sm font-medium text-gray-300 bg-gray-700 hover:bg-gray-600 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+              className="bg-gray-700 text-gray-300 hover:bg-gray-600"
             >
               Cancel
-            </button>
-            <button
+            </Button>
+            <Button
               onClick={handleSave}
               disabled={!pipelineName.trim() || isSaving}
-              className="px-4 py-2 text-sm font-medium text-white bg-blue-600 hover:bg-blue-500 disabled:bg-gray-700 disabled:text-gray-500 disabled:cursor-not-allowed rounded-lg transition-colors flex items-center gap-2"
+              className="bg-blue-600 hover:bg-blue-500"
             >
               {isSaving ? (
                 <>
-                  <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                  <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin mr-2" />
                   {isEditing ? 'Updating...' : 'Saving...'}
                 </>
               ) : (
                 <>
-                  <Save className="w-4 h-4" />
+                  <Save className="w-4 h-4 mr-2" />
                   {isEditing ? 'Update' : 'Save'}
                 </>
               )}
-            </button>
-          </div>
+            </Button>
+          </DialogFooter>
         )}
-      </div>
-    </div>
+      </DialogContent>
+    </Dialog>
   );
 };
 

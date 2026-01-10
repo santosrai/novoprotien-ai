@@ -1,0 +1,49 @@
+# Development files
+node_modules/
+*.log
+.DS_Store
+.env
+.env.local
+*.tsbuildinfo
+
+# Source files (only dist/ is published)
+src/
+*.ts
+*.tsx
+!*.d.ts
+
+# Development config
+tsconfig.json
+vite.config.ts
+postcss.config.js
+tailwind.config.js
+components.json
+
+# Git
+.git/
+.gitignore
+
+# Documentation (keep README.md, ignore others)
+SETUP.md
+*.md
+!README.md
+
+# Tests
+tests/
+test/
+__tests__/
+*.test.ts
+*.test.tsx
+*.spec.ts
+*.spec.tsx
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Build artifacts (keep dist/)
+*.map
+!dist/

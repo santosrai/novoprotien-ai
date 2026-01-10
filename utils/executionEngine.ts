@@ -921,49 +921,19 @@ export async function executeNode(
     case 'code_execution':
       // Execute JavaScript code in a controlled environment
       try {
-        // #region agent log
-        const logEntry1 = {location:'executionEngine.ts:425',message:'code_execution entry',data:{nodeId:node.id,nodeType:node.type,execConfigCode:(executionConfig as any).code,nodeConfigCode:node.config?.code,hasInputData:Object.keys(inputData).length>0},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'H1'};
-        console.log('[DEBUG]', logEntry1);
-        fetch('http://127.0.0.1:7243/ingest/e128561e-dec0-450c-a8ea-2bf15be2e2f5',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(logEntry1)}).catch((e)=>console.warn('[DEBUG] Log fetch failed:',e));
-        // #endregion
-        
         let code = (executionConfig as any).code;
-        
-        // #region agent log
-        const hasTemplate = typeof code === 'string' && code.includes('{{');
-        const logEntry2 = {location:'executionEngine.ts:432',message:'code before template resolution',data:{code:code,codeType:typeof code,hasTemplate:hasTemplate,codeLength:code?.length},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'H2'};
-        console.log('[DEBUG]', logEntry2);
-        fetch('http://127.0.0.1:7243/ingest/e128561e-dec0-450c-a8ea-2bf15be2e2f5',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(logEntry2)}).catch((e)=>console.warn('[DEBUG] Log fetch failed:',e));
-        // #endregion
         
         // If code is a template string, resolve it
         if (typeof code === 'string' && code.includes('{{')) {
           code = resolveTemplates(code, node, inputData) as string;
-          
-          // #region agent log
-          const logEntry3 = {location:'executionEngine.ts:436',message:'code after template resolution',data:{code:code?.substring(0,100),codeLength:code?.length},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'H2'};
-          console.log('[DEBUG]', logEntry3);
-          fetch('http://127.0.0.1:7243/ingest/e128561e-dec0-450c-a8ea-2bf15be2e2f5',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(logEntry3)}).catch((e)=>console.warn('[DEBUG] Log fetch failed:',e));
-          // #endregion
         }
         
         // Default to empty string if code is undefined or null
         if (!code || code.trim() === '') {
           code = node.config?.code || '';
-          
-          // #region agent log
-          const logEntry4 = {location:'executionEngine.ts:440',message:'code fallback to node.config',data:{code:code?.substring(0,100),codeLength:code?.length},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'H1'};
-          console.log('[DEBUG]', logEntry4);
-          fetch('http://127.0.0.1:7243/ingest/e128561e-dec0-450c-a8ea-2bf15be2e2f5',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(logEntry4)}).catch((e)=>console.warn('[DEBUG] Log fetch failed:',e));
-          // #endregion
         }
         
         if (!code || code.trim() === '') {
-          // #region agent log
-          const logEntry5 = {location:'executionEngine.ts:444',message:'code execution failed - no code',data:{execConfigCode:(executionConfig as any).code,nodeConfigCode:node.config?.code},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'H1'};
-          console.error('[DEBUG]', logEntry5);
-          fetch('http://127.0.0.1:7243/ingest/e128561e-dec0-450c-a8ea-2bf15be2e2f5',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(logEntry5)}).catch((e)=>console.warn('[DEBUG] Log fetch failed:',e));
-          // #endregion
           throw new Error('No code provided for code execution node');
         }
         
@@ -996,21 +966,10 @@ export async function executeNode(
           JSON: JSON,
         };
         
-        // #region agent log
-        const logEntry6 = {location:'executionEngine.ts:470',message:'execution context created',data:{inputKeys:Object.keys(inputData),configKeys:Object.keys(executionContext.config),nodeId:executionContext.node.id,codeLength:code.length},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'H6'};
-        console.log('[DEBUG]', logEntry6);
-        fetch('http://127.0.0.1:7243/ingest/e128561e-dec0-450c-a8ea-2bf15be2e2f5',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(logEntry6)}).catch((e)=>console.warn('[DEBUG] Log fetch failed:',e));
-        // #endregion
-        
         // Execute code in a controlled function
         // Using Function constructor for better isolation than eval
         let result: any;
         try {
-          // #region agent log
-          const logEntry7 = {location:'executionEngine.ts:477',message:'about to execute code',data:{codePreview:code.substring(0,50)},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'H3'};
-          console.log('[DEBUG]', logEntry7);
-          fetch('http://127.0.0.1:7243/ingest/e128561e-dec0-450c-a8ea-2bf15be2e2f5',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(logEntry7)}).catch((e)=>console.warn('[DEBUG] Log fetch failed:',e));
-          // #endregion
           
           const func = new Function(
             'input',
@@ -1033,42 +992,14 @@ export async function executeNode(
             executionContext.JSON
           );
           
-          // #region agent log
-          const resultKeys = (result && typeof result === 'object') ? Object.keys(result) : null;
-          const logEntry8 = {location:'executionEngine.ts:500',message:'code executed successfully',data:{resultType:typeof result,resultIsObject:typeof result==='object',resultKeys:resultKeys,resultPreview:JSON.stringify(result).substring(0,100)},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'H3'};
-          console.log('[DEBUG]', logEntry8);
-          fetch('http://127.0.0.1:7243/ingest/e128561e-dec0-450c-a8ea-2bf15be2e2f5',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(logEntry8)}).catch((e)=>console.warn('[DEBUG] Log fetch failed:',e));
-          // #endregion
-          
           // If no return value, use undefined
           if (result === undefined) {
             result = { executed: true, timestamp: new Date().toISOString() };
-            
-            // #region agent log
-            const logEntry9 = {location:'executionEngine.ts:505',message:'result was undefined, using default',data:{result},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'H4'};
-            console.log('[DEBUG]', logEntry9);
-            fetch('http://127.0.0.1:7243/ingest/e128561e-dec0-450c-a8ea-2bf15be2e2f5',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(logEntry9)}).catch((e)=>console.warn('[DEBUG] Log fetch failed:',e));
-            // #endregion
           }
         } catch (execError: any) {
-          // #region agent log
-          const logEntry10 = {location:'executionEngine.ts:510',message:'code execution error',data:{error:execError.message,errorStack:execError.stack?.substring(0,200)},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'H3'};
-          console.error('[DEBUG]', logEntry10);
-          fetch('http://127.0.0.1:7243/ingest/e128561e-dec0-450c-a8ea-2bf15be2e2f5',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(logEntry10)}).catch((e)=>console.warn('[DEBUG] Log fetch failed:',e));
-          // #endregion
           console.error(`[Code Execution Error in ${node.label}]`, execError);
           throw new Error(`Code execution failed: ${execError.message || 'Unknown error'}`);
         }
-        
-        // Log execution result
-        console.log(`[Code Execution: ${node.label}] Result:`, result);
-        
-        // #region agent log
-        const resultKeys2 = (result && typeof result === 'object') ? Object.keys(result) : null;
-        const logEntry11 = {location:'executionEngine.ts:520',message:'returning execution result',data:{resultType:typeof result,resultIsObject:typeof result==='object',resultKeys:resultKeys2},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'H4'};
-        console.log('[DEBUG]', logEntry11);
-        fetch('http://127.0.0.1:7243/ingest/e128561e-dec0-450c-a8ea-2bf15be2e2f5',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(logEntry11)}).catch((e)=>console.warn('[DEBUG] Log fetch failed:',e));
-        // #endregion
         
         // Return the execution result
         return {
