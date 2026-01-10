@@ -1,67 +1,20 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Folder, File, ChevronRight, ChevronDown, Search, Loader2, Trash2, Eye } from 'lucide-react';
-import { api } from '../utils/api';
-
-interface FileMetadata {
-  file_id: string;
-  type: 'upload' | 'rfdiffusion' | 'alphafold' | 'proteinmpnn';
-  filename: string;
-  size: number;
-  job_id?: string;
-  download_url: string;
-  metadata?: Record<string, any>;
-}
+import { useFiles, FileMetadata } from '../hooks/queries/useFiles';
+import { useFileDelete } from '../hooks/mutations/useFileUpload';
+import { useQueryClient } from '@tanstack/react-query';
 
 interface FileBrowserProps {
   onFileSelect: (file: FileMetadata) => void;
 }
 
 export const FileBrowser: React.FC<FileBrowserProps> = ({ onFileSelect }) => {
-  const [files, setFiles] = useState<FileMetadata[]>([]);
-  const [loading, setLoading] = useState(false);
+  const { data: files = [], isLoading, error } = useFiles();
+  const deleteFile = useFileDelete();
+  const queryClient = useQueryClient();
   const [expandedFolders, setExpandedFolders] = useState<Set<string>>(new Set(['uploads', 'rfdiffusion', 'alphafold', 'proteinmpnn']));
   const [searchQuery, setSearchQuery] = useState('');
   const [deletingFileId, setDeletingFileId] = useState<string | null>(null);
-
-  const loadFiles = useCallback(async () => {
-    console.log('[FileBrowser] Loading all user files');
-    setLoading(true);
-    try {
-      // Use /api/files endpoint to get all user files (not just session-specific)
-      // Files are already user-scoped in the database, so no risk of mixing users
-      // Note: api.get('/files') will become /api/files since baseURL includes /api
-      const response = await api.get(`/files`);
-      console.log('[FileBrowser] Response:', response.data);
-      if (response.data && response.data.status === 'success') {
-        const files = response.data.files || [];
-        console.log('[FileBrowser] Loaded files:', files.length, files);
-        setFiles(files);
-      } else {
-        console.warn('[FileBrowser] Unexpected response format:', response.data);
-        setFiles([]);
-      }
-    } catch (error: any) {
-      console.error('[FileBrowser] Failed to load user files:', error);
-      if (error.response) {
-        console.error('[FileBrowser] Error response:', error.response.status, error.response.data);
-        if (error.response.status === 401) {
-          console.error('[FileBrowser] Authentication failed - user may need to log in again');
-        } else if (error.response.status === 404) {
-          console.warn('[FileBrowser] User files endpoint not found - server may need restart');
-        } else if (error.response.status === 500) {
-          console.error('[FileBrowser] Server error:', error.response.data);
-        }
-      } else if (error.request) {
-        console.error('[FileBrowser] No response received - server may be down or endpoint not accessible');
-        console.error('[FileBrowser] Request URL:', error.config?.url);
-      } else {
-        console.error('[FileBrowser] Error setting up request:', error.message);
-      }
-      setFiles([]);
-    } finally {
-      setLoading(false);
-    }
-  }, []);
 
   // Listen for custom events to refresh files
   useEffect(() => {
@@ -70,18 +23,13 @@ export const FileBrowser: React.FC<FileBrowserProps> = ({ onFileSelect }) => {
       // Small delay to ensure backend has saved the file
       setTimeout(() => {
         console.log('[FileBrowser] Refreshing files after session-file-added event');
-        loadFiles();
-      }, 1000); // Increased delay to match PipelineExecution
+        queryClient.invalidateQueries({ queryKey: ['files'] });
+      }, 1000);
     };
 
     window.addEventListener('session-file-added', handleFileAdded);
     return () => window.removeEventListener('session-file-added', handleFileAdded);
-  }, [loadFiles]);
-
-  // Load files on mount and when loadFiles changes
-  useEffect(() => {
-    loadFiles();
-  }, [loadFiles]);
+  }, [queryClient]);
 
   const toggleFolder = (folder: string) => {
     const newExpanded = new Set(expandedFolders);
@@ -126,16 +74,13 @@ export const FileBrowser: React.FC<FileBrowserProps> = ({ onFileSelect }) => {
     
     setDeletingFileId(file.file_id);
     try {
-      // Use generic file delete endpoint (files are user-scoped, so no session needed)
-      await api.delete(`/files/${file.file_id}`);
+      await deleteFile.mutateAsync(file.file_id);
       console.log('[FileBrowser] File deleted successfully:', file.file_id);
-      // Refresh file list
-      await loadFiles();
       // Dispatch event to notify other components
       window.dispatchEvent(new CustomEvent('session-file-deleted', { detail: { file_id: file.file_id } }));
     } catch (error: any) {
       console.error('[FileBrowser] Failed to delete file:', error);
-      alert(`Failed to delete file: ${error.response?.data?.error || error.response?.data?.detail || error.message}`);
+      alert(`Failed to delete file: ${error.message || 'Unknown error'}`);
     } finally {
       setDeletingFileId(null);
     }
@@ -219,10 +164,21 @@ export const FileBrowser: React.FC<FileBrowserProps> = ({ onFileSelect }) => {
     );
   };
 
-  if (loading) {
+  if (isLoading) {
     return (
       <div className="h-full flex items-center justify-center">
         <Loader2 className="w-6 h-6 animate-spin text-gray-400" />
+      </div>
+    );
+  }
+
+  if (error) {
+    return (
+      <div className="h-full flex items-center justify-center">
+        <div className="text-center text-red-500">
+          <p className="text-sm">Failed to load files</p>
+          <p className="text-xs mt-1">{error instanceof Error ? error.message : 'Unknown error'}</p>
+        </div>
       </div>
     );
   }

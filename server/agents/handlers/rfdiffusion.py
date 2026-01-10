@@ -42,6 +42,7 @@ class RFdiffusionHandler:
         self.sequence_extractor = SequenceExtractor()
         self.rfdiffusion_client = None  # Initialize when needed
         self.active_jobs = {}  # Track running jobs
+        self.job_results = {}  # Store completed job results
     
     def _get_rfdiffusion_client(self) -> RFdiffusionClient:
         """Get or create RFdiffusion client"""
@@ -511,19 +512,23 @@ class RFdiffusionHandler:
                     
                     self.active_jobs[job_id] = "completed"
                     
+                    # Store result data for status endpoint
+                    result_data = {
+                        "pdbContent": pdb_content,
+                        "fileId": job_id,  # File ID for frontend to load from server
+                        "filename": filename,
+                        "filepath": filepath,
+                        "metadata": {
+                            "job_id": job_id,
+                            "parameters": parameters,
+                            "design_mode": parameters.get("design_mode", "unknown")
+                        }
+                    }
+                    self.job_results[job_id] = result_data
+                    
                     return {
                         "status": "success",
-                        "data": {
-                            "pdbContent": pdb_content,
-                            "fileId": job_id,  # File ID for frontend to load from server
-                            "filename": filename,
-                            "filepath": filepath,
-                            "metadata": {
-                                "job_id": job_id,
-                                "parameters": parameters,
-                                "design_mode": parameters.get("design_mode", "unknown")
-                            }
-                        }
+                        "data": result_data
                     }
                 else:
                     self.active_jobs[job_id] = "error"
@@ -549,10 +554,56 @@ class RFdiffusionHandler:
     def get_job_status(self, job_id: str) -> Dict[str, Any]:
         """Get status of a running job"""
         status = self.active_jobs.get(job_id, "not_found")
-        return {
+        response = {
             "job_id": job_id,
             "status": status
         }
+        
+        # If job is completed, include result data
+        if status == "completed" and job_id in self.job_results:
+            response["data"] = self.job_results[job_id]
+        elif status == "error":
+            # Include error message if available
+            if job_id in self.job_results:
+                response["error"] = self.job_results[job_id].get("error", "Job failed")
+        elif status == "not_found":
+            # Check if result file exists in storage (job may have completed before restart)
+            try:
+                from ...domain.storage.file_access import get_file_metadata
+                file_metadata = get_file_metadata(job_id)
+                if file_metadata and file_metadata.get("file_type") == "rfdiffusion":
+                    # Result file exists, try to load it
+                    from pathlib import Path
+                    base_dir = Path(__file__).parent.parent.parent
+                    stored_path = file_metadata.get("stored_path")
+                    if stored_path:
+                        file_path = base_dir / stored_path
+                        if file_path.exists():
+                            # Read PDB content
+                            pdb_content = file_path.read_text(encoding="utf-8")
+                            metadata = file_metadata.get("metadata", {})
+                            if isinstance(metadata, str):
+                                import json
+                                try:
+                                    metadata = json.loads(metadata)
+                                except:
+                                    metadata = {}
+                            
+                            response["status"] = "completed"
+                            response["data"] = {
+                                "pdbContent": pdb_content,
+                                "fileId": job_id,
+                                "filename": file_metadata.get("original_filename", f"rfdiffusion_{job_id}.pdb"),
+                                "filepath": stored_path,
+                                "metadata": metadata
+                            }
+                            # Store in job_results for future requests
+                            self.job_results[job_id] = response["data"]
+            except Exception as e:
+                logger.debug(f"Could not recover RFdiffusion job {job_id} from storage: {e}")
+                # Keep status as "not_found"
+        
+        return response
     
     def cancel_job(self, job_id: str) -> Dict[str, Any]:
         """Cancel a running job"""

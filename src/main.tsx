@@ -1,6 +1,8 @@
 import React from 'react'
 import ReactDOM from 'react-dom/client'
 import { BrowserRouter, Routes, Route } from 'react-router-dom'
+import { QueryClientProvider } from '@tanstack/react-query'
+import { queryClient } from './utils/queryClient'
 import App from './App.tsx'
 import { LandingPage } from './pages/LandingPage.tsx'
 import { PricingPage } from './pages/PricingPage.tsx'
@@ -20,9 +22,10 @@ if (!rootElement) {
 
 ReactDOM.createRoot(rootElement).render(
   <React.StrictMode>
-    <ErrorBoundary>
-      <BrowserRouter>
-        <Routes>
+    <QueryClientProvider client={queryClient}>
+      <ErrorBoundary>
+        <BrowserRouter>
+          <Routes>
           {/* Public Landing Page */}
           <Route path="/" element={<LandingPage />} />
           <Route path="/pricing" element={<PricingPage />} />
@@ -102,8 +105,9 @@ ReactDOM.createRoot(rootElement).render(
               </AuthGuard>
             }
           />
-        </Routes>
-      </BrowserRouter>
-    </ErrorBoundary>
+          </Routes>
+        </BrowserRouter>
+      </ErrorBoundary>
+    </QueryClientProvider>
   </React.StrictMode>,
 )

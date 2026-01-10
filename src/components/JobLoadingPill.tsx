@@ -1,8 +1,9 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect } from 'react';
 import { X, Clock } from 'lucide-react';
-import { api } from '../utils/api';
 import { Message } from '../stores/chatHistoryStore';
-import { JobPoller, JobStatus } from '../utils/jobPoller';
+import { useJobStatus } from '../hooks/queries/useJobStatus';
+import { useAlphaFoldCancel,  } from '../hooks/mutations/useAlphaFold';
+import { useRFdiffusionCancel as useRFdiffusionCancelHook } from '../hooks/mutations/useRFdiffusion';
 
 interface JobLoadingPillProps {
   message: Message;
@@ -17,61 +18,58 @@ export const JobLoadingPill: React.FC<JobLoadingPillProps> = ({
   onJobError,
   onCancel
 }) => {
-  const [status, setStatus] = useState<'running' | 'completed' | 'error'>('running');
-  const [progress, setProgress] = useState(0);
-  const [progressMessage, setProgressMessage] = useState<string>('');
+  const jobType = (message.jobType === 'proteinmpnn' ? 'alphafold' : message.jobType) || 'alphafold';
+  const { data: jobStatus, error: jobError } = useJobStatus(
+    message.jobId || null,
+    jobType as 'alphafold' | 'rfdiffusion' | 'proteinmpnn',
+    {
+      enabled: !!message.jobId,
+      refetchInterval: 3000,
+      maxPollTime: 2 * 60 * 60 * 1000, // 2 hours
+    }
+  );
+  
+  const cancelAlphaFold = useAlphaFoldCancel();
+  const cancelRFdiffusion = useRFdiffusionCancelHook();
+  
   const [elapsedTime, setElapsedTime] = useState(0);
-  const pollerRef = useRef<JobPoller | null>(null);
+  const [startTime] = useState(Date.now());
 
-  // Initialize job poller
+  // Update progress and status from job status
+  const progress = jobStatus?.progress || 0;
+  const progressMessage = jobStatus?.progress_message || '';
+  const status = jobStatus?.status === 'completed' ? 'completed' 
+    : jobStatus?.status === 'error' ? 'error'
+    : jobStatus?.status === 'not_found' ? 'error' // Treat not_found as error (job lost after restart)
+    : 'running';
+
+  // Handle job completion
   useEffect(() => {
-    if (!message.jobId || status !== 'running') return;
+    if (jobStatus?.status === 'completed' && jobStatus.data) {
+      onJobComplete(jobStatus.data);
+    }
+  }, [jobStatus?.status, jobStatus?.data, onJobComplete]);
 
-    const poller = new JobPoller({
-      jobId: message.jobId,
-      jobType: (message.jobType === 'proteinmpnn' ? 'alphafold' : message.jobType) || 'alphafold',
-      enableWebSocket: true,
-      maxPollTime: 7200, // 2 hours
-      onUpdate: (jobStatus: JobStatus) => {
-        setProgress(jobStatus.progress || 0);
-        if (jobStatus.progress_message) {
-          setProgressMessage(jobStatus.progress_message);
-        }
-        if (jobStatus.status === 'error') {
-          setStatus('error');
-        }
-      },
-      onComplete: (data: any) => {
-        setStatus('completed');
-        setProgress(100);
-        onJobComplete(data);
-      },
-      onError: (error: string) => {
-        setStatus('error');
-        onJobError(error);
-      }
-    });
-
-    pollerRef.current = poller;
-    poller.start();
-
-    return () => {
-      poller.stop();
-      pollerRef.current = null;
-    };
-  }, [message.jobId, message.jobType, status, onJobComplete, onJobError]);
+  // Handle job error
+  useEffect(() => {
+    if (jobStatus?.status === 'error' || jobStatus?.status === 'not_found' || jobError) {
+      const errorMessage = jobStatus?.status === 'not_found' 
+        ? 'Job not found. The server may have been restarted. Please try submitting the job again.'
+        : jobStatus?.error || jobError?.message || 'Job failed';
+      onJobError(errorMessage);
+    }
+  }, [jobStatus?.status, jobStatus?.error, jobError, onJobError]);
 
   // Elapsed time counter
   useEffect(() => {
     if (status !== 'running') return;
     
-    const startTime = Date.now();
     const timer = setInterval(() => {
       setElapsedTime(Math.floor((Date.now() - startTime) / 1000));
     }, 1000);
     
     return () => clearInterval(timer);
-  }, [status]);
+  }, [status, startTime]);
 
   const formatTime = (seconds: number) => {
     const mins = Math.floor(seconds / 60);
@@ -91,18 +89,12 @@ export const JobLoadingPill: React.FC<JobLoadingPillProps> = ({
     if (!message.jobId) return;
     
     try {
-      const endpoint = message.jobType === 'rfdiffusion' 
-        ? `/api/rfdiffusion/cancel/${message.jobId}`
-        : `/api/alphafold/cancel/${message.jobId}`;
-        
-      await api.post(endpoint);
-      
-      // Stop poller
-      if (pollerRef.current) {
-        pollerRef.current.stop();
+      if (message.jobType === 'rfdiffusion') {
+        await cancelRFdiffusion.mutateAsync(message.jobId);
+      } else {
+        await cancelAlphaFold.mutateAsync(message.jobId);
       }
       
-      setStatus('error');
       onCancel?.();
     } catch (error) {
       console.error('Failed to cancel job:', error);
