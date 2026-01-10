@@ -2,6 +2,49 @@
 @tailwind components;
 @tailwind utilities;
 
+/* ===== App Theme Variables ===== */
+:root {
+  /* Light theme (default) */
+  --app-bg: 248 250 252;           /* slate-50 */
+  --app-bg-secondary: 255 255 255;  /* white */
+  --app-bg-tertiary: 241 245 249;   /* slate-100 */
+  --app-bg-hover: 226 232 240;      /* slate-200 */
+  --app-text: 15 23 42;             /* slate-900 */
+  --app-text-secondary: 71 85 105;  /* slate-600 */
+  --app-text-muted: 148 163 184;    /* slate-400 */
+  --app-border: 226 232 240;        /* slate-200 */
+  --app-border-strong: 203 213 225; /* slate-300 */
+  --app-primary: 59 130 246;        /* blue-500 */
+  --app-primary-hover: 37 99 235;   /* blue-600 */
+  --app-card: 255 255 255;          /* white */
+  --app-card-hover: 248 250 252;    /* slate-50 */
+  --app-input: 255 255 255;         /* white */
+  --app-input-border: 203 213 225;  /* slate-300 */
+  --app-shadow: 0 0 0 / 0.1;
+  color-scheme: light;
+}
+
+.dark {
+  /* Dark theme */
+  --app-bg: 15 23 42;               /* slate-900 */
+  --app-bg-secondary: 30 41 59;     /* slate-800 */
+  --app-bg-tertiary: 51 65 85;      /* slate-700 */
+  --app-bg-hover: 71 85 105;        /* slate-600 */
+  --app-text: 248 250 252;          /* slate-50 */
+  --app-text-secondary: 203 213 225;/* slate-300 */
+  --app-text-muted: 148 163 184;    /* slate-400 */
+  --app-border: 51 65 85;           /* slate-700 */
+  --app-border-strong: 71 85 105;   /* slate-600 */
+  --app-primary: 96 165 250;        /* blue-400 */
+  --app-primary-hover: 147 197 253; /* blue-300 */
+  --app-card: 30 41 59;             /* slate-800 */
+  --app-card-hover: 51 65 85;       /* slate-700 */
+  --app-input: 51 65 85;            /* slate-700 */
+  --app-input-border: 71 85 105;    /* slate-600 */
+  --app-shadow: 0 0 0 / 0.3;
+  color-scheme: dark;
+}
+
 body {
   margin: 0;
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen',
@@ -9,6 +52,156 @@ body {
     sans-serif;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+  background-color: rgb(var(--app-bg));
+  color: rgb(var(--app-text));
+  transition: background-color 0.3s ease, color 0.3s ease;
+}
+
+/* ===== Dark Mode Utility Classes ===== */
+@layer utilities {
+  /* Background utilities */
+  .bg-app { background-color: rgb(var(--app-bg)); }
+  .bg-app-secondary { background-color: rgb(var(--app-bg-secondary)); }
+  .bg-app-tertiary { background-color: rgb(var(--app-bg-tertiary)); }
+  .bg-app-card { background-color: rgb(var(--app-card)); }
+  .bg-app-input { background-color: rgb(var(--app-input)); }
+  
+  /* Text utilities */
+  .text-app { color: rgb(var(--app-text)); }
+  .text-app-secondary { color: rgb(var(--app-text-secondary)); }
+  .text-app-muted { color: rgb(var(--app-text-muted)); }
+  
+  /* Border utilities */
+  .border-app { border-color: rgb(var(--app-border)); }
+  .border-app-strong { border-color: rgb(var(--app-border-strong)); }
+  .border-app-input { border-color: rgb(var(--app-input-border)); }
+  
+  /* Hover states */
+  .hover\:bg-app-hover:hover { background-color: rgb(var(--app-bg-hover)); }
+  .hover\:bg-app-card-hover:hover { background-color: rgb(var(--app-card-hover)); }
+}
+
+/* ===== Dark Mode Component Overrides ===== */
+
+/* General card/panel styling */
+.dark .bg-white {
+  background-color: rgb(var(--app-card));
+}
+
+.dark .bg-gray-50 {
+  background-color: rgb(var(--app-bg));
+}
+
+.dark .bg-gray-100 {
+  background-color: rgb(var(--app-bg-tertiary));
+}
+
+/* Text colors in dark mode */
+.dark .text-gray-900 {
+  color: rgb(var(--app-text));
+}
+
+.dark .text-gray-800 {
+  color: rgb(var(--app-text));
+}
+
+.dark .text-gray-700 {
+  color: rgb(var(--app-text-secondary));
+}
+
+.dark .text-gray-600 {
+  color: rgb(var(--app-text-secondary));
+}
+
+.dark .text-gray-500 {
+  color: rgb(var(--app-text-muted));
+}
+
+.dark .text-gray-400 {
+  color: rgb(var(--app-text-muted));
+}
+
+/* Border colors in dark mode */
+.dark .border-gray-200 {
+  border-color: rgb(var(--app-border));
+}
+
+.dark .border-gray-300 {
+  border-color: rgb(var(--app-border-strong));
+}
+
+/* Form inputs in dark mode */
+.dark input:not([type="checkbox"]):not([type="radio"]),
+.dark textarea,
+.dark select {
+  background-color: rgb(var(--app-input));
+  border-color: rgb(var(--app-input-border));
+  color: rgb(var(--app-text));
+}
+
+.dark input:not([type="checkbox"]):not([type="radio"])::placeholder,
+.dark textarea::placeholder {
+  color: rgb(var(--app-text-muted));
+}
+
+.dark input:not([type="checkbox"]):not([type="radio"]):focus,
+.dark textarea:focus,
+.dark select:focus {
+  border-color: rgb(var(--app-primary));
+  outline-color: rgb(var(--app-primary));
+}
+
+/* Hover states in dark mode */
+.dark .hover\:bg-gray-50:hover {
+  background-color: rgb(var(--app-bg-tertiary));
+}
+
+.dark .hover\:bg-gray-100:hover {
+  background-color: rgb(var(--app-bg-hover));
+}
+
+/* Dialog/Modal backgrounds */
+.dark .bg-black\/50,
+.dark .bg-black.bg-opacity-50 {
+  background-color: rgba(0, 0, 0, 0.7);
+}
+
+/* Scrollbar styling for dark mode */
+.dark ::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+.dark ::-webkit-scrollbar-track {
+  background: rgb(var(--app-bg-secondary));
+}
+
+.dark ::-webkit-scrollbar-thumb {
+  background: rgb(var(--app-border-strong));
+  border-radius: 4px;
+}
+
+.dark ::-webkit-scrollbar-thumb:hover {
+  background: rgb(var(--app-text-muted));
+}
+
+/* Focus ring adjustments for dark mode */
+.dark .focus\:ring-blue-500:focus {
+  --tw-ring-color: rgb(var(--app-primary));
+}
+
+/* Button hover states in dark mode */
+.dark .bg-blue-600:hover {
+  background-color: rgb(59 130 246);
+}
+
+/* Shadow adjustments for dark mode */
+.dark .shadow,
+.dark .shadow-sm,
+.dark .shadow-md,
+.dark .shadow-lg,
+.dark .shadow-xl {
+  --tw-shadow-color: rgba(0, 0, 0, 0.4);
 }
 
 /* React Flow Handle Styles - n8n-like */

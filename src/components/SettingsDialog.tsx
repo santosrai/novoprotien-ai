@@ -1,7 +1,8 @@
 import React, { useState } from 'react';
-import { X, Code2, Palette, Zap, RotateCcw, Save, History, Settings } from 'lucide-react';
+import { X, Code2, Palette, Zap, RotateCcw, Save, History, Settings, Sun, Moon } from 'lucide-react';
 import { useSettingsStore } from '../stores/settingsStore';
 import { useChatHistoryStore } from '../stores/chatHistoryStore';
+import { useTheme } from '../contexts/ThemeContext';
 
 interface SettingsDialogProps {
   isOpen: boolean;
@@ -11,6 +12,7 @@ interface SettingsDialogProps {
 export const SettingsDialog: React.FC<SettingsDialogProps> = ({ isOpen, onClose }) => {
   const { settings, updateSettings, resetSettings } = useSettingsStore();
   const { getStorageStats, cleanupOldSessions, clearAllSessions, exportSessions } = useChatHistoryStore();
+  const { theme, setTheme, isDark } = useTheme();
   const [activeTab, setActiveTab] = useState<'editor' | 'interface' | 'api' | 'chat-history' | 'advanced'>('editor');
   const [localSettings, setLocalSettings] = useState(settings);
   const [hasChanges, setHasChanges] = useState(false);
@@ -67,8 +69,8 @@ export const SettingsDialog: React.FC<SettingsDialogProps> = ({ isOpen, onClose 
     <button
       onClick={() => setActiveTab(id)}
       className={`flex items-center space-x-2 px-3 sm:px-4 py-2 rounded-lg font-medium text-xs sm:text-sm transition-colors whitespace-nowrap ${activeTab === id
-        ? 'bg-blue-100 text-blue-700 border border-blue-200'
-        : 'text-gray-600 hover:text-gray-800 hover:bg-gray-50'
+        ? 'bg-blue-100 dark:bg-blue-900/50 text-blue-700 dark:text-blue-300 border border-blue-200 dark:border-blue-800'
+        : 'text-gray-600 dark:text-gray-400 hover:text-gray-800 dark:hover:text-gray-200 hover:bg-gray-50 dark:hover:bg-slate-700/50'
         }`}
     >
       <Icon className="w-4 h-4" />
@@ -84,13 +86,12 @@ export const SettingsDialog: React.FC<SettingsDialogProps> = ({ isOpen, onClose 
   }) => (
     <div className="flex items-start justify-between py-3">
       <div className="flex-1">
-        <div className="font-medium text-gray-900 text-sm">{label}</div>
-        {description && <div className="text-gray-500 text-xs mt-1">{description}</div>}
+        <div className="font-medium text-gray-900 dark:text-gray-100 text-sm">{label}</div>
+        {description && <div className="text-gray-500 dark:text-gray-400 text-xs mt-1">{description}</div>}
       </div>
       <button
         onClick={() => onChange(!checked)}
-
-        className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 ${checked ? 'bg-blue-600' : 'bg-gray-200'
+        className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 dark:focus:ring-offset-slate-800 ${checked ? 'bg-blue-600' : 'bg-gray-200 dark:bg-slate-600'
           }`}
       >
         <span
@@ -111,13 +112,13 @@ export const SettingsDialog: React.FC<SettingsDialogProps> = ({ isOpen, onClose 
     <div className="py-3">
       <div className="flex items-start justify-between">
         <div className="flex-1">
-          <div className="font-medium text-gray-900 text-sm">{label}</div>
-          {description && <div className="text-gray-500 text-xs mt-1">{description}</div>}
+          <div className="font-medium text-gray-900 dark:text-gray-100 text-sm">{label}</div>
+          {description && <div className="text-gray-500 dark:text-gray-400 text-xs mt-1">{description}</div>}
         </div>
         <select
           value={value}
           onChange={(e) => onChange(e.target.value)}
-          className="ml-4 px-3 py-1 border border-gray-300 rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+          className="ml-4 px-3 py-1 border border-gray-300 dark:border-slate-600 bg-white dark:bg-slate-700 text-gray-900 dark:text-gray-100 rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
         >
           {options.map((option) => (
             <option key={option.value} value={option.value}>
@@ -130,14 +131,14 @@ export const SettingsDialog: React.FC<SettingsDialogProps> = ({ isOpen, onClose 
   );
 
   return (
-    <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-2 sm:p-4 z-50">
-      <div className="bg-white rounded-lg shadow-xl w-full max-w-2xl max-h-[95vh] sm:max-h-[90vh] overflow-hidden">
+    <div className="fixed inset-0 bg-black/50 dark:bg-black/70 flex items-center justify-center p-2 sm:p-4 z-50">
+      <div className="bg-white dark:bg-slate-800 rounded-lg shadow-xl w-full max-w-2xl max-h-[95vh] sm:max-h-[90vh] overflow-hidden">
         {/* Header */}
-        <div className="flex items-center justify-between p-4 sm:p-6 border-b border-gray-200">
-          <h2 className="text-lg sm:text-xl font-semibold text-gray-900">Settings</h2>
+        <div className="flex items-center justify-between p-4 sm:p-6 border-b border-gray-200 dark:border-slate-700">
+          <h2 className="text-lg sm:text-xl font-semibold text-gray-900 dark:text-gray-100">Settings</h2>
           <button
             onClick={handleCancel}
-            className="text-gray-400 hover:text-gray-600 transition-colors"
+            className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 transition-colors"
           >
             <X className="w-5 h-5 sm:w-6 sm:h-6" />
           </button>
@@ -145,7 +146,7 @@ export const SettingsDialog: React.FC<SettingsDialogProps> = ({ isOpen, onClose 
 
         <div className="flex flex-col sm:flex-row h-[calc(95vh-73px)] sm:h-[500px]">
           {/* Sidebar */}
-          <div className="w-full sm:w-48 bg-gray-50 border-b sm:border-b-0 sm:border-r border-gray-200 p-3 sm:p-4">
+          <div className="w-full sm:w-48 bg-gray-50 dark:bg-slate-900/50 border-b sm:border-b-0 sm:border-r border-gray-200 dark:border-slate-700 p-3 sm:p-4">
             <div className="flex sm:flex-col space-x-2 sm:space-x-0 sm:space-y-2 overflow-x-auto sm:overflow-x-visible">
               <Tab id="editor" icon={Code2} label="Editor" />
               <Tab id="interface" icon={Palette} label="Interface" />
@@ -195,20 +196,45 @@ export const SettingsDialog: React.FC<SettingsDialogProps> = ({ isOpen, onClose 
 
               {activeTab === 'interface' && (
                 <div className="space-y-1">
-                  <h3 className="text-lg font-medium text-gray-900 mb-4">Interface Settings</h3>
+                  <h3 className="text-lg font-medium text-gray-900 dark:text-gray-100 mb-4">Interface Settings</h3>
 
-                  <Select
-                    value={localSettings.ui.theme}
-                    onChange={(value) => handleSettingChange('ui.theme', value)}
-                    options={[
-                      { value: 'light', label: 'Light' },
-                      { value: 'dark', label: 'Dark (Coming Soon)' }
-                    ]}
-                    label="Theme"
-                    description="Choose your preferred color scheme"
-                  />
+                  {/* Theme Selector - Immediate toggle */}
+                  <div className="py-3">
+                    <div className="font-medium text-gray-900 dark:text-gray-100 text-sm mb-1">Theme</div>
+                    <div className="text-gray-500 dark:text-gray-400 text-xs mb-3">Choose your preferred color scheme</div>
+                    <div className="flex gap-2">
+                      <button
+                        onClick={() => {
+                          setTheme('light');
+                          handleSettingChange('ui.theme', 'light');
+                        }}
+                        className={`flex-1 flex items-center justify-center gap-2 px-4 py-3 rounded-lg border-2 transition-all ${
+                          theme === 'light'
+                            ? 'border-blue-500 bg-blue-50 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300'
+                            : 'border-gray-200 dark:border-gray-700 hover:border-gray-300 dark:hover:border-gray-600 text-gray-700 dark:text-gray-300'
+                        }`}
+                      >
+                        <Sun className="w-5 h-5" />
+                        <span className="font-medium">Light</span>
+                      </button>
+                      <button
+                        onClick={() => {
+                          setTheme('dark');
+                          handleSettingChange('ui.theme', 'dark');
+                        }}
+                        className={`flex-1 flex items-center justify-center gap-2 px-4 py-3 rounded-lg border-2 transition-all ${
+                          theme === 'dark'
+                            ? 'border-blue-500 bg-blue-50 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300'
+                            : 'border-gray-200 dark:border-gray-700 hover:border-gray-300 dark:hover:border-gray-600 text-gray-700 dark:text-gray-300'
+                        }`}
+                      >
+                        <Moon className="w-5 h-5" />
+                        <span className="font-medium">Dark</span>
+                      </button>
+                    </div>
+                  </div>
 
-                  <div className="border-t border-gray-200 pt-1">
+                  <div className="border-t border-gray-200 dark:border-gray-700 pt-1">
                     <Switch
                       checked={localSettings.ui.showQuickPrompts}
                       onChange={(checked) => handleSettingChange('ui.showQuickPrompts', checked)}
@@ -217,7 +243,7 @@ export const SettingsDialog: React.FC<SettingsDialogProps> = ({ isOpen, onClose 
                     />
                   </div>
 
-                  <div className="border-t border-gray-200 pt-1">
+                  <div className="border-t border-gray-200 dark:border-gray-700 pt-1">
                     <Select
                       value={localSettings.ui.messageHistoryLimit}
                       onChange={(value) => handleSettingChange('ui.messageHistoryLimit', parseInt(value as string))}

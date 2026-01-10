@@ -8,8 +8,9 @@ import { ResizablePanel } from './components/ResizablePanel';
 import { ErrorDashboard, useErrorDashboard } from './components/ErrorDashboard';
 import { FileBrowser } from './components/FileBrowser';
 import { FileEditor } from './components/FileEditor';
-import { PipelineCanvas, PipelineManager, PipelineExecution } from './components/pipeline-canvas';
+import { PipelineCanvas, PipelineManager, PipelineExecution, PipelineThemeWrapper } from './components/pipeline-canvas';
 import { api } from './utils/api';
+import { useTheme } from './contexts/ThemeContext';
 import { Eye, Code2, Settings, FolderOpen, Workflow } from 'lucide-react';
 import { useAppStore } from './stores/appStore';
 import { useSettingsStore } from './stores/settingsStore';
@@ -25,6 +26,7 @@ function App() {
   const { isHistoryPanelOpen, setHistoryPanelOpen } = useChatHistoryStore();
   const [isPipelineManagerOpen, setIsPipelineManagerOpen] = useState(false);
   const errorDashboard = useErrorDashboard();
+  const { theme } = useTheme();
   
   // Listen for pipeline manager open event
   useEffect(() => {
@@ -92,7 +94,7 @@ function App() {
   }, []);
 
   return (
-    <div className="h-screen flex flex-col bg-gray-50" data-testid="app-container" data-app-ready="true">
+    <div className="h-screen flex flex-col bg-background text-foreground" data-testid="app-container" data-app-ready="true">
       <Header />
       
       <div className="flex-1 flex flex-col md:flex-row overflow-hidden">
@@ -201,7 +203,9 @@ function App() {
             {/* Content Pane with fixed, responsive height */}
             <div className="flex-1 min-h-0">
               {activePane === 'pipeline' ? (
-                <PipelineCanvas />
+                <PipelineThemeWrapper externalTheme={theme} className="h-full">
+                  <PipelineCanvas />
+                </PipelineThemeWrapper>
               ) : activePane === 'files' ? (
                 <div className="h-full">
                   {selectedFile ? (

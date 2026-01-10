@@ -12,6 +12,7 @@ import { SignUpForm } from './components/auth/SignUpForm'
 import { AdminDashboard } from './pages/AdminDashboard'
 import { AuthGuard } from './components/auth/AuthGuard'
 import { ErrorBoundary } from './components/ErrorBoundary'
+import { ThemeProvider } from './contexts/ThemeContext'
 import './index.css'
 
 // Verify root element exists before rendering
@@ -23,91 +24,93 @@ if (!rootElement) {
 ReactDOM.createRoot(rootElement).render(
   <React.StrictMode>
     <QueryClientProvider client={queryClient}>
-      <ErrorBoundary>
-        <BrowserRouter>
-          <Routes>
-          {/* Public Landing Page */}
-          <Route path="/" element={<LandingPage />} />
-          <Route path="/pricing" element={<PricingPage />} />
-          <Route path="/signin" element={<SignInForm />} />
-          <Route path="/signup" element={<SignUpForm />} />
-          
-          {/* Authenticated App Routes */}
-          <Route
-            path="/app"
-            element={
-              <AuthGuard>
-                <App />
-              </AuthGuard>
-            }
-          />
-          <Route
-            path="/pipeline"
-            element={
-              <AuthGuard>
-                <PipelinePage />
-              </AuthGuard>
-            }
-          />
-          <Route
-            path="/admin"
-            element={
-              <AuthGuard requireRole="admin">
-                <AdminDashboard />
-              </AuthGuard>
-            }
-          />
-          <Route
-            path="/admin/users/:userId"
-            element={
-              <AuthGuard requireRole="admin">
-                <AdminDashboard />
-              </AuthGuard>
-            }
-          />
-          <Route
-            path="/admin/users/:userId/chat"
-            element={
-              <AuthGuard requireRole="admin">
-                <AdminDashboard />
-              </AuthGuard>
-            }
-          />
-          <Route
-            path="/admin/users/:userId/tokens"
-            element={
-              <AuthGuard requireRole="admin">
-                <AdminDashboard />
-              </AuthGuard>
-            }
-          />
-          <Route
-            path="/admin/chat"
-            element={
-              <AuthGuard requireRole="admin">
-                <AdminDashboard />
-              </AuthGuard>
-            }
-          />
-          <Route
-            path="/admin/tokens"
-            element={
-              <AuthGuard requireRole="admin">
-                <AdminDashboard />
-              </AuthGuard>
-            }
-          />
-          <Route
-            path="/admin/audit"
-            element={
-              <AuthGuard requireRole="admin">
-                <AdminDashboard />
-              </AuthGuard>
-            }
-          />
-          </Routes>
-        </BrowserRouter>
-      </ErrorBoundary>
+      <ThemeProvider>
+        <ErrorBoundary>
+          <BrowserRouter>
+            <Routes>
+              {/* Public Landing Page */}
+              <Route path="/" element={<LandingPage />} />
+              <Route path="/pricing" element={<PricingPage />} />
+              <Route path="/signin" element={<SignInForm />} />
+              <Route path="/signup" element={<SignUpForm />} />
+              
+              {/* Authenticated App Routes */}
+              <Route
+                path="/app"
+                element={
+                  <AuthGuard>
+                    <App />
+                  </AuthGuard>
+                }
+              />
+              <Route
+                path="/pipeline"
+                element={
+                  <AuthGuard>
+                    <PipelinePage />
+                  </AuthGuard>
+                }
+              />
+              <Route
+                path="/admin"
+                element={
+                  <AuthGuard requireRole="admin">
+                    <AdminDashboard />
+                  </AuthGuard>
+                }
+              />
+              <Route
+                path="/admin/users/:userId"
+                element={
+                  <AuthGuard requireRole="admin">
+                    <AdminDashboard />
+                  </AuthGuard>
+                }
+              />
+              <Route
+                path="/admin/users/:userId/chat"
+                element={
+                  <AuthGuard requireRole="admin">
+                    <AdminDashboard />
+                  </AuthGuard>
+                }
+              />
+              <Route
+                path="/admin/users/:userId/tokens"
+                element={
+                  <AuthGuard requireRole="admin">
+                    <AdminDashboard />
+                  </AuthGuard>
+                }
+              />
+              <Route
+                path="/admin/chat"
+                element={
+                  <AuthGuard requireRole="admin">
+                    <AdminDashboard />
+                  </AuthGuard>
+                }
+              />
+              <Route
+                path="/admin/tokens"
+                element={
+                  <AuthGuard requireRole="admin">
+                    <AdminDashboard />
+                  </AuthGuard>
+                }
+              />
+              <Route
+                path="/admin/audit"
+                element={
+                  <AuthGuard requireRole="admin">
+                    <AdminDashboard />
+                  </AuthGuard>
+                }
+              />
+            </Routes>
+          </BrowserRouter>
+        </ErrorBoundary>
+      </ThemeProvider>
     </QueryClientProvider>
   </React.StrictMode>,
 )

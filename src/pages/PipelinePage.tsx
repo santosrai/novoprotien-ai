@@ -1,13 +1,15 @@
 import { useEffect, useState } from 'react';
-import { PipelineCanvas, PipelineManager, PipelineExecution } from '../components/pipeline-canvas';
+import { PipelineCanvas, PipelineManager, PipelineExecution, PipelineThemeWrapper } from '../components/pipeline-canvas';
 import { usePipelineStore } from '../components/pipeline-canvas/store/pipelineStore';
 import { useAuthStore } from '../stores/authStore';
 import { api } from '../utils/api';
+import { useTheme } from '../contexts/ThemeContext';
 
 export function PipelinePage() {
   const [isPipelineManagerOpen, setIsPipelineManagerOpen] = useState(false);
   const { syncPipelines } = usePipelineStore();
   const user = useAuthStore((state) => state.user);
+  const { theme } = useTheme();
 
   // Sync pipelines from backend when component mounts and user is authenticated
   useEffect(() => {
@@ -29,13 +31,13 @@ export function PipelinePage() {
   }, []);
 
   return (
-    <div className="h-screen w-screen flex flex-col bg-[#1a1a2e]">
+    <div className="h-screen w-screen flex flex-col bg-background text-foreground">
       {/* Optional minimal header for standalone view */}
-      <div className="h-12 flex items-center justify-between px-4 bg-gray-900 border-b border-gray-800">
-        <h1 className="text-white text-lg font-semibold">Pipeline Canvas</h1>
+      <div className="h-12 flex items-center justify-between px-4 bg-card border-b border-border">
+        <h1 className="text-foreground text-lg font-semibold">Pipeline Canvas</h1>
         <a 
           href="/app" 
-          className="text-gray-400 hover:text-white text-sm transition-colors"
+          className="text-muted-foreground hover:text-foreground text-sm transition-colors"
         >
           ← Back to Main App
         </a>
@@ -43,7 +45,9 @@ export function PipelinePage() {
       
       {/* Full-screen pipeline canvas */}
       <div className="flex-1 min-h-0">
-        <PipelineCanvas />
+        <PipelineThemeWrapper externalTheme={theme} className="h-full">
+          <PipelineCanvas />
+        </PipelineThemeWrapper>
       </div>
       
       {/* Pipeline Manager Modal */}
