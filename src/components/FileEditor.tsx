@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { X, Download, FileText, Play } from 'lucide-react';
-import { api, getAuthHeaders } from '../utils/api';
+import { api } from '../utils/api';
 import { useAppStore } from '../stores/appStore';
 import { useChatHistoryStore } from '../stores/chatHistoryStore';
 import { CodeExecutor } from '../utils/codeExecutor';
@@ -16,7 +16,7 @@ export const FileEditor: React.FC<FileEditorProps> = ({ fileId, filename, fileTy
   const [content, setContent] = useState<string>('');
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const { plugin, setActivePane, setViewerVisible, setIsExecuting, setCurrentCode, setCurrentStructureOrigin } = useAppStore();
+  const { plugin, setActivePane, setViewerVisible, setIsExecuting, setCurrentCode, setCurrentStructureOrigin, setPendingCodeToRun } = useAppStore();
   const { activeSessionId, saveVisualizationCode } = useChatHistoryStore();
 
   useEffect(() => {
@@ -64,40 +64,38 @@ export const FileEditor: React.FC<FileEditorProps> = ({ fileId, filename, fileTy
   };
 
   const handleView3D = async () => {
-    if (!plugin) {
-      alert('3D viewer is not initialized. Please wait a moment and try again.');
-      return;
+    // Wait for plugin to be ready (with timeout and retry)
+    const waitForPlugin = async (maxWait = 5000, retryInterval = 100): Promise<boolean> => {
+      const startTime = Date.now();
+      while (Date.now() - startTime < maxWait) {
+        if (plugin) {
+          // Check if plugin has the necessary builders (indicates it's initialized)
+          try {
+            if (plugin.builders && plugin.builders.data && plugin.builders.structure) {
+              return true;
+            }
+          } catch (e) {
+            // Plugin exists but might not be fully ready
+          }
+        }
+        await new Promise(resolve => setTimeout(resolve, retryInterval));
+      }
+      return false;
+    };
+
+    // Construct file URL based on file type - use API endpoint directly
+    let fileUrl: string;
+    if (fileType === 'upload') {
+      fileUrl = `/api/upload/pdb/${fileId}`;
+    } else {
+      fileUrl = `/api/files/${fileId}/download`;
     }
 
-    try {
-      setIsExecuting(true);
-      const executor = new CodeExecutor(plugin);
-
-      // Construct file URL based on file type
-      let fileUrl: string;
-      if (fileType === 'upload') {
-        fileUrl = `/api/upload/pdb/${fileId}`;
-      } else {
-        fileUrl = `/api/files/${fileId}/download`;
-      }
-
-      // Fetch file content with authentication headers
-      const headers = getAuthHeaders();
-      const fileResponse = await fetch(fileUrl, { headers });
-      if (!fileResponse.ok) {
-        throw new Error(`Failed to fetch file: ${fileResponse.status} ${fileResponse.statusText}`);
-      }
-      const fileContent = await fileResponse.text();
-
-      // Create blob URL
-      const pdbBlob = new Blob([fileContent], { type: 'text/plain' });
-      const blobUrl = URL.createObjectURL(pdbBlob);
-
-      // Load structure in viewer using blob URL
-      const code = `
+    // Load structure in viewer using API endpoint directly (no blob URLs)
+    const code = `
 try {
   await builder.clearStructure();
-  await builder.loadStructure('${blobUrl}');
+  await builder.loadStructure('${fileUrl}');
   await builder.addCartoonRepresentation({ color: 'secondary-structure' });
   builder.focusView();
   console.log('Successfully loaded ${filename} in 3D viewer');
@@ -105,25 +103,43 @@ try {
   console.error('Failed to load file in 3D viewer:', e); 
 }`;
 
-      // Save code to editor so user can see and modify it
-      setCurrentCode(code);
+    // Save code to editor so user can see and modify it
+    setCurrentCode(code);
 
-      // Set structure origin for LLM context
-      setCurrentStructureOrigin({
-        type: fileType as 'upload' | 'rfdiffusion' | 'alphafold',
-        filename: filename,
-        metadata: {
-          file_id: fileId,
-          file_url: fileUrl,
-        },
-      });
+    // Set structure origin for LLM context
+    setCurrentStructureOrigin({
+      type: fileType as 'upload' | 'rfdiffusion' | 'alphafold',
+      filename: filename,
+      metadata: {
+        file_id: fileId,
+        file_url: fileUrl,
+      },
+    });
 
-      // Save code to active session for persistence
-      if (activeSessionId) {
-        saveVisualizationCode(activeSessionId, code);
-        console.log('[FileEditor] Saved visualization code to session:', activeSessionId);
-      }
+    // Save code to active session for persistence
+    if (activeSessionId) {
+      saveVisualizationCode(activeSessionId, code);
+      console.log('[FileEditor] Saved visualization code to session:', activeSessionId);
+    }
 
+    const isPluginReady = await waitForPlugin();
+    if (!isPluginReady) {
+      console.warn('[FileEditor] Plugin not ready, queueing code for execution');
+      // Queue code to run when plugin is ready
+      setPendingCodeToRun(code);
+      setViewerVisible(true);
+      setActivePane('viewer');
+      return;
+    }
+
+    if (!plugin) {
+      console.warn('[FileEditor] Plugin not available, cannot execute code');
+      return;
+    }
+
+    try {
+      setIsExecuting(true);
+      const executor = new CodeExecutor(plugin);
       await executor.executeCode(code);
 
       // Switch to viewer pane and make it visible

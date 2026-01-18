@@ -72,6 +72,39 @@ export const useAuthStore = create<AuthState>()(
               console.error('Failed to sync chat history on signin:', err);
             }
           })();
+          
+          // Clear pipeline data and sync from backend
+          (async () => {
+            try {
+              const { usePipelineStore } = await import('../components/pipeline-canvas/store/pipelineStore');
+              const pipelineStore = usePipelineStore.getState();
+              // Clear local pipelines first
+              pipelineStore.clearPipeline();
+              // Clear saved pipelines from state
+              usePipelineStore.setState({ savedPipelines: [] });
+              
+              // Wait a bit longer to ensure PipelineProvider has set dependencies
+              // Then explicitly sync from backend
+              await new Promise(resolve => setTimeout(resolve, 500));
+              
+              // Try to sync from backend if dependencies are available
+              const { api } = await import('../utils/api');
+              if (api && user) {
+                try {
+                  console.log('[AuthStore] Syncing pipelines from backend after login');
+                  await pipelineStore.syncPipelines({ 
+                    apiClient: api, 
+                    authState: { user, isAuthenticated: true } 
+                  });
+                } catch (syncError) {
+                  console.warn('[AuthStore] Pipeline sync failed (will retry when PipelineProvider mounts):', syncError);
+                  // Don't throw - PipelineProvider will retry sync when it mounts
+                }
+              }
+            } catch (err) {
+              console.error('Failed to clear/sync pipelines on signin:', err);
+            }
+          })();
         } catch (error: any) {
           const message = error.response?.data?.detail || error.message || 'Sign in failed';
           throw new Error(message);
@@ -105,6 +138,18 @@ export const useAuthStore = create<AuthState>()(
             useChatHistoryStore.getState().clearAllSessions();
           } catch (err) {
             console.error('Failed to clear chat history on signout:', err);
+          }
+        }, 100);
+        
+        // Clear pipeline data on signout
+        setTimeout(async () => {
+          try {
+            const { usePipelineStore } = await import('../components/pipeline-canvas/store/pipelineStore');
+            const pipelineStore = usePipelineStore.getState();
+            pipelineStore.clearPipeline();
+            usePipelineStore.setState({ savedPipelines: [] });
+          } catch (err) {
+            console.error('Failed to clear pipelines on signout:', err);
           }
         }, 100);
         

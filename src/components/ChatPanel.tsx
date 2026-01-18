@@ -387,22 +387,40 @@ export const ChatPanel: React.FC = () => {
       console.log('[ChatPanel] Saved viewer visibility to previous session:', previousSessionIdRef.current, isViewerVisibleRef.current);
     }
     
-    // Restore code for new session (async - checks session cache first, then backend user-scoped)
-    getVisualizationCode(activeSessionId).then((savedCode) => {
-      if (savedCode && savedCode.trim()) {
-        console.log('[ChatPanel] Restoring visualization code for session:', activeSessionId);
-        setCurrentCode(savedCode);
-      } else {
-        // Clear code if session has no saved visualization
-        // Use ref to check current state
-        if (currentCodeRef.current && currentCodeRef.current.trim()) {
-          console.log('[ChatPanel] Clearing code for session without visualization:', activeSessionId);
-          setCurrentCode('');
-        }
+    // Check if this is a new session (no messages) - don't restore code for new sessions
+    const isNewSession = !activeSession || activeSession.messages.length === 0;
+    
+    if (isNewSession) {
+      // For new sessions, clear any existing code (don't restore from previous sessions)
+      if (currentCodeRef.current && currentCodeRef.current.trim()) {
+        console.log('[ChatPanel] Clearing code for new session:', activeSessionId);
+        setCurrentCode('');
       }
-    }).catch((error) => {
-      console.error('[ChatPanel] Failed to restore visualization code:', error);
-    });
+    } else {
+      // Only restore code for existing sessions with messages
+      getVisualizationCode(activeSessionId).then((savedCode) => {
+        if (savedCode && savedCode.trim()) {
+          // Check if code contains blob URLs - these expire and should be invalidated
+          const hasBlobUrl = savedCode.includes('blob:http://') || savedCode.includes('blob:https://');
+          if (hasBlobUrl) {
+            console.warn('[ChatPanel] Restored code contains blob URL (likely expired), clearing:', activeSessionId);
+            setCurrentCode('');
+            return;
+          }
+          
+          console.log('[ChatPanel] Restoring visualization code for session:', activeSessionId);
+          setCurrentCode(savedCode);
+        } else {
+          // Clear code if session has no saved visualization
+          if (currentCodeRef.current && currentCodeRef.current.trim()) {
+            console.log('[ChatPanel] Clearing code for session without visualization:', activeSessionId);
+            setCurrentCode('');
+          }
+        }
+      }).catch((error) => {
+        console.error('[ChatPanel] Failed to restore visualization code:', error);
+      });
+    }
     
     // Restore viewer visibility for new session
     const savedVisibility = getViewerVisibility(activeSessionId);
@@ -569,29 +587,72 @@ export const ChatPanel: React.FC = () => {
   };
 
   const loadUploadedFileInViewer = async (fileInfo: { file_id: string; filename: string; file_url: string }) => {
-    if (!plugin) return;
+    // Wait for plugin to be ready (with timeout and retry)
+    const waitForPlugin = async (maxWait = 5000, retryInterval = 100): Promise<boolean> => {
+      const startTime = Date.now();
+      while (Date.now() - startTime < maxWait) {
+        if (plugin) {
+          // Check if plugin has the necessary builders (indicates it's initialized)
+          try {
+            if (plugin.builders && plugin.builders.data && plugin.builders.structure) {
+              return true;
+            }
+          } catch (e) {
+            // Plugin exists but might not be fully ready
+          }
+        }
+        await new Promise(resolve => setTimeout(resolve, retryInterval));
+      }
+      return false;
+    };
+
+    const isPluginReady = await waitForPlugin();
+    if (!isPluginReady) {
+      console.warn('[ChatPanel] Plugin not ready, using API endpoint directly');
+      // Use API endpoint instead of blob URL to avoid initialization issues
+      const apiUrl = `/api/upload/pdb/${fileInfo.file_id}`;
+      const code = `
+try {
+  await builder.clearStructure();
+  await builder.loadStructure('${apiUrl}');
+  await builder.addCartoonRepresentation({ color: 'secondary-structure' });
+  builder.focusView();
+  console.log('Uploaded file loaded successfully');
+} catch (e) { 
+  console.error('Failed to load uploaded file:', e); 
+}`;
+      
+      // Queue code to run when plugin is ready
+      setPendingCodeToRun(code);
+      setCurrentCode(code);
+      setViewerVisibleAndSave(true);
+      setActivePane('viewer');
+      
+      // Save code to active session
+      if (activeSessionId) {
+        saveVisualizationCode(activeSessionId, code);
+      }
+      
+      return;
+    }
+    
+    if (!plugin) {
+      console.warn('[ChatPanel] Plugin not available, cannot execute code');
+      return;
+    }
     
     try {
       setIsExecuting(true);
       const executor = new CodeExecutor(plugin);
       
-      // Fetch file content with authentication headers
-      const headers = getAuthHeaders();
-      const fileResponse = await fetch(fileInfo.file_url, { headers });
-      if (!fileResponse.ok) {
-        throw new Error(`Failed to fetch uploaded file: ${fileResponse.status} ${fileResponse.statusText}`);
-      }
-      const fileContent = await fileResponse.text();
+      // Use API endpoint directly instead of blob URL to avoid blob URL expiration issues
+      const apiUrl = `/api/upload/pdb/${fileInfo.file_id}`;
       
-      // Create blob URL
-      const pdbBlob = new Blob([fileContent], { type: 'text/plain' });
-      const blobUrl = URL.createObjectURL(pdbBlob);
-      
-      // Load structure in viewer using blob URL
+      // Load structure in viewer using API endpoint
       const code = `
 try {
   await builder.clearStructure();
-  await builder.loadStructure('${blobUrl}');
+  await builder.loadStructure('${apiUrl}');
   await builder.addCartoonRepresentation({ color: 'secondary-structure' });
   builder.focusView();
   console.log('Uploaded file loaded successfully');
@@ -621,13 +682,10 @@ try {
       await executor.executeCode(code);
       setViewerVisibleAndSave(true);
       setActivePane('viewer');
-      
-      // Keep blob URL alive for a bit longer to ensure structure loads
-      setTimeout(() => {
-        URL.revokeObjectURL(blobUrl);
-      }, 5000);
     } catch (err) {
       console.error('Failed to load uploaded file in viewer:', err);
+      // Show user-friendly error
+      alert(`Failed to load ${fileInfo.filename} in 3D viewer. Please try again.`);
     } finally {
       setIsExecuting(false);
     }

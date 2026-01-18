@@ -39,7 +39,7 @@ export interface FileMetadata {
 export interface MolstarSelectionState {
   count: number;
   lastAction?: {
-    type: 'select' | 'color' | 'representation' | 'visibility' | 'label';
+    type: 'select' | 'color' | 'representation' | 'visibility' | 'label' | 'clear';
     target?: string;
     timestamp: number;
   };

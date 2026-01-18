@@ -8,8 +8,9 @@ import { ResizablePanel } from './components/ResizablePanel';
 import { ErrorDashboard, useErrorDashboard } from './components/ErrorDashboard';
 import { FileBrowser } from './components/FileBrowser';
 import { FileEditor } from './components/FileEditor';
-import { PipelineCanvas, PipelineManager, PipelineExecution, PipelineThemeWrapper } from './components/pipeline-canvas';
+import { PipelineCanvas, PipelineManager, PipelineExecution, PipelineThemeWrapper, PipelineProvider } from './components/pipeline-canvas';
 import { api } from './utils/api';
+import { useAuthStore } from './stores/authStore';
 import { useTheme } from './contexts/ThemeContext';
 import { Eye, Code2, Settings, FolderOpen, Workflow } from 'lucide-react';
 import { useAppStore } from './stores/appStore';
@@ -25,6 +26,7 @@ function App() {
   const { settings, isSettingsDialogOpen, setSettingsDialogOpen } = useSettingsStore();
   const { isHistoryPanelOpen, setHistoryPanelOpen } = useChatHistoryStore();
   const [isPipelineManagerOpen, setIsPipelineManagerOpen] = useState(false);
+  const user = useAuthStore((state) => state.user);
   const errorDashboard = useErrorDashboard();
   const { theme } = useTheme();
   
@@ -94,8 +96,12 @@ function App() {
   }, []);
 
   return (
-    <div className="h-screen flex flex-col bg-background text-foreground" data-testid="app-container" data-app-ready="true">
-      <Header />
+    <PipelineProvider
+      apiClient={api}
+      authState={{ user: user ?? null, isAuthenticated: !!user }}
+    >
+      <div className="h-screen flex flex-col bg-app text-app" data-testid="app-container" data-app-ready="true">
+        <Header />
       
       <div className="flex-1 flex flex-col md:flex-row overflow-hidden">
         {/* Chat History Sidebar */}
@@ -268,7 +274,8 @@ function App() {
 
       {/* Pipeline Execution Monitor */}
       <PipelineExecution apiClient={api} />
-    </div>
+      </div>
+    </PipelineProvider>
   );
 }
 

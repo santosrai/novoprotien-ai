@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { PipelineCanvas, PipelineManager, PipelineExecution, PipelineThemeWrapper } from '../components/pipeline-canvas';
+import { PipelineCanvas, PipelineManager, PipelineExecution, PipelineThemeWrapper, PipelineProvider } from '../components/pipeline-canvas';
 import { usePipelineStore } from '../components/pipeline-canvas/store/pipelineStore';
 import { useAuthStore } from '../stores/authStore';
 import { api } from '../utils/api';
@@ -31,33 +31,38 @@ export function PipelinePage() {
   }, []);
 
   return (
-    <div className="h-screen w-screen flex flex-col bg-background text-foreground">
+    <div className="h-screen w-screen flex flex-col bg-app text-app">
       {/* Optional minimal header for standalone view */}
-      <div className="h-12 flex items-center justify-between px-4 bg-card border-b border-border">
-        <h1 className="text-foreground text-lg font-semibold">Pipeline Canvas</h1>
+      <div className="h-12 flex items-center justify-between px-4 bg-app-card border-b border-app">
+        <h1 className="text-app text-lg font-semibold">Pipeline Canvas</h1>
         <a 
           href="/app" 
-          className="text-muted-foreground hover:text-foreground text-sm transition-colors"
+          className="text-app-muted hover:text-app text-sm transition-colors"
         >
           ← Back to Main App
         </a>
       </div>
       
-      {/* Full-screen pipeline canvas */}
-      <div className="flex-1 min-h-0">
-        <PipelineThemeWrapper externalTheme={theme} className="h-full">
-          <PipelineCanvas />
-        </PipelineThemeWrapper>
-      </div>
-      
-      {/* Pipeline Manager Modal */}
-      <PipelineManager
-        isOpen={isPipelineManagerOpen}
-        onClose={() => setIsPipelineManagerOpen(false)}
-      />
-      
-      {/* Pipeline Execution Monitor */}
-      <PipelineExecution apiClient={api} />
+      {/* Full-screen pipeline canvas with provider for API/auth and sync */}
+      <PipelineProvider
+        apiClient={api}
+        authState={{ user: user ?? null, isAuthenticated: !!user }}
+      >
+        <div className="flex-1 min-h-0">
+          <PipelineThemeWrapper externalTheme={theme} className="h-full">
+            <PipelineCanvas />
+          </PipelineThemeWrapper>
+        </div>
+
+        {/* Pipeline Manager Modal */}
+        <PipelineManager
+          isOpen={isPipelineManagerOpen}
+          onClose={() => setIsPipelineManagerOpen(false)}
+        />
+
+        {/* Pipeline Execution Monitor */}
+        <PipelineExecution apiClient={api} />
+      </PipelineProvider>
     </div>
   );
 }

@@ -509,3 +509,77 @@ body {
 .file-browser-scrollbar::-webkit-scrollbar-thumb:hover {
   background: #94a3b8;
 }
+
+/* Settings Dialog background fix - ensure opaque background in light theme */
+/* Target the Settings dialog container specifically */
+.settings-dialog-content {
+  background-color: #ffffff !important;
+  opacity: 1 !important;
+}
+
+.dark .settings-dialog-content,
+html.dark .settings-dialog-content {
+  background-color: #1e293b !important;
+  opacity: 1 !important;
+}
+
+/* Settings Dialog text contrast fixes - ensure readable text in light theme */
+/* Target specific low-contrast text elements without overriding colored elements */
+
+/* Headings - force dark in light theme */
+.settings-dialog-content h2,
+.settings-dialog-content h3,
+.settings-dialog-content h4 {
+  color: #111827 !important; /* gray-900 */
+}
+
+/* Labels and medium-weight text */
+.settings-dialog-content .font-medium:not([class*="text-blue"]):not([class*="text-red"]):not([class*="text-yellow"]):not([class*="text-green"]) {
+  color: #111827 !important; /* gray-900 */
+}
+
+/* Descriptions and small text - use darker gray for better contrast */
+.settings-dialog-content .text-xs:not([class*="text-blue"]):not([class*="text-red"]):not([class*="text-yellow"]):not([class*="text-green"]):not([class*="text-white"]) {
+  color: #374151 !important; /* gray-700 */
+}
+
+.settings-dialog-content .text-sm:not(.font-medium):not([class*="text-blue"]):not([class*="text-red"]):not([class*="text-yellow"]):not([class*="text-green"]):not([class*="text-white"]) {
+  color: #374151 !important; /* gray-700 */
+}
+
+/* Unselected navigation tabs and buttons with light backgrounds */
+.settings-dialog-content button[class*="border-gray-200"]:not([class*="bg-blue"]):not([class*="bg-red"]):not([class*="bg-yellow"]) {
+  color: #111827 !important; /* gray-900 */
+}
+
+.settings-dialog-content button[class*="text-gray-600"],
+.settings-dialog-content button[class*="text-gray-700"],
+.settings-dialog-content button[class*="text-gray-800"] {
+  color: #111827 !important; /* gray-900 - override light grays */
+}
+
+.settings-dialog-content label:not([class*="text-blue"]):not([class*="text-red"]):not([class*="text-yellow"]) {
+  color: #111827 !important; /* gray-900 */
+}
+
+/* Dark theme overrides */
+.dark .settings-dialog-content h2,
+.dark .settings-dialog-content h3,
+.dark .settings-dialog-content h4,
+html.dark .settings-dialog-content h2,
+html.dark .settings-dialog-content h3,
+html.dark .settings-dialog-content h4 {
+  color: #f9fafb !important; /* gray-100 */
+}
+
+.dark .settings-dialog-content .font-medium:not([class*="text-blue"]):not([class*="text-red"]):not([class*="text-yellow"]):not([class*="text-green"]),
+html.dark .settings-dialog-content .font-medium:not([class*="text-blue"]):not([class*="text-red"]):not([class*="text-yellow"]):not([class*="text-green"]) {
+  color: #f9fafb !important; /* gray-100 */
+}
+
+.dark .settings-dialog-content .text-xs:not([class*="text-blue"]):not([class*="text-red"]):not([class*="text-yellow"]):not([class*="text-green"]):not([class*="text-white"]),
+.dark .settings-dialog-content .text-sm:not(.font-medium):not([class*="text-blue"]):not([class*="text-red"]):not([class*="text-yellow"]):not([class*="text-green"]):not([class*="text-white"]),
+html.dark .settings-dialog-content .text-xs:not([class*="text-blue"]):not([class*="text-red"]):not([class*="text-yellow"]):not([class*="text-green"]):not([class*="text-white"]),
+html.dark .settings-dialog-content .text-sm:not(.font-medium):not([class*="text-blue"]):not([class*="text-red"]):not([class*="text-yellow"]):not([class*="text-green"]):not([class*="text-white"]) {
+  color: #d1d5db !important; /* gray-300 */
+}
