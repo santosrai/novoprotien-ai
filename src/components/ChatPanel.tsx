@@ -259,7 +259,7 @@ const createProteinMPNNError = (
 });
 
 export const ChatPanel: React.FC = () => {
-  const { plugin, currentCode, setCurrentCode, setIsExecuting, setActivePane, setPendingCodeToRun, setViewerVisible, setCurrentStructureOrigin } = useAppStore();
+  const { plugin, currentCode, setCurrentCode, setIsExecuting, setActivePane, setPendingCodeToRun, setViewerVisible, setCurrentStructureOrigin, pendingCodeToRun } = useAppStore();
   const selections = useAppStore(state => state.selections);
   const removeSelection = useAppStore(state => state.removeSelection);
   const clearSelections = useAppStore(state => state.clearSelections);
@@ -353,13 +353,20 @@ export const ChatPanel: React.FC = () => {
   useEffect(() => {
     if (activeSessionId && !previousSessionIdRef.current) {
       previousSessionIdRef.current = activeSessionId;
-      // Restore viewer visibility for initial session on mount
-      const savedVisibility = getViewerVisibility(activeSessionId);
-      if (savedVisibility !== undefined) {
-        setViewerVisible(savedVisibility);
+      // Check if this is a new session (no messages) - hide all panes
+      const isNewSession = !activeSession || activeSession.messages.length === 0;
+      if (isNewSession) {
+        setViewerVisible(false);
+        setActivePane(null);
+      } else {
+        // Restore viewer visibility for existing session on mount
+        const savedVisibility = getViewerVisibility(activeSessionId);
+        if (savedVisibility !== undefined) {
+          setViewerVisible(savedVisibility);
+        }
       }
     }
-  }, [activeSessionId, getViewerVisibility, setViewerVisible]);
+  }, [activeSessionId, activeSession, getViewerVisibility, setViewerVisible, setActivePane]);
 
   // Keep refs updated with latest values (prevents stale closures)
   useEffect(() => {
@@ -369,6 +376,14 @@ export const ChatPanel: React.FC = () => {
   useEffect(() => {
     isViewerVisibleRef.current = isViewerVisible;
   }, [isViewerVisible]);
+
+  // Auto-show viewer when pendingCodeToRun is set
+  useEffect(() => {
+    if (pendingCodeToRun && pendingCodeToRun.trim()) {
+      setViewerVisibleAndSave(true);
+      setActivePane('viewer');
+    }
+  }, [pendingCodeToRun, setViewerVisibleAndSave, setActivePane]);
 
   // Restore visualization code and viewer visibility when switching sessions
   useEffect(() => {
@@ -396,40 +411,36 @@ export const ChatPanel: React.FC = () => {
         console.log('[ChatPanel] Clearing code for new session:', activeSessionId);
         setCurrentCode('');
       }
+      // Hide all panes for new sessions
+      setViewerVisible(false);
+      setActivePane(null); // Reset active pane to hide all panes
+      console.log('[ChatPanel] Hiding all panes for new session:', activeSessionId);
     } else {
       // Only restore code for existing sessions with messages
       getVisualizationCode(activeSessionId).then((savedCode) => {
-        if (savedCode && savedCode.trim()) {
-          // Check if code contains blob URLs - these expire and should be invalidated
-          const hasBlobUrl = savedCode.includes('blob:http://') || savedCode.includes('blob:https://');
-          if (hasBlobUrl) {
-            console.warn('[ChatPanel] Restored code contains blob URL (likely expired), clearing:', activeSessionId);
-            setCurrentCode('');
-            return;
-          }
-          
+        const hasValidCode = savedCode && 
+          savedCode.trim() && 
+          !savedCode.includes('blob:http://') && 
+          !savedCode.includes('blob:https://');
+        
+        if (hasValidCode) {
           console.log('[ChatPanel] Restoring visualization code for session:', activeSessionId);
           setCurrentCode(savedCode);
+          // Show viewer if code exists (respect saved visibility preference if available)
+          const savedVisibility = getViewerVisibility(activeSessionId);
+          setViewerVisible(savedVisibility !== undefined ? savedVisibility : true);
         } else {
-          // Clear code if session has no saved visualization
+          // Clear code if session has no saved visualization or code is invalid
           if (currentCodeRef.current && currentCodeRef.current.trim()) {
-            console.log('[ChatPanel] Clearing code for session without visualization:', activeSessionId);
+            console.log('[ChatPanel] Clearing code for session without valid visualization:', activeSessionId);
             setCurrentCode('');
           }
+          setViewerVisible(false); // Hide viewer if no valid code
         }
       }).catch((error) => {
         console.error('[ChatPanel] Failed to restore visualization code:', error);
+        setViewerVisible(false); // Hide viewer on error
       });
-    }
-    
-    // Restore viewer visibility for new session
-    const savedVisibility = getViewerVisibility(activeSessionId);
-    if (savedVisibility !== undefined) {
-      console.log('[ChatPanel] Restoring viewer visibility for session:', activeSessionId, savedVisibility);
-      setViewerVisible(savedVisibility);
-    } else {
-      // Default to hidden for new sessions
-      setViewerVisible(false);
     }
     
     // Update previous session ID

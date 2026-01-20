@@ -15,7 +15,6 @@ export const SettingsDialog: React.FC<SettingsDialogProps> = ({ isOpen, onClose 
   const { theme, setTheme } = useTheme();
   const [activeTab, setActiveTab] = useState<'editor' | 'interface' | 'api' | 'chat-history' | 'advanced'>('editor');
   const [localSettings, setLocalSettings] = useState(settings);
-  const [hasChanges, setHasChanges] = useState(false);
 
   // Sync localSettings when dialog opens or settings change
   React.useEffect(() => {
@@ -26,7 +25,6 @@ export const SettingsDialog: React.FC<SettingsDialogProps> = ({ isOpen, onClose 
         api: settings.api || { key: '' }
       };
       setLocalSettings(settingsWithApi);
-      setHasChanges(false);
     }
   }, [isOpen, settings]);
   if (!isOpen) return null;
@@ -42,18 +40,12 @@ export const SettingsDialog: React.FC<SettingsDialogProps> = ({ isOpen, onClose 
     current[keys[keys.length - 1]] = value;
 
     setLocalSettings(newSettings);
-    setHasChanges(true);
-  };
-
-  const handleSave = () => {
-    updateSettings(localSettings);
-    setHasChanges(false);
-    onClose();
+    // Save settings immediately when changed
+    updateSettings(newSettings);
   };
 
   const handleCancel = () => {
     setLocalSettings(settings);
-    setHasChanges(false);
     onClose();
   };
 
@@ -61,7 +53,6 @@ export const SettingsDialog: React.FC<SettingsDialogProps> = ({ isOpen, onClose 
     if (confirm('Reset all settings to default values? This cannot be undone.')) {
       resetSettings();
       setLocalSettings(settings);
-      setHasChanges(false);
     }
   };
 

@@ -1,36 +1,47 @@
 import React, { useState } from 'react';
-import { Atom, Box, Workflow, Menu, X } from 'lucide-react';
+import { Atom, Box, Workflow, Menu, X, FolderOpen } from 'lucide-react';
 import { useAppStore } from '../stores/appStore';
 import { useChatHistoryStore } from '../stores/chatHistoryStore';
 import { ProfileMenu } from './auth/ProfileMenu';
+import { useHasCode } from '../utils/codeUtils';
 
 export const Header: React.FC = () => {
-  const { isViewerVisible, setViewerVisible, setActivePane } = useAppStore();
+  const { activePane, isViewerVisible, setViewerVisible, setActivePane } = useAppStore();
   const { activeSessionId, saveViewerVisibility } = useChatHistoryStore();
+  const hasCode = useHasCode();
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
   
   const handleOpenPipeline = () => {
-    if (setActivePane) {
-      setActivePane('pipeline' as any);
-    }
-    if (!isViewerVisible) {
-      setViewerVisible(true);
-    }
+    setActivePane('pipeline' as any);
+    setViewerVisible(true); // For chat panel layout
     setIsMobileMenuOpen(false);
   };
   
-  const handleOpenPipelineManager = () => {
-    // Open pipeline manager - will be handled by App component
-    window.dispatchEvent(new CustomEvent('open-pipeline-manager'));
+  const handleOpenFiles = () => {
+    setActivePane('files' as any);
+    setViewerVisible(true); // For chat panel layout
     setIsMobileMenuOpen(false);
   };
   
   const handleToggleViewer = () => {
-    const newVisibility = !isViewerVisible;
-    setViewerVisible(newVisibility);
-    // Save to active session
+    // Don't open viewer if there's no code or structure to display
+    if (!hasCode && activePane !== 'viewer') {
+      return; // Silently do nothing if there's no code
+    }
+    
+    const currentPane = activePane;
+    if (currentPane === 'viewer') {
+      setActivePane('editor');
+    } else if (currentPane === 'editor') {
+      setActivePane('viewer');
+    } else {
+      // If pane is null or any other value, open viewer
+      setActivePane('viewer');
+    }
+    // Update isViewerVisible for chat panel layout
+    setViewerVisible(true);
     if (activeSessionId) {
-      saveViewerVisibility(activeSessionId, newVisibility);
+      saveViewerVisibility(activeSessionId, true);
     }
     setIsMobileMenuOpen(false);
   };
@@ -45,24 +56,16 @@ export const Header: React.FC = () => {
       
       {/* Desktop Menu */}
       <div className="hidden md:flex items-center space-x-2 lg:space-x-4">
-        {/* Toggle Switch */}
-        <div className="flex items-center space-x-2">
-          <label className="relative inline-flex items-center cursor-pointer">
-            <input
-              type="checkbox"
-              checked={isViewerVisible}
-              onChange={handleToggleViewer}
-              className="sr-only peer"
-            />
-            <div className="w-11 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-2 peer-focus:ring-blue-300 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-blue-600"></div>
-          </label>
-        </div>
-        
         {/* 3D Visual Editor Button */}
         <button
           onClick={handleToggleViewer}
-          className="flex items-center space-x-1 px-2 lg:px-3 py-1 text-xs lg:text-sm text-gray-600 hover:text-gray-900 transition-colors"
-          title="Toggle 3D Visual Editor"
+          className={`flex items-center space-x-1 px-2 lg:px-3 py-1 text-xs lg:text-sm transition-colors ${
+            hasCode || activePane === 'viewer'
+              ? 'text-gray-600 hover:text-gray-900'
+              : 'text-gray-400 cursor-not-allowed'
+          }`}
+          title={hasCode || activePane === 'viewer' ? 'Toggle 3D Visual Editor' : 'No structure loaded - generate or load a structure first'}
+          disabled={!hasCode && activePane !== 'viewer'}
         >
           <Box className="w-4 h-4" />
           <span className="hidden lg:inline">3D Visual Editor</span>
@@ -78,14 +81,14 @@ export const Header: React.FC = () => {
           <span className="hidden lg:inline">Pipeline Canvas</span>
         </button>
         
-        {/* Pipeline Manager Button */}
+        {/* File Explorer Button */}
         <button
-          onClick={handleOpenPipelineManager}
-          className="flex items-center space-x-1 px-2 lg:px-3 py-1 text-xs lg:text-sm text-blue-600 hover:text-blue-800 transition-colors border border-blue-300 rounded-md"
-          title="Open Pipeline Manager"
+          onClick={handleOpenFiles}
+          className="flex items-center space-x-1 px-2 lg:px-3 py-1 text-xs lg:text-sm text-gray-600 hover:text-gray-900 transition-colors"
+          title="Open File Explorer"
         >
-          <Workflow className="w-4 h-4" />
-          <span className="hidden lg:inline">Pipelines</span>
+          <FolderOpen className="w-4 h-4" />
+          <span className="hidden lg:inline">Files</span>
         </button>
         
         <ProfileMenu />
@@ -112,24 +115,16 @@ export const Header: React.FC = () => {
           />
           <div className="absolute top-full left-0 right-0 bg-white border-b border-gray-200 shadow-lg z-50 md:hidden">
             <div className="px-4 py-3 space-y-3">
-              {/* Toggle Switch */}
-              <div className="flex items-center justify-between">
-                <span className="text-sm font-medium text-gray-700">3D Visual Editor</span>
-                <label className="relative inline-flex items-center cursor-pointer">
-                  <input
-                    type="checkbox"
-                    checked={isViewerVisible}
-                    onChange={handleToggleViewer}
-                    className="sr-only peer"
-                  />
-                  <div className="w-11 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-2 peer-focus:ring-blue-300 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-blue-600"></div>
-                </label>
-              </div>
-              
               {/* 3D Visual Editor Button */}
               <button
                 onClick={handleToggleViewer}
-                className="w-full flex items-center space-x-2 px-3 py-2 text-sm text-gray-700 hover:bg-gray-50 rounded transition-colors"
+                className={`w-full flex items-center space-x-2 px-3 py-2 text-sm rounded transition-colors ${
+                  hasCode || activePane === 'viewer'
+                    ? 'text-gray-700 hover:bg-gray-50'
+                    : 'text-gray-400 cursor-not-allowed'
+                }`}
+                title={hasCode || activePane === 'viewer' ? 'Toggle 3D Visual Editor' : 'No structure loaded - generate or load a structure first'}
+                disabled={!hasCode && activePane !== 'viewer'}
               >
                 <Box className="w-4 h-4" />
                 <span>3D Visual Editor</span>
@@ -144,13 +139,13 @@ export const Header: React.FC = () => {
                 <span>Pipeline Canvas</span>
               </button>
               
-              {/* Pipeline Manager Button */}
+              {/* File Explorer Button */}
               <button
-                onClick={handleOpenPipelineManager}
-                className="w-full flex items-center space-x-2 px-3 py-2 text-sm text-blue-600 hover:bg-blue-50 rounded transition-colors border border-blue-300"
+                onClick={handleOpenFiles}
+                className="w-full flex items-center space-x-2 px-3 py-2 text-sm text-gray-700 hover:bg-gray-50 rounded transition-colors"
               >
-                <Workflow className="w-4 h-4" />
-                <span>Pipelines</span>
+                <FolderOpen className="w-4 h-4" />
+                <span>Files</span>
               </button>
             </div>
           </div>

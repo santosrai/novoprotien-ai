@@ -1,0 +1,289 @@
+# Pipeline Canvas Backend Abstraction Strategy
+
+## Current State Analysis
+
+### ✅ What's Already Good (Framework-Agnostic)
+
+1. **Dependency Injection Pattern**: The library uses `PipelineContext` to inject:
+
+   - `apiClient` (interface-based, not implementation-specific)
+   - `authState` (generic user object)
+   - `sessionId` (optional string)
+   - `getAuthHeaders` (function interface)
+
+2. **Standalone Mode**: Works without backend (localStorage persistence)
+
+3. **Flexible API Client**: Accepts any object with `get()` and `post()` methods
+
+4. **External API Support**: HTTP Request nodes can call any external API via fetch
+
+### ⚠️ Current Coupling Points (NovoProtein-Specific)
+
+1. **Pipeline Persistence Endpoints**:
+
+   - Hardcoded: `POST /api/pipelines`, `GET /api/pipelines`, `GET /api/pipelines/:id`, `DELETE /api/pipelines/:id`
+   - Expected response format: `{ status: "success", pipeline: {...} }`
+   - Database schema assumptions: `user_id`, `message_id`, `conversation_id`
+
+2. **Node Execution Endpoints**:
+
+   - RFdiffusion: `/rfdiffusion/design` (hardcoded in `node.json`)
+   - AlphaFold: `/alphafold/run` (hardcoded in `node.json`)
+   - ProteinMPNN: `/proteinmpnn/design` (hardcoded in `node.json`)
+   - Expected payload formats are NovoProtein-specific
+
+3. **Authentication Assumptions**:
+
+   - JWT token format: `Bearer <token>`
+   - User object structure: `{ id: string, email?: string }`
+
+4. **Data Model Assumptions**:
+
+   - Pipeline structure with `user_id`, `message_id`, `conversation_id`
+   - Execution context expects specific session structure
+
+## Recommended Approach: Adapter Pattern
+
+### Option 1: Adapter Interface (Recommended)
+
+Create adapter interfaces that consumers can implement for their backend:
+
+**File: `src/components/pipeline-canvas/types/adapters.ts`**
+
+```typescript
+// Pipeline Persistence Adapter
+export interface PipelinePersistenceAdapter {
+  save(pipeline: Pipeline, options?: SaveOptions): Promise<{ id: string }>;
+  load(id: string): Promise<Pipeline>;
+  list(filters?: ListFilters): Promise<Pipeline[]>;
+  delete(id: string): Promise<void>;
+  sync?(): Promise<Pipeline[]>; // Optional sync method
+}
+
+// Node Execution Adapter
+export interface NodeExecutionAdapter {
+  execute(node: PipelineNode, inputData: Record<string, any>): Promise<any>;
+  // OR more granular:
+  // executeRFDiffusion(params: RFDiffusionParams): Promise<Result>;
+  // executeAlphaFold(params: AlphaFoldParams): Promise<Result>;
+}
+
+// Default Implementation (Current NovoProtein API)
+export class NovoProteinAdapter implements PipelinePersistenceAdapter {
+  constructor(private apiClient: ApiClient) {}
+  // Implement using current /api/pipelines endpoints
+}
+```
+
+**Benefits:**
+
+- Consumers implement their own adapters
+- Library provides default adapter for current API
+- Backward compatible (existing code still works)
+- Type-safe interfaces
+
+**Usage Example:**
+
+```typescript
+// Consumer's custom adapter
+class MyCustomAdapter implements PipelinePersistenceAdapter {
+  async save(pipeline: Pipeline) {
+    // Call their own API: POST /my-app/pipelines
+    const response = await fetch('/my-app/pipelines', {
+      method: 'POST',
+      body: JSON.stringify(pipeline)
+    });
+    return { id: pipeline.id };
+  }
+  // ... implement other methods
+}
+
+// Use in provider
+<PipelineCanvasProvider
+  persistenceAdapter={new MyCustomAdapter(apiClient)}
+>
+  <PipelineCanvas />
+</PipelineCanvasProvider>
+```
+
+### Option 2: Configuration-Based Endpoints
+
+Make endpoints configurable via node config or global config:
+
+**File: `src/components/pipeline-canvas/types/config.ts`**
+
+```typescript
+export interface PipelineConfig {
+  endpoints?: {
+    pipelines?: {
+      save?: string;      // Default: '/api/pipelines'
+      load?: string;      // Default: '/api/pipelines/:id'
+      list?: string;      // Default: '/api/pipelines'
+      delete?: string;    // Default: '/api/pipelines/:id'
+    };
+    nodes?: {
+      rfdiffusion?: string;  // Default: '/rfdiffusion/design'
+      alphafold?: string;     // Default: '/alphafold/run'
+      proteinmpnn?: string;   // Default: '/proteinmpnn/design'
+    };
+  };
+  responseTransformers?: {
+    pipeline?: (response: any) => Pipeline;
+    list?: (response: any) => Pipeline[];
+  };
+}
+```
+
+**Usage:**
+
+```typescript
+<PipelineCanvasProvider
+  config={{
+    endpoints: {
+      pipelines: {
+        save: '/my-app/workflows',
+        load: '/my-app/workflows/:id'
+      },
+      nodes: {
+        rfdiffusion: '/my-api/design-protein'
+      }
+    }
+  }}
+>
+  <PipelineCanvas />
+</PipelineCanvasProvider>
+```
+
+### Option 3: Reference Server Implementation (Complementary)
+
+Create a standalone server package that implements the adapter interfaces:
+
+**Structure:**
+
+```
+pipeline-canvas-server/
+├── adapters/
+│   ├── fastapi/          # FastAPI implementation
+│   ├── express/          # Express.js implementation
+│   └── nestjs/           # NestJS implementation
+├── schemas/              # Database schemas (SQL, Prisma, etc.)
+├── examples/             # Example implementations
+└── README.md
+```
+
+**Benefits:**
+
+- Provides ready-to-use server implementations
+- Shows best practices
+- Can be used as-is or as reference
+- Separate package (optional dependency)
+
+## Implementation Plan
+
+### Phase 1: Create Adapter Interfaces (High Priority)
+
+1. **Create adapter type definitions**:
+
+   - `types/adapters.ts` - Interface definitions
+   - `types/config.ts` - Configuration types
+
+2. **Refactor pipeline store**:
+
+   - Update `store/pipelineStore.ts` to use adapter pattern
+   - Keep default implementation for backward compatibility
+   - Add adapter injection via context
+
+3. **Update execution engine**:
+
+   - Make node endpoints configurable
+   - Support adapter pattern for node execution
+   - Keep current behavior as default
+
+### Phase 2: Documentation & Examples (Medium Priority)
+
+1. **Integration guides**:
+
+   - FastAPI integration example
+   - Express.js integration example
+   - Next.js API routes example
+   - Firebase/Firestore example
+   - Supabase example
+
+2. **Adapter implementation examples**:
+
+   - Show how to implement `PipelinePersistenceAdapter`
+   - Show how to customize node execution
+   - Show how to handle different auth systems
+
+### Phase 3: Reference Server Package (Optional)
+
+1. **Create `@mesantosrai/pipeline-canvas-server` package**:
+
+   - FastAPI reference implementation
+   - Express.js reference implementation
+   - Database migration scripts
+   - Docker setup
+
+2. **Benefits**:
+
+   - "Just install and use" for common frameworks
+   - Can be customized or used as reference
+   - Separate from main library (smaller bundle)
+
+## Recommendation
+
+**Go with Option 1 (Adapter Pattern) + Option 3 (Reference Server)**:
+
+1. **Adapter Pattern** makes the library truly framework-agnostic
+2. **Reference Server** provides "just install and use" for common cases
+3. **Backward Compatible** - existing NovoProtein code continues to work
+4. **Flexible** - advanced users can implement custom adapters
+
+## Migration Path
+
+1. **Phase 1**: Add adapter interfaces alongside existing code (non-breaking)
+2. **Phase 2**: Update library to use adapters internally (with defaults)
+3. **Phase 3**: Document migration path for consumers
+4. **Phase 4**: Create reference server package
+5. **Phase 5**: (Future) Deprecate direct API client usage in favor of adapters
+
+## Files to Modify
+
+- `src/components/pipeline-canvas/types/adapters.ts` (new)
+- `src/components/pipeline-canvas/types/config.ts` (new)
+- `src/components/pipeline-canvas/context/PipelineContext.tsx` (add adapter props)
+- `src/components/pipeline-canvas/store/pipelineStore.ts` (refactor to use adapters)
+- `src/components/pipeline-canvas/utils/executionEngine.ts` (make endpoints configurable)
+- `src/components/pipeline-canvas/components/PipelineCanvasProvider.tsx` (add adapter support)
+
+## New Package Structure (Optional)
+
+```
+pipeline-canvas-server/
+├── src/
+│   ├── adapters/
+│   │   ├── fastapi/
+│   │   │   ├── routes.py
+│   │   │   ├── models.py
+│   │   │   └── adapter.py
+│   │   └── express/
+│   │       ├── routes.ts
+│   │       ├── models.ts
+│   │       └── adapter.ts
+│   ├── schemas/
+│   │   ├── sqlite.sql
+│   │   ├── postgres.sql
+│   │   └── prisma/schema.prisma
+│   └── examples/
+│       ├── fastapi-example/
+│       └── express-example/
+├── package.json
+└── README.md
+```
+
+This approach gives you:
+
+- ✅ Framework-agnostic library (adapter pattern)
+- ✅ "Just install and use" option (reference server)
+- ✅ Backward compatibility
+- ✅ Flexibility for custom implementations
