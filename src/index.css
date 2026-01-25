@@ -407,30 +407,6 @@ body {
   animation: error-shake 0.5s ease-in-out;
 }
 
-/* Dark theme adjustments for React Flow */
-.react-flow.bg-\[#1a1a2e\] .react-flow__node {
-  color: #e5e7eb;
-}
-
-.react-flow.bg-\[#1a1a2e\] .react-flow__controls {
-  background: #1e1e32;
-  border-color: #374151;
-}
-
-.react-flow.bg-\[#1a1a2e\] .react-flow__controls button {
-  background: #1e1e32;
-  border-color: #374151;
-  color: #9ca3af;
-}
-
-.react-flow.bg-\[#1a1a2e\] .react-flow__controls button:hover {
-  background: #374151;
-}
-
-.react-flow.bg-\[#1a1a2e\] .react-flow__minimap {
-  background: #1e1e32;
-}
-
 /* Edge animation enhancements */
 .react-flow__edge.animated path {
   stroke-dasharray: 5, 5;
