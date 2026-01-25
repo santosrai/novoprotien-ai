@@ -14,6 +14,8 @@ import { AuthGuard } from './components/auth/AuthGuard'
 import { ErrorBoundary } from './components/ErrorBoundary'
 import { ThemeProvider } from './contexts/ThemeContext'
 import './index.css'
+// Import pipeline-canvas library styles
+import './components/pipeline-canvas/style.css'
 
 // Verify root element exists before rendering
 const rootElement = document.getElementById('root');
