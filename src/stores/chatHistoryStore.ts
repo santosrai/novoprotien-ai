@@ -142,7 +142,7 @@ interface ChatHistoryState {
   deleteSession: (sessionId: string) => Promise<void>;
   deleteSessions: (sessionIds: string[]) => Promise<void>;
   addMessageToSession: (sessionId: string, message: Message) => Promise<void>;
-  updateSessionMessages: (sessionId: string, messages: Message[]) => void;
+  updateSessionMessages: (sessionId: string, messages: Message[]) => Promise<void>;
   syncSessions: () => Promise<void>;
   syncSessionMessages: (sessionId: string) => Promise<void>;
   syncSessionState: (sessionId: string) => Promise<void>;
@@ -324,6 +324,10 @@ const createSaveMessageToBackend = (getSessions: () => ChatSession[]) => async (
           rfdiffusionResult: message.rfdiffusionResult,
           uploadedFile: message.uploadedFile,
           error: message.error,
+          // Include blueprint data for persistence
+          blueprint: (message as any).blueprint,
+          blueprintRationale: (message as any).blueprintRationale,
+          blueprintApproved: (message as any).blueprintApproved,
         },
       };
       
@@ -424,6 +428,10 @@ export const useChatHistoryStore = create<ChatHistoryState>()(
                       thinkingProcess: message.thinkingProcess,
                       alphafoldResult: message.alphafoldResult,
                       proteinmpnnResult: message.proteinmpnnResult,
+                      // Include blueprint data for persistence
+                      blueprint: (message as any).blueprint,
+                      blueprintRationale: (message as any).blueprintRationale,
+                      blueprintApproved: (message as any).blueprintApproved,
                     },
                   };
                   
@@ -899,7 +907,37 @@ export const useChatHistoryStore = create<ChatHistoryState>()(
         });
       },
       
-      updateSessionMessages: (sessionId, messages) => {
+      updateSessionMessages: async (sessionId, messages) => {
+        const user = useAuthStore.getState().user;
+        if (!user) {
+          // Update local state only if not authenticated
+          set((state) => {
+            const updatedSessions = state.sessions.map(session => {
+              if (session.id === sessionId) {
+                return {
+                  ...session,
+                  messages,
+                  lastModified: new Date(),
+                  metadata: {
+                    ...session.metadata,
+                    messageCount: messages.length,
+                    lastActivity: new Date(),
+                  }
+                };
+              }
+              return session;
+            });
+            
+            return { sessions: updatedSessions };
+          });
+          return;
+        }
+
+        // Get previous messages to detect changes
+        const previousSession = get().sessions.find(s => s.id === sessionId);
+        const previousMessages = previousSession?.messages || [];
+        
+        // Update local state immediately
         set((state) => {
           const updatedSessions = state.sessions.map(session => {
             if (session.id === sessionId) {
@@ -919,6 +957,49 @@ export const useChatHistoryStore = create<ChatHistoryState>()(
           
           return { sessions: updatedSessions };
         });
+
+        // Sync updated messages to backend
+        try {
+          for (const message of messages) {
+            const previousMessage = previousMessages.find(m => m.id === message.id);
+            // Only update if message changed (content or metadata)
+            if (previousMessage && (
+              previousMessage.content !== message.content ||
+              JSON.stringify((previousMessage as any).blueprint) !== JSON.stringify((message as any).blueprint) ||
+              (previousMessage as any).blueprintApproved !== (message as any).blueprintApproved ||
+              (previousMessage as any).blueprintRationale !== (message as any).blueprintRationale
+            )) {
+              try {
+                const payload: any = {
+                  content: message.content,
+                  metadata: {
+                    jobId: message.jobId,
+                    jobType: message.jobType,
+                    thinkingProcess: message.thinkingProcess,
+                    alphafoldResult: message.alphafoldResult,
+                    proteinmpnnResult: message.proteinmpnnResult,
+                    rfdiffusionResult: message.rfdiffusionResult,
+                    uploadedFile: message.uploadedFile,
+                    error: message.error,
+                    // Include blueprint data for persistence
+                    blueprint: (message as any).blueprint,
+                    blueprintRationale: (message as any).blueprintRationale,
+                    blueprintApproved: (message as any).blueprintApproved,
+                  },
+                };
+                
+                await api.put(`/chat/sessions/${sessionId}/messages/${message.id}`, payload);
+                console.log(`[updateSessionMessages] Successfully updated message ${message.id} in backend`);
+              } catch (error: any) {
+                console.error(`[updateSessionMessages] Failed to update message ${message.id} in backend:`, error);
+                // Continue with other messages even if one fails
+              }
+            }
+          }
+        } catch (error: any) {
+          console.error('[updateSessionMessages] Error syncing messages to backend:', error);
+          // Don't throw - local state is already updated
+        }
       },
       
       updateSessionTitle: async (sessionId, title) => {
@@ -1338,6 +1419,10 @@ export const useChatHistoryStore = create<ChatHistoryState>()(
                     { rfdiffusionResult: metadata.rfdiffusionResult }),
                 ...(metadata.uploadedFile != null && { uploadedFile: metadata.uploadedFile }),
                 ...(metadata.error != null && { error: metadata.error }),
+                // Blueprint data - restore from metadata
+                ...(metadata.blueprint != null && { blueprint: metadata.blueprint } as any),
+                ...(metadata.blueprintRationale != null && { blueprintRationale: metadata.blueprintRationale } as any),
+                ...(metadata.blueprintApproved != null && { blueprintApproved: metadata.blueprintApproved } as any),
                 // Linked tools (from backend API response)
                 ...(bm.threeDCanvas && { threeDCanvas: bm.threeDCanvas }),
                 ...(bm.pipeline && { pipeline: bm.pipeline }),
@@ -1367,7 +1452,14 @@ export const useChatHistoryStore = create<ChatHistoryState>()(
             type: messages[0]?.type,
             contentLength: messages[0]?.content?.length,
             hasJobId: !!messages[0]?.jobId,
+            hasBlueprint: !!(messages[0] as any)?.blueprint,
           });
+          
+          // Log blueprint restoration for debugging
+          const messagesWithBlueprints = messages.filter(m => (m as any).blueprint);
+          if (messagesWithBlueprints.length > 0) {
+            console.log(`[syncSessionMessages] Restored ${messagesWithBlueprints.length} message(s) with blueprint data`);
+          }
           
           // Update session with messages
           set((state) => {
@@ -1684,14 +1776,14 @@ export const useChatHistoryStore = create<ChatHistoryState>()(
                     // This prevents data loss during refresh
                     const syncedSessions = state.sessions;
                     let restoredCount = 0;
-                    syncedSessions.forEach(syncedSession => {
+                    for (const syncedSession of syncedSessions) {
                       const backup = backupSessions.find(b => b.id === syncedSession.id);
                       if (backup) {
                         // Restore messages if backend doesn't have them
                         if ((!syncedSession.messages || syncedSession.messages.length === 0) && backup.messages.length > 0) {
                           console.log(`[onRehydrateStorage] Restoring ${backup.messages.length} messages from backup for session ${syncedSession.id}`);
                           try {
-                            state.updateSessionMessages(syncedSession.id, backup.messages);
+                            await state.updateSessionMessages(syncedSession.id, backup.messages);
                             restoredCount++;
                           } catch (err) {
                             console.error(`[onRehydrateStorage] Failed to restore messages for session ${syncedSession.id}:`, err);
@@ -1708,7 +1800,7 @@ export const useChatHistoryStore = create<ChatHistoryState>()(
                           restoredCount++;
                         }
                       }
-                    });
+                    }
                     
                     if (restoredCount > 0) {
                       console.log(`[onRehydrateStorage] Restored data from backup for ${restoredCount} sessions`);
@@ -1764,7 +1856,10 @@ export const useActiveSession = () => {
     },
     updateMessages: (messages: Message[]) => {
       if (activeSession) {
-        updateMessages(activeSession.id, messages);
+        // Fire and forget - update happens in background
+        updateMessages(activeSession.id, messages).catch(err => {
+          console.error('[useActiveSession] Failed to update messages:', err);
+        });
       }
     },
   };

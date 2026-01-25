@@ -9,7 +9,7 @@ import { ErrorDashboard, useErrorDashboard } from './components/ErrorDashboard';
 import { FileBrowser } from './components/FileBrowser';
 import { FileEditor } from './components/FileEditor';
 import { PipelineCanvas, PipelineManager, PipelineExecution, PipelineThemeWrapper, PipelineProvider } from './components/pipeline-canvas';
-import { api } from './utils/api';
+import { api, getAuthHeaders } from './utils/api';
 import { useAuthStore } from './stores/authStore';
 import { useTheme } from './contexts/ThemeContext';
 import { useAppStore } from './stores/appStore';
@@ -98,6 +98,7 @@ function App() {
     <PipelineProvider
       apiClient={api}
       authState={{ user: user ?? null, isAuthenticated: !!user }}
+      getAuthHeaders={getAuthHeaders}
     >
       <div className="h-screen flex flex-col bg-app text-app" data-testid="app-container" data-app-ready="true">
         <Header />

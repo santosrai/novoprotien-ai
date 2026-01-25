@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { PipelineCanvas, PipelineManager, PipelineExecution, PipelineThemeWrapper, PipelineProvider } from '../components/pipeline-canvas';
 import { usePipelineStore } from '../components/pipeline-canvas/store/pipelineStore';
 import { useAuthStore } from '../stores/authStore';
-import { api } from '../utils/api';
+import { api, getAuthHeaders } from '../utils/api';
 import { useTheme } from '../contexts/ThemeContext';
 
 export function PipelinePage() {
@@ -47,6 +47,7 @@ export function PipelinePage() {
       <PipelineProvider
         apiClient={api}
         authState={{ user: user ?? null, isAuthenticated: !!user }}
+        getAuthHeaders={getAuthHeaders}
       >
         <div className="flex-1 min-h-0">
           <PipelineThemeWrapper externalTheme={theme} className="h-full">

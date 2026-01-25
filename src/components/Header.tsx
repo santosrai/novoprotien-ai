@@ -6,7 +6,7 @@ import { ProfileMenu } from './auth/ProfileMenu';
 import { useHasCode } from '../utils/codeUtils';
 
 export const Header: React.FC = () => {
-  const { activePane, isViewerVisible, setViewerVisible, setActivePane } = useAppStore();
+  const { activePane, setViewerVisible, setActivePane } = useAppStore();
   const { activeSessionId, saveViewerVisibility } = useChatHistoryStore();
   const hasCode = useHasCode();
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);

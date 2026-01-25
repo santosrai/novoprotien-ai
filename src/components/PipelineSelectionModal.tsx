@@ -40,22 +40,22 @@ export const PipelineSelectionModal: React.FC<PipelineSelectionModalProps> = ({
   });
 
   return (
-    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50" onClick={onClose}>
+    <div className="fixed inset-0 bg-black/50 dark:bg-black/70 flex items-center justify-center z-50" onClick={onClose}>
       <div
-        className="bg-[#1e1e32] rounded-lg shadow-xl w-full max-w-md max-h-[80vh] flex flex-col"
+        className="bg-app-card rounded-lg shadow-xl w-full max-w-md max-h-[80vh] flex flex-col border border-app"
         onClick={(e) => e.stopPropagation()}
       >
         {/* Header */}
-        <div className="flex items-center justify-between p-4 border-b border-gray-700/50">
+        <div className="flex items-center justify-between p-4 border-b border-app">
           <div className="flex items-center gap-2">
             <div className="w-6 h-6 rounded bg-gradient-to-br from-blue-500 to-purple-500 flex items-center justify-center">
               <FileText className="w-4 h-4 text-white" />
             </div>
-            <h2 className="text-lg font-semibold text-white">Add pipeline</h2>
+            <h2 className="text-lg font-semibold text-app">Add pipeline</h2>
           </div>
           <button
             onClick={onClose}
-            className="w-8 h-8 flex items-center justify-center text-gray-400 hover:text-white hover:bg-gray-700/50 rounded-full transition-colors"
+            className="w-8 h-8 flex items-center justify-center text-app-muted hover:text-app hover:bg-app-card-hover rounded-full transition-colors"
           >
             <X className="w-5 h-5" />
           </button>
@@ -64,13 +64,13 @@ export const PipelineSelectionModal: React.FC<PipelineSelectionModalProps> = ({
         {/* Content */}
         <div className="flex-1 overflow-y-auto p-4">
           <div className="mb-3">
-            <h3 className="text-sm font-medium text-gray-400 mb-2">Recent</h3>
+            <h3 className="text-sm font-medium text-app-muted mb-2">Recent</h3>
           </div>
 
           {sortedPipelines.length === 0 ? (
             <div className="text-center py-8">
-              <p className="text-sm text-gray-500">No saved pipelines</p>
-              <p className="text-xs text-gray-600 mt-1">Create a pipeline to see it here</p>
+              <p className="text-sm text-app-muted">No saved pipelines</p>
+              <p className="text-xs text-app-muted mt-1">Create a pipeline to see it here</p>
             </div>
           ) : (
             <div className="space-y-2">
@@ -80,16 +80,16 @@ export const PipelineSelectionModal: React.FC<PipelineSelectionModalProps> = ({
                   <div
                     key={pipeline.id}
                     onClick={() => handlePipelineClick(pipeline.id)}
-                    className="flex items-center gap-3 p-3 rounded-lg hover:bg-gray-800/50 cursor-pointer transition-colors group"
+                    className="flex items-center gap-3 p-3 rounded-lg hover:bg-app-card-hover cursor-pointer transition-colors group border border-transparent hover:border-app"
                   >
-                    <div className="w-10 h-10 flex items-center justify-center bg-gray-700/50 rounded group-hover:bg-gray-700 transition-colors">
-                      <FileText className="w-5 h-5 text-gray-400" />
+                    <div className="w-10 h-10 flex items-center justify-center bg-app-tertiary rounded group-hover:bg-app-hover transition-colors">
+                      <FileText className="w-5 h-5 text-app-muted" />
                     </div>
                     <div className="flex-1 min-w-0">
-                      <h4 className="text-sm font-medium text-white truncate">
+                      <h4 className="text-sm font-medium text-app truncate">
                         {pipeline.name}
                       </h4>
-                      <p className="text-xs text-gray-500 mt-0.5">
+                      <p className="text-xs text-app-muted mt-0.5">
                         {nodeCount} {nodeCount === 1 ? 'node' : 'nodes'} • {formatDate(pipeline.createdAt)}
                       </p>
                     </div>
