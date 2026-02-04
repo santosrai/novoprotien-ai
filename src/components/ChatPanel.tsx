@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { Send, Sparkles, Download, Play, X, Copy, ChevronDown, ChevronUp } from 'lucide-react';
 import { useAppStore } from '../stores/appStore';
 import { useChatHistoryStore, useActiveSession, Message } from '../stores/chatHistoryStore';
@@ -270,12 +270,12 @@ export const ChatPanel: React.FC = () => {
   const isViewerVisible = useAppStore(state => state.isViewerVisible);
   
   // Helper function to set viewer visibility and save to session
-  const setViewerVisibleAndSave = (visible: boolean) => {
+  const setViewerVisibleAndSave = useCallback((visible: boolean) => {
     setViewerVisible(visible);
     if (activeSessionId) {
       saveViewerVisibility(activeSessionId, visible);
     }
-  };
+  }, [setViewerVisible, activeSessionId, saveViewerVisibility]);
   const { activeSession, addMessage, updateMessages } = useActiveSession();
 
   // Agent and model settings

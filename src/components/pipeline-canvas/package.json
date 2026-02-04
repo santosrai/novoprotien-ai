@@ -17,11 +17,15 @@
       "import": "./dist/index.mjs",
       "types": "./dist/index.d.ts"
     },
-    "./style.css": "./dist/style.css"
+    "./style.css": "./dist/style.css",
+    "./schemas/pipeline": "./schemas/pipeline.json",
+    "./schemas/openapi": "./schemas/openapi.yaml"
   },
   "files": [
     "dist",
     "nodes",
+    "schemas",
+    "backend",
     "README.md",
     "LICENSE",
     "package.json"

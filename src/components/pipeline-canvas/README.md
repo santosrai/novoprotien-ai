@@ -698,6 +698,16 @@ pipeline-canvas/
 │   ├── rfdiffusion_node/
 │   ├── proteinmpnn_node/
 │   └── alphafold_node/
+├── schemas/             # Schema exports
+│   ├── pipeline.json    # JSON Schema for Pipeline types
+│   └── openapi.yaml     # OpenAPI 3.0 spec for pipeline API
+├── backend/             # Python backend support
+│   ├── README.md        # Backend integration guide
+│   └── python/
+│       ├── schema.py    # Pydantic models
+│       ├── routes.py    # FastAPI router factory
+│       └── migrations/
+│           └── 001_pipelines.sql
 ├── store/               # Zustand store
 │   └── pipelineStore.ts
 ├── types/               # TypeScript types
@@ -712,6 +722,43 @@ pipeline-canvas/
 ├── tsconfig.json
 └── vite.config.ts
 ```
+
+## Backend Integration
+
+The package includes **schema exports** and a **Python backend** for pipeline persistence.
+
+### Schema Exports
+
+Use the pipeline schema for validation or code generation:
+
+```ts
+// JSON Schema (Pipeline, PipelineBlueprint, PipelineNode types)
+import pipelineSchema from '@mesantosrai/pipeline-canvas/schemas/pipeline';
+
+// OpenAPI 3.0 spec for the pipeline API (YAML)
+import openapiSpec from '@mesantosrai/pipeline-canvas/schemas/openapi';
+```
+
+Note: JSON import is supported by Vite and webpack. For OpenAPI YAML, you may need a YAML loader or fetch the file at runtime.
+
+### Python Backend
+
+A portable FastAPI router is included for pipeline CRUD and execution tracking. See [backend/README.md](./backend/README.md) for full integration instructions.
+
+**Quick setup:**
+
+1. Run the migration: `backend/python/migrations/001_pipelines.sql`
+2. Copy the backend to your project or add it to your Python path
+3. Mount the router:
+
+```python
+from pipeline_backend.routes import create_pipeline_router
+
+router = create_pipeline_router(get_db, get_current_user, verify_message_ownership=False)
+app.include_router(router)
+```
+
+The backend returns responses compatible with the pipeline-canvas `NovoProteinAdapter`.
 
 ## Backend Abstraction
 
