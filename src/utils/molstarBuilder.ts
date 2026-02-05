@@ -21,6 +21,7 @@ export interface MolstarBuilder {
   highlightResidue: (selector: ResidueSelector, options?: { color?: string }) => Promise<void>;
   labelResidue: (selector: ResidueSelector, text: string) => Promise<void>;
   focusResidue: (selector: ResidueSelector) => Promise<void>;
+  colorByConfidence: () => Promise<void>;
 }
 
 export const createMolstarBuilder = (
@@ -235,6 +236,50 @@ export const createMolstarBuilder = (
         console.log(`Focus request for residue ${selector.label_asym_id}:${selector.label_seq_id}`);
       } catch (error) {
         console.warn('Failed to focus residue:', error);
+      }
+    },
+
+    async colorByConfidence() {
+      if (!currentStructure) {
+        throw new Error('No structure loaded');
+      }
+
+      try {
+        // Clear existing representations
+        const hierarchy = plugin.managers.structure.hierarchy;
+        const existing = (hierarchy as any)?.current?.structures ?? [];
+        if (Array.isArray(existing) && existing.length > 0) {
+          for (const s of existing) {
+            const components = s?.components ?? [];
+            for (const comp of components) {
+              const representations = comp?.representations ?? [];
+              for (const repr of representations) {
+                await plugin.managers.structure.hierarchy.remove([repr]);
+              }
+            }
+          }
+        }
+
+        // Add cartoon with uncertainty (B-factor / pLDDT) coloring
+        await plugin.builders.structure.representation.addRepresentation(
+          currentStructure,
+          {
+            type: 'cartoon' as const,
+            color: 'uncertainty' as const,
+          }
+        );
+
+        console.log('[Molstar] Colored by confidence (B-factor/pLDDT)');
+      } catch (error) {
+        console.warn('Failed to color by confidence:', error);
+        // Fallback: just re-apply cartoon with element coloring
+        await plugin.builders.structure.representation.addRepresentation(
+          currentStructure,
+          {
+            type: 'cartoon' as const,
+            color: 'element' as const,
+          }
+        );
       }
     }
   };
