@@ -849,6 +849,28 @@ async def run_agent(
             log_line("agent:proteinmpnn:failed", {"error": str(e), "userText": user_text})
             return {"type": "text", "text": f"ProteinMPNN processing failed: {str(e)}"}
 
+    # Special handling for Validation agent - use handler
+    if agent.get("id") == "validation-agent":
+        try:
+            from .handlers.validation import validation_handler
+            result = await validation_handler.process_validation_request(
+                user_text,
+                context={
+                    "current_pdb_content": current_code,
+                    "uploaded_file_context": uploaded_file_context,
+                    "file_id": uploaded_file_context.get("file_id") if uploaded_file_context else None,
+                    "session_id": None,
+                    "user_id": None,
+                },
+            )
+            if result.get("action") == "error":
+                log_line("agent:validation:error", {"error": result.get("error"), "userText": user_text})
+                return {"type": "text", "text": json.dumps(result)}
+            return {"type": "text", "text": json.dumps(result)}
+        except Exception as e:
+            log_line("agent:validation:failed", {"error": str(e), "userText": user_text})
+            return {"type": "text", "text": f"Validation failed: {str(e)}"}
+
     # Gather pipeline context for pipeline-agent and bio-chat (when pipeline_id is provided)
     # This allows agents to answer questions about attached pipelines
     if pipeline_id or agent.get("id") == "pipeline-agent":

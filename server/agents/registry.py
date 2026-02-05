@@ -9,6 +9,7 @@ from .prompts.openfold2 import OPENFOLD2_AGENT_SYSTEM_PROMPT
 from .prompts.rfdiffusion import RFDIFFUSION_AGENT_SYSTEM_PROMPT
 from .prompts.proteinmpnn import PROTEINMPNN_AGENT_SYSTEM_PROMPT
 from .prompts.pipeline import PIPELINE_AGENT_SYSTEM_PROMPT
+from .prompts.validation import VALIDATION_AGENT_SYSTEM_PROMPT
 
 
 agents = {
@@ -101,6 +102,16 @@ agents = {
         "defaultModel": os.getenv("CLAUDE_CHAT_MODEL", "claude-3-5-sonnet-20241022"),
         "kind": "pipeline",
         "category": "workflow",
+    },
+    "validation-agent": {
+        "id": "validation-agent",
+        "name": "Structure Validation",
+        "description": "Validates protein structure quality with pLDDT confidence scores, Ramachandran geometry analysis, steric clash detection, and provides actionable redesign suggestions. Use for: validate, check quality, assess structure, quality report, confidence score, Ramachandran, clashes.",
+        "system": VALIDATION_AGENT_SYSTEM_PROMPT,
+        "modelEnv": "CLAUDE_CHAT_MODEL",
+        "defaultModel": os.getenv("CLAUDE_CHAT_MODEL", "claude-3-5-sonnet-20241022"),
+        "kind": "validation",
+        "category": "analysis",
     },
 }
 
