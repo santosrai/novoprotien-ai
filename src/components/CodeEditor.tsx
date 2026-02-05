@@ -1,28 +1,23 @@
-import React, { useRef, useEffect } from 'react';
+import React, { useRef } from 'react';
 import Editor from '@monaco-editor/react';
 import { Play, RotateCcw, Copy, FileText, Save } from 'lucide-react';
 import { useAppStore } from '../stores/appStore';
 import { useChatHistoryStore } from '../stores/chatHistoryStore';
 import { CodeExecutor } from '../utils/codeExecutor';
 
-const defaultCode = `// Default: Cartoon view of PDB 1CBS
-try {
-  await builder.loadStructure('1CBS');
-  await builder.addCartoonRepresentation({ color: 'secondary-structure' });
-  builder.focusView();
-  console.log('Loaded 1CBS');
-} catch (e) {
-  console.error('Failed to load 1CBS', e);
-}`;
+const defaultCode = `// Molstar Code Editor
+// Your code will appear here when you interact with the viewer
+// Example: await builder.loadStructure('1ABC');`;
 
 export const CodeEditor: React.FC = () => {
   const { plugin, currentCode, setCurrentCode, isExecuting, setIsExecuting } = useAppStore();
   const { activeSessionId, saveVisualizationCode } = useChatHistoryStore();
   const editorRef = useRef<any>(null);
 
-  useEffect(() => {
-    if (!currentCode) setCurrentCode(defaultCode);
-  }, [currentCode, setCurrentCode]);
+  // Removed automatic default code setting - editor starts empty
+  // useEffect(() => {
+  //   if (!currentCode) setCurrentCode(defaultCode);
+  // }, [currentCode, setCurrentCode]);
 
   const handleEditorDidMount = (editor: any) => {
     editorRef.current = editor;
@@ -40,10 +35,27 @@ export const CodeEditor: React.FC = () => {
       const res = await exec.executeCode(currentCode);
       console.log('[Molstar] execute result:', res);
       
-      // Save code to active session after successful execution
+      // Save code to active session after successful execution (message-scoped if possible)
       if (activeSessionId && currentCode.trim()) {
-        saveVisualizationCode(activeSessionId, currentCode);
-        console.log('[CodeEditor] Saved visualization code to session:', activeSessionId);
+        // Try to find the last AI message to link the canvas
+        const chatStore = useChatHistoryStore.getState();
+        const activeSession = chatStore.sessions.find(s => s.id === activeSessionId);
+        const lastAiMessage = activeSession?.messages
+          .filter(m => m.type === 'ai')
+          .sort((a, b) => {
+            const aTime = a.timestamp instanceof Date ? a.timestamp.getTime() : new Date(a.timestamp).getTime();
+            const bTime = b.timestamp instanceof Date ? b.timestamp.getTime() : new Date(b.timestamp).getTime();
+            return bTime - aTime;
+          })[0];
+        
+        if (lastAiMessage?.id) {
+          saveVisualizationCode(activeSessionId, currentCode, lastAiMessage.id);
+          console.log('[CodeEditor] Saved visualization code to message-scoped canvas:', lastAiMessage.id);
+        } else {
+          // Fallback to session-scoped (deprecated)
+          saveVisualizationCode(activeSessionId, currentCode);
+          console.log('[CodeEditor] Saved visualization code to session (deprecated):', activeSessionId);
+        }
       }
     } catch (e) {
       console.error('[Molstar] execute failed', e);

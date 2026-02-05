@@ -1,52 +1,82 @@
 {
-  "name": "@novoprotein/pipeline-canvas",
-  "version": "1.0.0",
+  "name": "@mesantosrai/pipeline-canvas",
+  "version": "1.0.3",
   "description": "Pipeline canvas component library for visual workflow design",
+  "author": "santosh rai <santosh984970@gmail.com>",
+  "license": "MIT",
+  "homepage": "https://github.com/santosrai/pipeline-canvas#readme",
+  "bugs": {
+    "url": "https://github.com/santosrai/pipeline-canvas/issues"
+  },
   "type": "module",
-  "main": "./index.ts",
-  "types": "./index.ts",
+  "main": "./dist/index.mjs",
+  "module": "./dist/index.mjs",
+  "types": "./dist/index.d.ts",
   "exports": {
     ".": {
-      "import": "./index.ts",
-      "types": "./index.ts"
+      "import": "./dist/index.mjs",
+      "types": "./dist/index.d.ts"
     },
-    "./components": {
-      "import": "./components/index.ts",
-      "types": "./components/index.ts"
-    },
-    "./types": {
-      "import": "./types/index.ts",
-      "types": "./types/index.ts"
-    },
-    "./store": {
-      "import": "./store/pipelineStore.ts",
-      "types": "./store/pipelineStore.ts"
-    },
-    "./utils": {
-      "import": "./utils/index.ts",
-      "types": "./utils/index.ts"
-    }
+    "./style.css": "./dist/style.css",
+    "./schemas/pipeline": "./schemas/pipeline.json",
+    "./schemas/openapi": "./schemas/openapi.yaml"
+  },
+  "files": [
+    "dist",
+    "nodes",
+    "schemas",
+    "backend",
+    "README.md",
+    "LICENSE",
+    "package.json"
+  ],
+  "scripts": {
+    "build": "vite build && tsc --emitDeclarationOnly --outDir dist",
+    "type-check": "tsc --noEmit",
+    "prepublishOnly": "npm run build"
   },
   "peerDependencies": {
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "reactflow": "^11.11.4",
     "zustand": "^4.5.4",
-    "lucide-react": "^0.427.0"
+    "lucide-react": "^0.427.0",
+    "@radix-ui/react-dialog": "^1.0.5",
+    "@radix-ui/react-dropdown-menu": "^2.0.6",
+    "@radix-ui/react-label": "^2.0.2",
+    "@radix-ui/react-select": "^2.0.0",
+    "@radix-ui/react-slot": "^1.0.2",
+    "@radix-ui/react-tooltip": "^1.0.7",
+    "class-variance-authority": "^0.7.0",
+    "clsx": "^2.1.0",
+    "tailwind-merge": "^2.2.0"
   },
-  "scripts": {
-    "type-check": "tsc --noEmit"
+  "devDependencies": {
+    "@types/react": "^18.3.3",
+    "@types/react-dom": "^18.3.0",
+    "@types/node": "^20.11.5",
+    "@vitejs/plugin-react": "^4.3.1",
+    "typescript": "^5.2.2",
+    "vite": "^5.3.4"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/santosrai/pipeline-canvas.git"
   },
   "keywords": [
     "pipeline",
     "canvas",
     "workflow",
     "react",
-    "reactflow"
-  ],
-  "author": "",
-  "license": "MIT"
+    "reactflow",
+    "visual-editor",
+    "dag",
+    "node-based",
+    "workflow-builder"
+  ]
+ 
 }
+
 
 
 

@@ -1,7 +1,6 @@
 import { Header } from './components/Header';
 import { ChatPanel } from './components/ChatPanel';
 import { CodeEditor } from './components/CodeEditor';
-import { MolstarViewer } from './components/MolstarViewer';
 import { SettingsDialog } from './components/SettingsDialog';
 import { ChatHistoryPanel } from './components/ChatHistoryPanel';
 import { ChatHistorySidebar } from './components/ChatHistorySidebar';
@@ -9,20 +8,26 @@ import { ResizablePanel } from './components/ResizablePanel';
 import { ErrorDashboard, useErrorDashboard } from './components/ErrorDashboard';
 import { FileBrowser } from './components/FileBrowser';
 import { FileEditor } from './components/FileEditor';
-import { PipelineCanvas, PipelineManager, PipelineExecution } from './components/pipeline-canvas';
-import { api } from './utils/api';
-import { Eye, Code2, Settings, FolderOpen, Workflow } from 'lucide-react';
+import { PipelineCanvas, PipelineManager, PipelineExecution, PipelineThemeWrapper, PipelineProvider } from './components/pipeline-canvas';
+import { api, getAuthHeaders } from './utils/api';
+import { useAuthStore } from './stores/authStore';
+import { useTheme } from './contexts/ThemeContext';
 import { useAppStore } from './stores/appStore';
 import { useSettingsStore } from './stores/settingsStore';
 import { useChatHistoryStore } from './stores/chatHistoryStore';
-import { useEffect, useState } from 'react';
+import { useEffect, useState, Suspense, lazy } from 'react';
+
+// Lazy load MolstarViewer - only load when viewer is visible
+const MolstarViewer = lazy(() => import('./components/MolstarViewer').then(module => ({ default: module.MolstarViewer })));
 
 function App() {
   const { activePane, setActivePane, chatPanelWidth, setChatPanelWidth, isViewerVisible, selectedFile, setSelectedFile } = useAppStore();
   const { settings, isSettingsDialogOpen, setSettingsDialogOpen } = useSettingsStore();
   const { isHistoryPanelOpen, setHistoryPanelOpen } = useChatHistoryStore();
   const [isPipelineManagerOpen, setIsPipelineManagerOpen] = useState(false);
+  const user = useAuthStore((state) => state.user);
   const errorDashboard = useErrorDashboard();
+  const { theme } = useTheme();
   
   // Listen for pipeline manager open event
   useEffect(() => {
@@ -43,23 +48,36 @@ function App() {
   const handleFileSelect = async (file: any) => {
     // Load file content and show in editor
     try {
-      const { activeSessionId } = useChatHistoryStore.getState();
-      if (!activeSessionId) return;
-
-      const response = await fetch(`/api/sessions/${activeSessionId}/files/${file.file_id}`);
-      const data = await response.json();
+      console.log('[App] Loading file:', file.file_id, 'type:', file.type);
       
-      if (data.status === 'success') {
+      // Use the generic file content endpoint for all file types
+      const response = await api.get(`/files/${file.file_id}`);
+      
+      if (response.data.status === 'success') {
+        console.log('[App] File loaded successfully:', response.data.filename);
         setSelectedFile({
           id: file.file_id,
           type: file.type,
-          content: data.content,
-          filename: file.filename || data.filename || `file_${file.file_id}.pdb`,
+          content: response.data.content,
+          filename: file.filename || response.data.filename || `file_${file.file_id}.pdb`,
         } as { id: string; type: string; content: string; filename?: string });
         setActivePane('files');
+      } else {
+        console.error('[App] Failed to load file - unexpected response:', response.data);
+        alert('Failed to load file: Unexpected response format');
       }
-    } catch (error) {
-      console.error('Failed to load file:', error);
+    } catch (error: any) {
+      console.error('[App] Failed to load file:', error);
+      if (error.response) {
+        console.error('[App] Error response:', error.response.status, error.response.data);
+        if (error.response.status === 404) {
+          alert(`File not found. It may have been deleted or you don't have access to it.`);
+        } else {
+          alert(`Failed to load file: ${error.response.data?.detail || error.response.data?.error || 'Unknown error'}`);
+        }
+      } else {
+        alert(`Failed to load file: ${error.message || 'Unknown error'}`);
+      }
     }
   };
 
@@ -68,99 +86,58 @@ function App() {
     setActivePane('viewer');
   };
 
+  // Mark App as ready for test detection
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      document.body.setAttribute('data-app-ready', 'true');
+    }, 500);
+    return () => clearTimeout(timer);
+  }, []);
+
   return (
-    <div className="h-screen flex flex-col bg-gray-50">
-      <Header />
+    <PipelineProvider
+      apiClient={api}
+      authState={{ user: user ?? null, isAuthenticated: !!user }}
+      getAuthHeaders={getAuthHeaders}
+    >
+      <div className="h-screen flex flex-col bg-app text-app" data-testid="app-container" data-app-ready="true">
+        <Header />
       
-      <div className="flex-1 flex overflow-hidden">
+      <div className="flex-1 flex flex-col md:flex-row overflow-hidden">
         {/* Chat History Sidebar */}
         <ChatHistorySidebar />
         
         {/* Chat Panel - Resizable when viewer visible, full width when hidden */}
         {isViewerVisible ? (
-          <ResizablePanel
-            defaultWidth={chatPanelWidth}
-            minWidth={280}
-            maxWidth={800}
-            position="left"
-            onWidthChange={setChatPanelWidth}
-            className="bg-white"
-          >
-            <ChatPanel />
-          </ResizablePanel>
+          <>
+            {/* Desktop: Resizable panel */}
+            <ResizablePanel
+              defaultWidth={chatPanelWidth}
+              minWidth={280}
+              maxWidth={600}
+              position="left"
+              onWidthChange={setChatPanelWidth}
+              className="bg-white hidden md:block"
+            >
+              <ChatPanel />
+            </ResizablePanel>
+            {/* Mobile: Hide chat when viewer is visible (user can toggle viewer off to see chat) */}
+          </>
         ) : (
-          <div className="flex-1 bg-white">
+          <div className="flex-1 bg-white flex flex-col min-h-0 overflow-hidden">
             <ChatPanel />
           </div>
         )}
         
-        {/* Right Panel - Toolbar + Pane (only shown when viewer is visible) */}
-        {isViewerVisible && (
-          <div className="flex-1 flex flex-col">
-            {/* Toolbar */}
-            <div className="h-10 flex items-center justify-between px-3 border-b border-gray-200 bg-white">
-              {/* Editor disabled message */}
-              {!settings.codeEditor.enabled && (
-                <div className="text-xs text-gray-500 flex items-center space-x-2">
-                  <Settings className="w-3 h-3" />
-                  <span>Code editor hidden - enable in Settings</span>
-                </div>
-              )}
-              
-              <div className="inline-flex rounded-full overflow-hidden ml-auto border border-gray-300">
-                <button
-                  onClick={() => {
-                    setSelectedFile(null);
-                    setActivePane('viewer');
-                  }}
-                  className={`px-3 h-8 flex items-center gap-1 text-xs ${activePane === 'viewer' ? 'bg-blue-600 text-white' : 'bg-white text-gray-700 hover:bg-gray-50'}`}
-                  title="Show viewer"
-                >
-                  <Eye className="w-4 h-4" />
-                </button>
-                {settings.codeEditor.enabled && (
-                  <button
-                    onClick={() => {
-                      setSelectedFile(null);
-                      setActivePane('editor');
-                    }}
-                    className={`px-3 h-8 flex items-center gap-1 text-xs ${activePane === 'editor' ? 'bg-blue-600 text-white' : 'bg-white text-gray-700 hover:bg-gray-50'}`}
-                    title="Show editor"
-                  >
-                    <Code2 className="w-4 h-4" />
-                  </button>
-                )}
-                <button
-                  onClick={() => {
-                    if (activePane === 'files' && !selectedFile) {
-                      setActivePane('viewer');
-                    } else {
-                      setSelectedFile(null);
-                      setActivePane('files');
-                    }
-                  }}
-                  className={`px-3 h-8 flex items-center gap-1 text-xs ${activePane === 'files' ? 'bg-blue-600 text-white' : 'bg-white text-gray-700 hover:bg-gray-50'}`}
-                  title="Show file browser"
-                >
-                  <FolderOpen className="w-4 h-4" />
-                </button>
-                <button
-                  onClick={() => {
-                    setSelectedFile(null);
-                    setActivePane('pipeline');
-                  }}
-                  className={`px-3 h-8 flex items-center gap-1 text-xs ${activePane === 'pipeline' ? 'bg-blue-600 text-white' : 'bg-white text-gray-700 hover:bg-gray-50'}`}
-                  title="Show pipeline canvas"
-                >
-                  <Workflow className="w-4 h-4" />
-                </button>
-              </div>
-            </div>
-
+        {/* Right Panel - Pane (shown when any pane is active) */}
+        {(activePane === 'viewer' || activePane === 'editor' || activePane === 'files' || activePane === 'pipeline') && (
+          <div className="flex-1 flex flex-col min-w-0">
             {/* Content Pane with fixed, responsive height */}
             <div className="flex-1 min-h-0">
               {activePane === 'pipeline' ? (
-                <PipelineCanvas />
+                <PipelineThemeWrapper externalTheme={theme} className="h-full">
+                  <PipelineCanvas />
+                </PipelineThemeWrapper>
               ) : activePane === 'files' ? (
                 <div className="h-full">
                   {selectedFile ? (
@@ -180,7 +157,16 @@ function App() {
                 </div>
               ) : (
                 <div className="h-full bg-gray-900">
-                  <MolstarViewer />
+                  <Suspense fallback={
+                    <div className="h-full flex items-center justify-center text-gray-400">
+                      <div className="text-center">
+                        <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-gray-400 mx-auto mb-4"></div>
+                        <p>Loading molecular viewer...</p>
+                      </div>
+                    </div>
+                  }>
+                    <MolstarViewer />
+                  </Suspense>
                 </div>
               )}
             </div>
@@ -214,7 +200,8 @@ function App() {
 
       {/* Pipeline Execution Monitor */}
       <PipelineExecution apiClient={api} />
-    </div>
+      </div>
+    </PipelineProvider>
   );
 }
 

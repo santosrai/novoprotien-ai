@@ -1,0 +1,28 @@
+{
+  "testRun": {
+    "id": "run-2025-12-31-22-11-17",
+    "timestamp": "2025-12-31T22:11:17.778674",
+    "duration": 0,
+    "environment": "local"
+  },
+  "summary": {
+    "total": 1,
+    "passed": 0,
+    "failed": 1,
+    "skipped": 0,
+    "passRate": 0.0
+  },
+  "tests": [
+    {
+      "id": "TC_CHAT_001",
+      "name": "TC_CHAT_001 - Chat History Isolation Between Users",
+      "file": "/Users/alizabista/Downloads/Dev-Folder/novoprotien-ai/tests/tests/chat/TC_CHAT_001_User1_Creates_and_Sends_Message.py",
+      "category": "chat",
+      "status": "failed",
+      "duration": 0,
+      "error": "Login failed: Still on signin page but no error message visible",
+      "steps": [],
+      "environment": "local"
+    }
+  ]
+}

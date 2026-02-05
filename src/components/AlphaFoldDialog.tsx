@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { ErrorDisplay } from './ErrorDisplay';
 import { AlphaFoldErrorHandler } from '../utils/errorHandler';
 
@@ -43,6 +43,7 @@ export const AlphaFoldDialog: React.FC<AlphaFoldDialogProps> = ({
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [sequenceStats, setSequenceStats] = useState({ length: 0, valid: true, errors: [] as string[] });
   const [validationError, setValidationError] = useState<any>(null);
+  const initializedRef = useRef<string | null>(null);
 
   // Available database options
   const databaseOptions = [
@@ -53,13 +54,30 @@ export const AlphaFoldDialog: React.FC<AlphaFoldDialogProps> = ({
     { value: 'uniclust30', label: 'UniClust30 (Clustering)', recommended: false }
   ];
 
-  // Update state when initial data changes
+  // Update state when initial data changes (only when dialog opens with new data)
   useEffect(() => {
-    if (initialData) {
-      setSequence(initialData.sequence);
-      setParameters(initialData.parameters);
+    if (isOpen && initialData) {
+      // Create a stable key from the initial data to track if we've already initialized
+      const dataKey = `${initialData.sequence || ''}-${initialData.source || ''}-${JSON.stringify(initialData.parameters || {})}`;
+      
+      // Only initialize if this is new data (different key) or dialog just opened
+      if (initializedRef.current !== dataKey) {
+        setSequence(initialData.sequence || '');
+        setParameters(initialData.parameters || {
+          algorithm: 'mmseqs2',
+          e_value: 0.0001,
+          iterations: 1,
+          databases: ['small_bfd'],
+          relax_prediction: false,
+          skip_template_search: true
+        });
+        initializedRef.current = dataKey;
+      }
+    } else if (!isOpen) {
+      // Reset when dialog closes
+      initializedRef.current = null;
     }
-  }, [initialData]);
+  }, [isOpen, initialData]);
 
   // Validate sequence and update stats
   useEffect(() => {

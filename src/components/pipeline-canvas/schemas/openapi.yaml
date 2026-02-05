@@ -1,0 +1,258 @@
+openapi: 3.0.3
+info:
+  title: Pipeline Canvas API
+  description: API for pipeline persistence and execution tracking
+  version: 1.0.0
+
+paths:
+  /api/pipelines:
+    post:
+      summary: Create or update a pipeline
+      tags: [pipelines]
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [nodes, edges]
+              properties:
+                id: { type: string }
+                name: { type: string, default: "Untitled Pipeline" }
+                description: { type: string }
+                nodes: { type: array, items: { $ref: "#/components/schemas/PipelineNode" } }
+                edges: { type: array, items: { $ref: "#/components/schemas/Edge" } }
+                status: { type: string, enum: [draft, running, completed, failed] }
+                message_id: { type: string }
+                conversation_id: { type: string }
+      responses:
+        "200":
+          description: Pipeline saved successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status: { type: string, example: "success" }
+                  pipeline: { type: object, properties: { id: { type: string } } }
+                  pipeline_id: { type: string }
+                  message: { type: string }
+
+    get:
+      summary: List pipelines
+      tags: [pipelines]
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: conversation_id
+          in: query
+          schema: { type: string }
+      responses:
+        "200":
+          description: List of pipelines
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status: { type: string }
+                  pipelines: { type: array, items: { $ref: "#/components/schemas/PipelineSummary" } }
+
+  /api/pipelines/{pipeline_id}:
+    get:
+      summary: Get a pipeline by ID
+      tags: [pipelines]
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: pipeline_id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: Pipeline details
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status: { type: string }
+                  pipeline: { $ref: "#/components/schemas/Pipeline" }
+        "404":
+          description: Pipeline not found
+
+    put:
+      summary: Update a pipeline
+      tags: [pipelines]
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: pipeline_id
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name: { type: string }
+                description: { type: string }
+                nodes: { type: array }
+                edges: { type: array }
+                status: { type: string }
+                message_id: { type: string }
+                conversation_id: { type: string }
+      responses:
+        "200":
+          description: Pipeline updated
+        "404":
+          description: Pipeline not found
+
+    delete:
+      summary: Delete a pipeline
+      tags: [pipelines]
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: pipeline_id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: Pipeline deleted
+        "404":
+          description: Pipeline not found
+
+  /api/pipelines/{pipeline_id}/executions:
+    post:
+      summary: Create an execution record
+      tags: [executions]
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: pipeline_id
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                execution_log: { type: array }
+                status: { type: string, enum: [running, completed, failed, cancelled] }
+      responses:
+        "200":
+          description: Execution created
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status: { type: string }
+                  execution_id: { type: string }
+        "404":
+          description: Pipeline not found
+
+    get:
+      summary: List executions for a pipeline
+      tags: [executions]
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: pipeline_id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: List of executions
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status: { type: string }
+                  executions: { type: array, items: { $ref: "#/components/schemas/Execution" } }
+        "404":
+          description: Pipeline not found
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+  schemas:
+    NodeType:
+      type: string
+      enum: [input_node, rfdiffusion_node, proteinmpnn_node, alphafold_node, message_input_node, http_request_node]
+
+    NodeStatus:
+      type: string
+      enum: [idle, running, success, completed, error, pending]
+
+    Edge:
+      type: object
+      required: [source, target]
+      properties:
+        source: { type: string }
+        target: { type: string }
+
+    PipelineNode:
+      type: object
+      required: [id, type, label]
+      properties:
+        id: { type: string }
+        type: { $ref: "#/components/schemas/NodeType" }
+        label: { type: string }
+        config: { type: object }
+        inputs: { type: object }
+        status: { $ref: "#/components/schemas/NodeStatus" }
+        result_metadata: { type: object }
+        error: { type: string }
+        position: { type: object, properties: { x: { type: number }, y: { type: number } } }
+
+    Pipeline:
+      type: object
+      required: [id, name, nodes, edges, status]
+      properties:
+        id: { type: string }
+        name: { type: string }
+        description: { type: string }
+        nodes: { type: array, items: { $ref: "#/components/schemas/PipelineNode" } }
+        edges: { type: array, items: { $ref: "#/components/schemas/Edge" } }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+        status: { type: string, enum: [draft, running, completed, failed] }
+
+    PipelineSummary:
+      type: object
+      properties:
+        id: { type: string }
+        name: { type: string }
+        description: { type: string }
+        status: { type: string }
+        message_id: { type: string }
+        conversation_id: { type: string }
+        created_at: { type: string }
+        updated_at: { type: string }
+
+    Execution:
+      type: object
+      properties:
+        id: { type: string }
+        pipeline_id: { type: string }
+        user_id: { type: string }
+        status: { type: string }
+        started_at: { type: string }
+        completed_at: { type: string }
+        execution_log: { type: array }

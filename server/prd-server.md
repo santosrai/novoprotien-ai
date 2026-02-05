@@ -6,7 +6,7 @@ Goal
 Stack
 	•	Framework: FastAPI
 	•	Router: LangGraph (Python)
-	•	LLMs: anthropic (for agents), openai (for embeddings + optional LLM fallback)
+	•	LLMs: openrouter (for agents), openai (for embeddings + optional LLM fallback)
 	•	CORS & rate limit: fastapi[all], slowapi
 	•	Env: python-dotenv
 	•	Run: uvicorn
@@ -17,7 +17,7 @@ server/
   app.py                  # FastAPI entry
   router_graph.py         # LangGraph router (rule → semantic → LLM)
   agents.py               # agent registry (code-builder, bio-chat, others)
-  runner.py               # run_agent() logic (Anthropic calls)
+  runner.py               # run_agent() logic (OpenRouter API calls)
   safety.py               # whitelist checks, PDB change guard
   utils.py                # logging, history utils, spell-fix
   requirements.txt
@@ -36,7 +36,7 @@ Area	Node now	Python target
 Web framework	Express	FastAPI
 Router	pickAgentForPrompt()	router_graph.py (rule + semantic + LLM)
 Agents registry	agents{...}	agents.py (same fields: id, name, description, kind, system, modelEnv, defaultModel)
-LLM calls	Anthropic JS SDK	anthropic Python SDK
+LLM calls	Anthropic JS SDK	OpenRouter API (httpx)
 Embeddings	—	langchain_openai.OpenAIEmbeddings
 Logs	logLine	structured logger + truncation in utils.py
 CORS	cors()	fastapi.middleware.cors
@@ -57,7 +57,7 @@ Additional features to add
 	•	Normalize common intents: strucutre→structure, etc.
 	•	If vague “generate 3d structure”, prefer last entity from history.
 	5.	Response joiner:
-	•	Join all text blocks from Anthropic.
+	•	Join all text blocks from OpenRouter API response.
 	6.	Better logs:
 	•	Log route stage (rule|semantic|llm), top-3 scores, chosen agent, truncated payloads.
 	7.	Hard limits:
@@ -69,7 +69,7 @@ Step-by-step
 
 Step 1: Bootstrap FastAPI
 	•	Create app.py with CORS, rate limit, health route.
-	•	Load env (ANTHROPIC_API_KEY, OPENAI_API_KEY, APP_ORIGIN, model names).
+	•	Load env (OPENROUTER_API_KEY, OPENAI_API_KEY, APP_ORIGIN, model names).
 
 Step 2: Port agent registry
 	•	Copy your agents object to agents.py.
@@ -80,13 +80,13 @@ Step 3: Implement runner
 	•	run_agent(agent, user_text, current_code, history, selection)
 	•	If agent.kind == "code":
 	•	Build prompt (include Existing code: block).
-	•	Call Anthropic with code system prompt.
+	•	Call OpenRouter API with code system prompt.
 	•	Join text parts.
 	•	Strip fences.
 	•	Safety pass: whitelist + auto-clear PDB change. If violated, re-ask once.
 	•	Else (bio-chat):
 	•	Build context (SelectionContext + CodeContext).
-	•	Call Anthropic with bio system prompt.
+	•	Call OpenRouter API with bio system prompt.
 	•	Join text parts.
 
 Step 4: LangGraph router

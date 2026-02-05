@@ -5,8 +5,8 @@
 NovoProtein AI is a web-based molecular visualization and protein design platform that combines:
 - **Natural Language Interface**: Users interact via chat to control protein visualization and design
 - **3D Molecular Visualization**: Powered by Molstar for interactive protein structure viewing
-- **AI-Powered Code Generation**: Claude/Anthropic models generate visualization code from natural language
-- **Protein Design Workflows**: AlphaFold2 (structure prediction), RFdiffusion (de novo design), and ProteinMPNN (sequence design) via NVIDIA NIMS API
+- **AI-Powered Code Generation**: AI models via OpenRouter generate visualization code from natural language
+- **Protein Design Workflows**: AlphaFold2, OpenFold2 (structure prediction), RFdiffusion (de novo design), and ProteinMPNN (sequence design) via NVIDIA NIMS API
 
 ## High-Level Architecture
 
@@ -42,8 +42,9 @@ NovoProtein AI is a web-based molecular visualization and protein design platfor
 │  ┌──────────────▼──────────────┐  ┌──────────▼──────────┐
 │  │  Specialized Handlers        │  │  External Services  │
 │  │  - alphafold_handler.py      │  │  - Claude API       │
-│  │  - rfdiffusion_handler.py    │  │  - NVIDIA NIMS      │
-│  │  - proteinmpnn_handler.py    │  │  - UniProt          │
+│  │  - openfold2_handler.py      │  │  - NVIDIA NIMS      │
+│  │  - rfdiffusion_handler.py    │  │  - UniProt          │
+│  │  - proteinmpnn_handler.py    │  │                      │
 │  └──────────────────────────────┘  └─────────────────────┘
 └──────────────────────────────────────────────────────────────┘
 ```
@@ -72,7 +73,7 @@ NovoProtein AI is a web-based molecular visualization and protein design platfor
   - Sends user messages to backend `/api/agents/route` or `/api/agents/route-stream` (for streaming)
   - Receives agent responses (code, text, or structured data)
   - Supports streaming responses with thinking process display
-  - Handles AlphaFold, RFdiffusion, and ProteinMPNN workflows
+  - Handles AlphaFold, OpenFold2, RFdiffusion, and ProteinMPNN workflows
   - Manages chat history via `chatHistoryStore`
   - Displays progress tracking for long-running jobs
   - Error handling and display
@@ -93,6 +94,7 @@ NovoProtein AI is a web-based molecular visualization and protein design platfor
 
 #### 4. **Specialized Dialogs**
 - **AlphaFoldDialog**: Confirmation and parameter input for folding jobs
+- **OpenFold2Dialog**: Structure prediction with optional MSA/template upload
 - **RFdiffusionDialog**: Design request confirmation and parameters
 - **ProteinMPNNDialog**: Sequence design configuration
 - **ProgressTracker**: Job status polling and display
@@ -232,7 +234,7 @@ A standalone, reusable library for visual DAG workflow design:
 ### Technology Stack
 - **Framework**: FastAPI (Python)
 - **Server**: Uvicorn (ASGI server)
-- **AI Models**: Anthropic Claude (via SDK or OpenRouter), configurable via `models_config.json`
+- **AI Models**: OpenRouter API (accessing Claude and other models), configurable via `models_config.json`
 - **Embeddings**: OpenAI embeddings (for semantic routing)
 - **External APIs**: NVIDIA NIMS (AlphaFold, RFdiffusion, ProteinMPNN)
 - **Model Configuration**: JSON-based model registry with provider, name, and capabilities
@@ -284,6 +286,11 @@ A standalone, reusable library for visual DAG workflow design:
   5. Returns PDB content for visualization
 - **Status Management**: Tracks active jobs in `active_jobs` dict
 
+##### **openfold2_handler.py**
+- **Purpose**: Handles OpenFold2 structure prediction (blocking, optional MSA/template)
+- **API**: NVIDIA OpenFold2 NIM (`predict-structure-from-msa-and-template`)
+- **Flow**: Validate sequence (≤1000), call NIM, store result in `openfold2_results/`
+
 ##### **rfdiffusion_handler.py**
 - **Purpose**: Handles RFdiffusion protein design requests
 - **Flow**:
@@ -323,6 +330,10 @@ A standalone, reusable library for visual DAG workflow design:
 - `POST /api/alphafold/fold`: Submit folding job (returns 202 Accepted)
 - `GET /api/alphafold/status/{job_id}`: Poll job status
 - `POST /api/alphafold/cancel/{job_id}`: Cancel job
+
+#### OpenFold2 Endpoints
+- `POST /api/openfold2/predict`: Submit prediction (blocking; returns result or error)
+- `GET /api/openfold2/result/{job_id}`: Download result PDB
 
 #### RFdiffusion Endpoints
 - `POST /api/rfdiffusion/design`: Submit design job
@@ -451,8 +462,7 @@ A standalone, reusable library for visual DAG workflow design:
 - Can be overridden via environment variable
 
 ### Backend (`.env` or `server/.env`)
-- `ANTHROPIC_API_KEY`: Claude API key (or OpenRouter key)
-- `OPENROUTER_API_KEY`: Alternative to Anthropic
+- `OPENROUTER_API_KEY`: OpenRouter API key (required for LLM features)
 - `OPENAI_API_KEY`: For semantic routing embeddings
 - `NVCF_RUN_KEY`: NVIDIA NIMS API key (shared by AlphaFold, RFdiffusion, ProteinMPNN)
 - `CLAUDE_CODE_MODEL`: Model for code generation agents (default: "claude-3-5-sonnet-20241022")
@@ -491,6 +501,15 @@ npm run dev:all          # Runs both frontend and backend
 
 ## Extension Points
 
+### Adding a New Pipeline Node
+1. Create node JSON config in `src/components/pipeline-canvas/nodes/{node_type}/node.json`
+   - Include `metadata`, `schema`, `handles`, `execution`, and `defaultConfig`
+2. Add node type to `NodeType` union in `src/components/pipeline-canvas/types/index.ts`
+3. Add node to palette in `src/components/pipeline-canvas/components/PipelineNodePalette.tsx`
+4. Add node component in `src/components/pipeline-canvas/components/PipelineCanvas.tsx`
+5. Implement execution logic in `src/components/pipeline-canvas/utils/executionEngine.ts`
+6. **⚠️ IMPORTANT:** See [Node Development Guide](./docs/node-development-guide.md) for critical best practices and common pitfalls
+
 ### Adding a New Agent
 1. Define agent in `server/agents.py` with:
    - System prompt
@@ -523,6 +542,25 @@ npm run dev:all          # Runs both frontend and backend
 - **CORS**: Configurable via `APP_ORIGIN`
 
 ---
+
+## Data Scoping and Persistence
+
+### ⚠️ CRITICAL: User-Scoped vs Session-Scoped Storage
+
+**Important Rule**: Always use **user-scoped storage in backend**, **session-scoped storage in localStorage only**.
+
+**Why**: Session IDs change on page refresh, causing data loss if used as primary keys in backend.
+
+**Pattern**:
+- **Backend**: Query by `user_id` (through messages if needed) - persists across sessions
+- **LocalStorage**: Use `sessionId` for caching only - fast access, lost on refresh
+
+**Example**: Visualization code storage
+- ✅ Backend: `three_d_canvases` linked to messages → messages have `user_id` → user-scoped
+- ✅ LocalStorage: `novoprotein-session-code-${sessionId}` → session-scoped cache
+- ❌ Wrong: Backend query by `session_id` → lost on refresh
+
+**See**: [User-Scoped Visualization Code Storage](./docs/USER_SCOPED_VISUALIZATION_CODE.md) for detailed implementation guide and common mistakes to avoid.
 
 ## Performance Optimizations
 

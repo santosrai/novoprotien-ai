@@ -756,33 +756,6 @@ export class RFdiffusionErrorHandler {
   }
 
   static handleError(error: any, context: Record<string, any> = {}): ErrorDetails {
-    // Check if error has errorCode from backend
-    if (error?.errorCode && this.errorCatalog[error.errorCode]) {
-      const catalogEntry = this.errorCatalog[error.errorCode];
-      return {
-        ...catalogEntry,
-        code: error.errorCode,
-        userMessage: error.userMessage || catalogEntry.userMessage || error.message || 'Unknown error',
-        technicalMessage: error.technicalMessage || catalogEntry.technicalMessage || error.message,
-        suggestions: error.suggestions || catalogEntry.suggestions || [],
-        context: { ...context, originalError: error }
-      } as ErrorDetails;
-    }
-
-    // Check if error has userMessage from backend (API response)
-    if (error?.userMessage) {
-      return {
-        code: error.errorCode || 'DESIGN_FAILED',
-        category: ErrorCategory.API,
-        severity: ErrorSeverity.HIGH,
-        userMessage: error.userMessage,
-        technicalMessage: error.technicalMessage || error.userMessage,
-        suggestions: error.suggestions || [],
-        context: { ...context, originalError: error },
-        timestamp: new Date()
-      } as ErrorDetails;
-    }
-
     if (error?.code && this.errorCatalog[error.code]) {
       return this.createError(error.code, { ...context, originalError: error }, error.message);
     }
@@ -807,34 +780,167 @@ export class RFdiffusionErrorHandler {
       return this.createError('CONTIGS_INVALID', context, errorMessage);
     }
 
-    // Check for validation errors (residue not in PDB, etc.)
-    if (lowerMessage.includes('residue') && lowerMessage.includes('not in pdb')) {
-      return {
-        code: 'VALIDATION_ERROR',
-        category: ErrorCategory.VALIDATION,
-        severity: ErrorSeverity.MEDIUM,
-        userMessage: errorMessage,
-        technicalMessage: errorMessage,
-        suggestions: [
-          {
-            action: 'Check hotspot residues',
-            description: 'Ensure the specified hotspot residues exist in the PDB file',
-            type: 'fix',
-            priority: 1
-          },
-          {
-            action: 'Remove invalid hotspots',
-            description: 'Remove hotspot residues that don\'t exist in the PDB structure',
-            type: 'fix',
-            priority: 2
-          }
-        ],
-        context: { ...context, originalError: error },
-        timestamp: new Date()
-      } as ErrorDetails;
-    }
-
     // Generic error fallback
     return this.createError('UNKNOWN_ERROR', context, errorMessage, error?.stack);
+  }
+
+  static getSeverityColor(severity: ErrorSeverity): string {
+    switch (severity) {
+      case ErrorSeverity.LOW: return 'text-yellow-700';
+      case ErrorSeverity.MEDIUM: return 'text-orange-700';
+      case ErrorSeverity.HIGH: return 'text-red-700';
+      case ErrorSeverity.CRITICAL: return 'text-red-900';
+      default: return 'text-gray-700';
+    }
+  }
+
+  static getSeverityIcon(severity: ErrorSeverity): string {
+    switch (severity) {
+      case ErrorSeverity.LOW: return '⚠️';
+      case ErrorSeverity.MEDIUM: return '🔶';
+      case ErrorSeverity.HIGH: return '🔴';
+      case ErrorSeverity.CRITICAL: return '💥';
+      default: return 'ℹ️';
+    }
+  }
+}
+
+export class OpenFold2ErrorHandler {
+  private static errorCatalog: Record<string, Partial<ErrorDetails>> = {
+    SEQUENCE_EMPTY: {
+      category: ErrorCategory.VALIDATION,
+      severity: ErrorSeverity.MEDIUM,
+      userMessage: 'No protein sequence provided',
+      technicalMessage: 'Sequence input is empty or contains only whitespace',
+      suggestions: [
+        { action: 'Enter a protein sequence', description: 'Provide a valid amino acid sequence (20-1000 residues)', type: 'fix', priority: 1 },
+      ],
+    },
+    SEQUENCE_TOO_SHORT: {
+      category: ErrorCategory.VALIDATION,
+      severity: ErrorSeverity.MEDIUM,
+      userMessage: 'Protein sequence is too short for folding',
+      technicalMessage: 'Sequence length is below minimum threshold of 20 residues',
+      suggestions: [
+        { action: 'Use longer sequence', description: 'OpenFold2 requires at least 20 amino acids', type: 'fix', priority: 1 },
+      ],
+    },
+    SEQUENCE_TOO_LONG: {
+      category: ErrorCategory.VALIDATION,
+      severity: ErrorSeverity.HIGH,
+      userMessage: 'Sequence exceeds 1000 residues. Use AlphaFold2 for longer sequences.',
+      technicalMessage: 'OpenFold2 supports sequences up to 1000 residues',
+      suggestions: [
+        { action: 'Use AlphaFold2', description: 'AlphaFold2 supports sequences up to 4096 residues', type: 'alternative', priority: 1 },
+        { action: 'Use shorter sequence', description: 'Try folding individual domains', type: 'alternative', priority: 2 },
+      ],
+    },
+    SEQUENCE_INVALID: {
+      category: ErrorCategory.VALIDATION,
+      severity: ErrorSeverity.HIGH,
+      userMessage: 'Sequence contains invalid characters',
+      technicalMessage: 'Non-standard amino acid codes detected',
+      suggestions: [
+        { action: 'Use standard amino acids only', description: 'Valid: ACDEFGHIKLMNPQRSTVWY', type: 'fix', priority: 1 },
+      ],
+    },
+    MSA_FORMAT_INVALID: {
+      category: ErrorCategory.VALIDATION,
+      severity: ErrorSeverity.MEDIUM,
+      userMessage: 'MSA file must be in a3m format',
+      technicalMessage: 'Invalid MSA file format',
+      suggestions: [
+        { action: 'Upload valid a3m file', description: 'a3m is a standard MSA format', type: 'fix', priority: 1 },
+      ],
+    },
+    TEMPLATE_FORMAT_INVALID: {
+      category: ErrorCategory.VALIDATION,
+      severity: ErrorSeverity.MEDIUM,
+      userMessage: 'Template file must be in hhr format',
+      technicalMessage: 'Invalid template file format',
+      suggestions: [
+        { action: 'Upload valid hhr file', description: 'hhr is output by hh-search', type: 'fix', priority: 1 },
+      ],
+    },
+    API_KEY_MISSING: {
+      category: ErrorCategory.AUTH,
+      severity: ErrorSeverity.CRITICAL,
+      userMessage: 'OpenFold2 requires NVIDIA API key',
+      technicalMessage: 'NVCF_RUN_KEY not configured',
+      suggestions: [
+        { action: 'Contact administrator', description: 'API key must be configured on the server', type: 'contact', priority: 1 },
+      ],
+    },
+    API_ERROR: {
+      category: ErrorCategory.API,
+      severity: ErrorSeverity.HIGH,
+      userMessage: 'Structure prediction failed',
+      technicalMessage: 'OpenFold2 API returned an error',
+      suggestions: [
+        { action: 'Try again', description: 'The error might be temporary', type: 'retry', priority: 1 },
+      ],
+    },
+    TIMEOUT: {
+      category: ErrorCategory.TIMEOUT,
+      severity: ErrorSeverity.HIGH,
+      userMessage: 'Prediction timed out; try a shorter sequence',
+      technicalMessage: 'Request exceeded timeout limit',
+      suggestions: [
+        { action: 'Use shorter sequence', description: 'Shorter sequences complete faster', type: 'fix', priority: 1 },
+      ],
+    },
+  };
+
+  static createError(
+    code: string,
+    context: Record<string, any> = {},
+    technicalDetails?: string,
+    stack?: string,
+    requestId?: string
+  ): ErrorDetails {
+    const template = this.errorCatalog[code];
+    if (!template) {
+      return {
+        code: 'UNKNOWN_ERROR',
+        category: ErrorCategory.SYSTEM,
+        severity: ErrorSeverity.HIGH,
+        userMessage: 'An unexpected error occurred',
+        technicalMessage: technicalDetails || 'Unknown error',
+        context,
+        suggestions: [{ action: 'Try again', description: 'The error might be temporary', type: 'retry', priority: 1 }],
+        timestamp: new Date(),
+      };
+    }
+    return {
+      code,
+      category: template.category ?? ErrorCategory.SYSTEM,
+      severity: template.severity ?? ErrorSeverity.HIGH,
+      userMessage: template.userMessage ?? 'An error occurred',
+      technicalMessage: technicalDetails ?? template.technicalMessage ?? '',
+      context,
+      suggestions: template.suggestions ?? [],
+      timestamp: new Date(),
+      requestId,
+      stack,
+    };
+  }
+
+  static handleSequenceValidation(sequence: string, requestId?: string): ErrorDetails | null {
+    const cleanSeq = sequence.replace(/\s/g, '').toUpperCase();
+    if (!cleanSeq) {
+      return this.createError('SEQUENCE_EMPTY', { originalInput: sequence }, undefined, undefined, requestId);
+    }
+    if (cleanSeq.length < 20) {
+      return this.createError('SEQUENCE_TOO_SHORT', { sequenceLength: cleanSeq.length }, undefined, undefined, requestId);
+    }
+    if (cleanSeq.length > 1000) {
+      return this.createError('SEQUENCE_TOO_LONG', { sequenceLength: cleanSeq.length }, undefined, undefined, requestId);
+    }
+    const validAA = /^[ACDEFGHIKLMNPQRSTVWY]+$/;
+    if (!validAA.test(cleanSeq)) {
+      const invalidChars = [...new Set(cleanSeq.split('').filter(c => !/[ACDEFGHIKLMNPQRSTVWY]/.test(c)))];
+      return this.createError('SEQUENCE_INVALID', { invalidCharacters: invalidChars }, undefined, undefined, requestId);
+    }
+    return null;
   }
 }

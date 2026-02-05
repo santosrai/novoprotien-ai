@@ -99,24 +99,27 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({ models, onModelCha
       : selectedModel.name
     : 'Default';
 
+  const fullDisplayText = selectedModel ? selectedModel.name : 'Default';
+  
   return (
-    <div className="relative" ref={dropdownRef}>
+    <div className="relative min-w-0 flex-shrink" ref={dropdownRef} style={{ maxWidth: '160px', flexShrink: 1 }}>
       <button
         type="button"
         onClick={() => setIsOpen(!isOpen)}
-        className="inline-flex items-center gap-1.5 px-2.5 py-1 bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-full text-xs font-medium transition-colors focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-1 shrink-0"
+        className="inline-flex items-center gap-1 px-2 py-1 bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-full text-xs font-medium transition-colors focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-1 w-full min-w-0"
+        title={fullDisplayText}
       >
         {selectedModel && isThinkingModel(selectedModel.id) && (
-          <span title="Thinking Model">
-            <Brain className="w-3 h-3 text-purple-600" />
+          <span title="Thinking Model" className="shrink-0">
+            <Brain className="w-2.5 h-2.5 text-purple-600" />
           </span>
         )}
-        <span className="max-w-[140px] truncate">{displayText}</span>
-        <ChevronDown className={`w-3 h-3 transition-transform ${isOpen ? 'rotate-180' : ''}`} />
+        <span className="truncate min-w-0 flex-1 text-left overflow-hidden text-ellipsis whitespace-nowrap">{displayText}</span>
+        <ChevronDown className={`w-2.5 h-2.5 transition-transform shrink-0 ${isOpen ? 'rotate-180' : ''}`} />
       </button>
 
       {isOpen && (
-        <div className="absolute bottom-full left-0 mb-2 w-80 bg-white border border-gray-200 rounded-lg shadow-lg z-50 max-h-96 overflow-hidden flex flex-col">
+        <div className="absolute bottom-full left-0 mb-2 w-[calc(100vw-2rem)] sm:w-80 max-w-sm bg-white border border-gray-200 rounded-lg shadow-lg z-[100] max-h-96 overflow-hidden flex flex-col">
           {/* Search bar */}
           <div className="p-2 border-b border-gray-200">
             <div className="relative">

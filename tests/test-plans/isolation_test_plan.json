@@ -1,0 +1,138 @@
+[
+  {
+    "id": "TC_ISO_001",
+    "title": "User1 Cannot Access User2's Chat Sessions",
+    "description": "Verify User1 cannot see or access User2's chat sessions",
+    "category": "isolation",
+    "priority": "Critical",
+    "tags": ["isolation", "security", "user1", "user2"],
+    "steps": [
+      {
+        "type": "action",
+        "description": "Login as User2 and create a chat session with a message"
+      },
+      {
+        "type": "action",
+        "description": "Note the session ID from User2's session"
+      },
+      {
+        "type": "action",
+        "description": "Login as User1 in a separate browser context"
+      },
+      {
+        "type": "action",
+        "description": "Check the chat history sidebar for available sessions"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify User1's session list does not contain User2's session"
+      },
+      {
+        "type": "action",
+        "description": "Attempt to access User2's session directly via URL or API (if possible)"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify access is denied or session is not found"
+      }
+    ]
+  },
+  {
+    "id": "TC_ISO_002",
+    "title": "User2 Cannot Access User1's Chat Sessions",
+    "description": "Verify User2 cannot see or access User1's chat sessions",
+    "category": "isolation",
+    "priority": "Critical",
+    "tags": ["isolation", "security", "user1", "user2"],
+    "steps": [
+      {
+        "type": "action",
+        "description": "Login as User1 and create a chat session with a message"
+      },
+      {
+        "type": "action",
+        "description": "Note the session ID from User1's session"
+      },
+      {
+        "type": "action",
+        "description": "Login as User2 in a separate browser context"
+      },
+      {
+        "type": "action",
+        "description": "Check the chat history sidebar for available sessions"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify User2's session list does not contain User1's session"
+      },
+      {
+        "type": "action",
+        "description": "Attempt to access User1's session directly via URL or API (if possible)"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify access is denied or session is not found"
+      }
+    ]
+  },
+  {
+    "id": "TC_ISO_003",
+    "title": "User1's Messages Are Isolated from User2",
+    "description": "Verify User1's messages are only visible to User1 and not to User2",
+    "category": "isolation",
+    "priority": "Critical",
+    "tags": ["isolation", "security", "user1", "user2"],
+    "steps": [
+      {
+        "type": "action",
+        "description": "Login as User1 and send a message: 'This is User1's private message'"
+      },
+      {
+        "type": "action",
+        "description": "Login as User2 in a separate browser context"
+      },
+      {
+        "type": "action",
+        "description": "Check User2's chat history"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify User1's message is NOT visible in User2's chat"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify User2 only sees their own messages"
+      }
+    ]
+  },
+  {
+    "id": "TC_ISO_004",
+    "title": "User2's Messages Are Isolated from User1",
+    "description": "Verify User2's messages are only visible to User2 and not to User1",
+    "category": "isolation",
+    "priority": "Critical",
+    "tags": ["isolation", "security", "user1", "user2"],
+    "steps": [
+      {
+        "type": "action",
+        "description": "Login as User2 and send a message: 'This is User2's private message'"
+      },
+      {
+        "type": "action",
+        "description": "Login as User1 in a separate browser context"
+      },
+      {
+        "type": "action",
+        "description": "Check User1's chat history"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify User2's message is NOT visible in User1's chat"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify User1 only sees their own messages"
+      }
+    ]
+  }
+]

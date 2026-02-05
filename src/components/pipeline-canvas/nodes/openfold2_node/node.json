@@ -1,0 +1,85 @@
+{
+  "metadata": {
+    "type": "openfold2_node",
+    "label": "OpenFold2",
+    "icon": "Layers",
+    "color": "#d97706",
+    "borderColor": "border-amber-600",
+    "bgColor": "bg-amber-600",
+    "description": "Structure prediction (sequence + optional MSA/template)"
+  },
+  "schema": {
+    "sequence": {
+      "type": "textarea",
+      "required": false,
+      "default": "",
+      "placeholder": "Enter protein sequence (ACDEFGHIKLMNPQRSTVWY)...",
+      "label": "Protein Sequence",
+      "helpText": "Required if no input connection. Max 1000 residues (use AlphaFold2 for longer).",
+      "validation": {
+        "pattern": "^[ACDEFGHIKLMNPQRSTVWY\\s]*$",
+        "minLength": 20,
+        "maxLength": 1000,
+        "message": "Must contain valid amino acids (20-1000 residues)"
+      }
+    },
+    "alignments_raw": {
+      "type": "textarea",
+      "required": false,
+      "default": "",
+      "placeholder": "Paste MSA content in a3m format (optional)...",
+      "label": "MSA (a3m format)",
+      "helpText": "Optional multiple sequence alignment for improved accuracy"
+    },
+    "templates_raw": {
+      "type": "textarea",
+      "required": false,
+      "default": "",
+      "placeholder": "Paste template content in hhr format (optional)...",
+      "label": "Template (hhr format)",
+      "helpText": "Optional structural template for improved accuracy"
+    },
+    "relax_prediction": {
+      "type": "boolean",
+      "required": false,
+      "default": false,
+      "label": "Relax Prediction",
+      "helpText": "Apply energy minimization (slower but may improve accuracy)"
+    }
+  },
+  "handles": {
+    "inputs": [
+      {
+        "id": "target",
+        "type": "target",
+        "position": "left",
+        "dataType": "sequence"
+      }
+    ],
+    "outputs": [
+      {
+        "id": "source",
+        "type": "source",
+        "position": "right",
+        "dataType": "pdb_file"
+      }
+    ]
+  },
+  "execution": {
+    "type": "api_call",
+    "endpoint": "/openfold2/predict",
+    "method": "POST",
+    "payload": {
+      "sequence": "{{input.target || config.sequence}}",
+      "alignments_raw": "{{config.alignments_raw}}",
+      "templates_raw": "{{config.templates_raw}}",
+      "relax_prediction": "{{config.relax_prediction}}"
+    }
+  },
+  "defaultConfig": {
+    "sequence": "",
+    "alignments_raw": "",
+    "templates_raw": "",
+    "relax_prediction": false
+  }
+}

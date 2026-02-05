@@ -39,14 +39,14 @@ export interface FileMetadata {
 export interface MolstarSelectionState {
   count: number;
   lastAction?: {
-    type: 'select' | 'color' | 'representation' | 'visibility' | 'label';
+    type: 'select' | 'color' | 'representation' | 'visibility' | 'label' | 'clear';
     target?: string;
     timestamp: number;
   };
 }
 
 interface AppState {
-  activePane: 'viewer' | 'editor' | 'files' | 'pipeline';
+  activePane: 'viewer' | 'editor' | 'files' | 'pipeline' | null;
   plugin: PluginUIContext | null;
   currentCode: string;
   isExecuting: boolean;
@@ -60,7 +60,7 @@ interface AppState {
   // Molstar visual selection tracking
   molstarSelection: MolstarSelectionState;
   
-  setActivePane: (pane: 'viewer' | 'editor' | 'files' | 'pipeline') => void;
+  setActivePane: (pane: 'viewer' | 'editor' | 'files' | 'pipeline' | null) => void;
   setPlugin: (plugin: PluginUIContext | null) => void;
   setCurrentCode: (code: string) => void;
   setIsExecuting: (executing: boolean) => void;
@@ -86,14 +86,14 @@ interface AppState {
 export const useAppStore = create<AppState>()(
   persist(
     (set, get) => ({
-      activePane: 'viewer',
+      activePane: null, // Start with no pane active
       plugin: null,
       currentCode: '',
       isExecuting: false,
       lastLoadedPdb: null,
       pendingCodeToRun: null,
       selections: [],
-      chatPanelWidth: 400, // Default chat panel width
+      chatPanelWidth: 400, // Default chat panel width (~1/3 of typical screen)
       isViewerVisible: false, // Hidden by default for new chats
       currentStructureOrigin: null,
       selectedFile: null,

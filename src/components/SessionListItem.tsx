@@ -64,7 +64,7 @@ export const SessionListItem: React.FC<SessionListItemProps> = ({ session, onSel
   };
 
   const handleSelect = () => {
-    switchToSession(session.id);
+    switchToSession(session.id).catch(err => console.error('Failed to switch session:', err));
     onSelect();
   };
 
@@ -76,8 +76,8 @@ export const SessionListItem: React.FC<SessionListItemProps> = ({ session, onSel
     setShowActions(false);
   };
 
-  const handleEditSave = () => {
-    updateSessionTitle(session.id, editTitle.trim());
+  const handleEditSave = async () => {
+    await updateSessionTitle(session.id, editTitle.trim());
     setIsEditing(false);
   };
 

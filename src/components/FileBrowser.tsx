@@ -1,74 +1,35 @@
-import React, { useState, useEffect, useCallback } from 'react';
-import { Folder, File, ChevronRight, ChevronDown, Search, Loader2 } from 'lucide-react';
-import { useChatHistoryStore } from '../stores/chatHistoryStore';
-import { api } from '../utils/api';
-
-interface FileMetadata {
-  file_id: string;
-  type: 'upload' | 'rfdiffusion' | 'alphafold';
-  filename: string;
-  size: number;
-  job_id?: string;
-  download_url: string;
-  metadata?: Record<string, any>;
-}
+import React, { useState, useEffect } from 'react';
+import { Folder, File, ChevronRight, ChevronDown, Search, Loader2, Trash2, Eye } from 'lucide-react';
+import { useFiles, FileMetadata } from '../hooks/queries/useFiles';
+import { useFileDelete } from '../hooks/mutations/useFileUpload';
+import { useQueryClient } from '@tanstack/react-query';
 
 interface FileBrowserProps {
   onFileSelect: (file: FileMetadata) => void;
 }
 
 export const FileBrowser: React.FC<FileBrowserProps> = ({ onFileSelect }) => {
-  const { activeSessionId } = useChatHistoryStore();
-  const [files, setFiles] = useState<FileMetadata[]>([]);
-  const [loading, setLoading] = useState(false);
-  const [expandedFolders, setExpandedFolders] = useState<Set<string>>(new Set(['uploads', 'rfdiffusion', 'alphafold']));
+  const { data: files = [], isLoading, error } = useFiles();
+  const deleteFile = useFileDelete();
+  const queryClient = useQueryClient();
+  const [expandedFolders, setExpandedFolders] = useState<Set<string>>(new Set(['uploads', 'rfdiffusion', 'alphafold', 'proteinmpnn']));
   const [searchQuery, setSearchQuery] = useState('');
-
-  const loadFiles = useCallback(async () => {
-    if (!activeSessionId) return;
-    
-    setLoading(true);
-    try {
-      const response = await api.get(`/sessions/${activeSessionId}/files`);
-      if (response.data.status === 'success') {
-        setFiles(response.data.files || []);
-      } else {
-        console.warn('Unexpected response format:', response.data);
-        setFiles([]);
-      }
-    } catch (error: any) {
-      console.error('Failed to load session files:', error);
-      if (error.response?.status === 404) {
-        console.warn('Session files endpoint not found - server may need restart');
-      }
-      setFiles([]);
-    } finally {
-      setLoading(false);
-    }
-  }, [activeSessionId]);
+  const [deletingFileId, setDeletingFileId] = useState<string | null>(null);
 
   // Listen for custom events to refresh files
   useEffect(() => {
     const handleFileAdded = () => {
-      if (activeSessionId) {
-        // Small delay to ensure backend has saved the file
-        setTimeout(() => {
-          loadFiles();
-        }, 500);
-      }
+      console.log('[FileBrowser] session-file-added event received');
+      // Small delay to ensure backend has saved the file
+      setTimeout(() => {
+        console.log('[FileBrowser] Refreshing files after session-file-added event');
+        queryClient.invalidateQueries({ queryKey: ['files'] });
+      }, 1000);
     };
 
     window.addEventListener('session-file-added', handleFileAdded);
     return () => window.removeEventListener('session-file-added', handleFileAdded);
-  }, [activeSessionId, loadFiles]);
-
-  useEffect(() => {
-    if (activeSessionId) {
-      loadFiles();
-    } else {
-      setFiles([]);
-    }
-  }, [activeSessionId, loadFiles]);
+  }, [queryClient]);
 
   const toggleFolder = (folder: string) => {
     const newExpanded = new Set(expandedFolders);
@@ -102,6 +63,39 @@ export const FileBrowser: React.FC<FileBrowserProps> = ({ onFileSelect }) => {
   const uploads = filteredFiles.filter(f => f.type === 'upload');
   const rfdiffusion = filteredFiles.filter(f => f.type === 'rfdiffusion');
   const alphafold = filteredFiles.filter(f => f.type === 'alphafold');
+  const proteinmpnn = filteredFiles.filter(f => f.type === 'proteinmpnn');
+
+  const handleDeleteFile = async (file: FileMetadata, e: React.MouseEvent) => {
+    e.stopPropagation(); // Prevent file selection when clicking delete
+    
+    if (!confirm(`Are you sure you want to delete "${file.filename}"?`)) {
+      return;
+    }
+    
+    setDeletingFileId(file.file_id);
+    try {
+      await deleteFile.mutateAsync(file.file_id);
+      console.log('[FileBrowser] File deleted successfully:', file.file_id);
+      // Dispatch event to notify other components
+      window.dispatchEvent(new CustomEvent('session-file-deleted', { detail: { file_id: file.file_id } }));
+    } catch (error: any) {
+      console.error('[FileBrowser] Failed to delete file:', error);
+      alert(`Failed to delete file: ${error.message || 'Unknown error'}`);
+    } finally {
+      setDeletingFileId(null);
+    }
+  };
+
+  const handleViewFile = async (file: FileMetadata, e: React.MouseEvent) => {
+    e.stopPropagation();
+    console.log('[FileBrowser] View file clicked:', file);
+    // Trigger file selection which will open it in the viewer/editor
+    try {
+      onFileSelect(file);
+    } catch (error) {
+      console.error('[FileBrowser] Error in onFileSelect:', error);
+    }
+  };
 
   const renderFolder = (folderName: string, folderKey: string, folderFiles: FileMetadata[]) => {
     const isExpanded = expandedFolders.has(folderKey);
@@ -124,19 +118,44 @@ export const FileBrowser: React.FC<FileBrowserProps> = ({ onFileSelect }) => {
               <div className="text-xs text-gray-400 px-2 py-1">No files</div>
             ) : (
               folderFiles.map((file) => (
-                <button
+                <div
                   key={file.file_id}
-                  onClick={() => onFileSelect(file)}
-                  className="w-full flex items-center space-x-2 px-2 py-1.5 hover:bg-blue-50 rounded text-left group"
+                  className="w-full flex items-center space-x-2 px-2 py-1.5 hover:bg-blue-50 rounded group"
                 >
-                  {getFileIcon()}
-                  <div className="flex-1 min-w-0">
-                    <div className="text-sm text-gray-700 truncate">{file.filename}</div>
-                    <div className="text-xs text-gray-500">
-                      {formatFileSize(file.size)}
+                  <button
+                    onClick={() => onFileSelect(file)}
+                    className="flex-1 flex items-center space-x-2 text-left min-w-0"
+                  >
+                    {getFileIcon()}
+                    <div className="flex-1 min-w-0">
+                      <div className="text-sm text-gray-700 truncate">{file.filename}</div>
+                      <div className="text-xs text-gray-500">
+                        {formatFileSize(file.size)}
+                      </div>
                     </div>
+                  </button>
+                  <div className="flex items-center space-x-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                    <button
+                      onClick={(e) => handleViewFile(file, e)}
+                      className="p-1 hover:bg-blue-100 rounded text-blue-600"
+                      title="View file"
+                    >
+                      <Eye className="w-4 h-4" />
+                    </button>
+                    <button
+                      onClick={(e) => handleDeleteFile(file, e)}
+                      disabled={deletingFileId === file.file_id}
+                      className="p-1 hover:bg-red-100 rounded text-red-600 disabled:opacity-50"
+                      title="Delete file"
+                    >
+                      {deletingFileId === file.file_id ? (
+                        <Loader2 className="w-4 h-4 animate-spin" />
+                      ) : (
+                        <Trash2 className="w-4 h-4" />
+                      )}
+                    </button>
                   </div>
-                </button>
+                </div>
               ))
             )}
           </div>
@@ -145,10 +164,21 @@ export const FileBrowser: React.FC<FileBrowserProps> = ({ onFileSelect }) => {
     );
   };
 
-  if (loading) {
+  if (isLoading) {
     return (
       <div className="h-full flex items-center justify-center">
         <Loader2 className="w-6 h-6 animate-spin text-gray-400" />
+      </div>
+    );
+  }
+
+  if (error) {
+    return (
+      <div className="h-full flex items-center justify-center">
+        <div className="text-center text-red-500">
+          <p className="text-sm">Failed to load files</p>
+          <p className="text-xs mt-1">{error instanceof Error ? error.message : 'Unknown error'}</p>
+        </div>
       </div>
     );
   }
@@ -170,17 +200,18 @@ export const FileBrowser: React.FC<FileBrowserProps> = ({ onFileSelect }) => {
       </div>
 
       {/* File tree */}
-      <div className="flex-1 overflow-y-auto p-3">
+      <div className="flex-1 overflow-y-auto p-3 file-browser-scrollbar">
         {files.length === 0 ? (
           <div className="text-center text-gray-400 mt-8">
             <File className="w-12 h-12 mx-auto mb-2 opacity-50" />
-            <p className="text-sm">No files in this session</p>
+            <p className="text-sm">No files</p>
           </div>
         ) : (
           <div className="space-y-1">
             {renderFolder('Uploads', 'uploads', uploads)}
             {renderFolder('RF-diffusion Results', 'rfdiffusion', rfdiffusion)}
             {renderFolder('AlphaFold Results', 'alphafold', alphafold)}
+            {renderFolder('ProteinMPNN Results', 'proteinmpnn', proteinmpnn)}
           </div>
         )}
       </div>

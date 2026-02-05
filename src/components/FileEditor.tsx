@@ -1,8 +1,8 @@
 import React, { useState, useEffect } from 'react';
-import { Play, Download, X, Loader2 } from 'lucide-react';
+import { X, Download, FileText, Play } from 'lucide-react';
+import { api } from '../utils/api';
 import { useAppStore } from '../stores/appStore';
 import { useChatHistoryStore } from '../stores/chatHistoryStore';
-import { api } from '../utils/api';
 import { CodeExecutor } from '../utils/codeExecutor';
 
 interface FileEditorProps {
@@ -13,153 +13,184 @@ interface FileEditorProps {
 }
 
 export const FileEditor: React.FC<FileEditorProps> = ({ fileId, filename, fileType, onClose }) => {
-  const { activeSessionId } = useChatHistoryStore();
-  const { plugin, setActivePane, setCurrentCode, setIsExecuting, setViewerVisible } = useAppStore();
   const [content, setContent] = useState<string>('');
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const { plugin, setActivePane, setViewerVisible, setIsExecuting, setCurrentCode, setCurrentStructureOrigin, setPendingCodeToRun } = useAppStore();
+  const { activeSessionId, saveVisualizationCode } = useChatHistoryStore();
 
   useEffect(() => {
-    loadFileContent();
-  }, [fileId, activeSessionId]);
-
-  const loadFileContent = async () => {
-    if (!activeSessionId) {
-      setError('No active session');
-      setLoading(false);
-      return;
-    }
-
-    setLoading(true);
-    setError(null);
-    try {
-      const response = await api.get(`/sessions/${activeSessionId}/files/${fileId}`);
-      if (response.data.status === 'success') {
-        setContent(response.data.content || '');
-      } else {
-        setError('Failed to load file content');
+    const loadFile = async () => {
+      try {
+        setLoading(true);
+        setError(null);
+        const response = await api.get(`/files/${fileId}`);
+        
+        if (response.data.status === 'success') {
+          setContent(response.data.content || '');
+        } else {
+          setError('Failed to load file content');
+        }
+      } catch (err: any) {
+        console.error('[FileEditor] Failed to load file:', err);
+        setError(err.response?.data?.detail || err.message || 'Failed to load file');
+      } finally {
+        setLoading(false);
       }
+    };
+
+    loadFile();
+  }, [fileId]);
+
+  const handleDownload = async () => {
+    try {
+      const response = await api.get(`/files/${fileId}`, {
+        responseType: 'blob',
+      });
+      
+      const blob = new Blob([response.data], { type: 'text/plain' });
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      window.URL.revokeObjectURL(url);
+      document.body.removeChild(a);
     } catch (err: any) {
-      console.error('Failed to load file content:', err);
-      setError(err.response?.data?.detail || 'Failed to load file content');
-    } finally {
-      setLoading(false);
+      console.error('[FileEditor] Failed to download file:', err);
+      alert('Failed to download file');
     }
   };
 
-  const handleLoadInViewer = async () => {
-    if (!plugin || !content) return;
+  const handleView3D = async () => {
+    // Wait for plugin to be ready (with timeout and retry)
+    const waitForPlugin = async (maxWait = 5000, retryInterval = 100): Promise<boolean> => {
+      const startTime = Date.now();
+      while (Date.now() - startTime < maxWait) {
+        if (plugin) {
+          // Check if plugin has the necessary builders (indicates it's initialized)
+          try {
+            if (plugin.builders && plugin.builders.data && plugin.builders.structure) {
+              return true;
+            }
+          } catch (e) {
+            // Plugin exists but might not be fully ready
+          }
+        }
+        await new Promise(resolve => setTimeout(resolve, retryInterval));
+      }
+      return false;
+    };
+
+    // Construct file URL based on file type - use API endpoint directly
+    let fileUrl: string;
+    if (fileType === 'upload') {
+      fileUrl = `/api/upload/pdb/${fileId}`;
+    } else {
+      fileUrl = `/api/files/${fileId}/download`;
+    }
+
+    // Load structure in viewer using API endpoint directly (no blob URLs)
+    const code = `
+try {
+  await builder.clearStructure();
+  await builder.loadStructure('${fileUrl}');
+  await builder.addCartoonRepresentation({ color: 'secondary-structure' });
+  builder.focusView();
+  console.log('Successfully loaded ${filename} in 3D viewer');
+} catch (e) { 
+  console.error('Failed to load file in 3D viewer:', e); 
+}`;
+
+    // Save code to editor so user can see and modify it
+    setCurrentCode(code);
+
+    // Set structure origin for LLM context
+    setCurrentStructureOrigin({
+      type: fileType as 'upload' | 'rfdiffusion' | 'alphafold',
+      filename: filename,
+      metadata: {
+        file_id: fileId,
+        file_url: fileUrl,
+      },
+    });
+
+    // Save code to active session for persistence
+    if (activeSessionId) {
+      saveVisualizationCode(activeSessionId, code);
+      console.log('[FileEditor] Saved visualization code to session:', activeSessionId);
+    }
+
+    const isPluginReady = await waitForPlugin();
+    if (!isPluginReady) {
+      console.warn('[FileEditor] Plugin not ready, queueing code for execution');
+      // Queue code to run when plugin is ready
+      setPendingCodeToRun(code);
+      setViewerVisible(true);
+      setActivePane('viewer');
+      return;
+    }
+
+    if (!plugin) {
+      console.warn('[FileEditor] Plugin not available, cannot execute code');
+      return;
+    }
 
     try {
       setIsExecuting(true);
       const executor = new CodeExecutor(plugin);
-
-      // Create temporary PDB blob URL
-      const pdbBlob = new Blob([content], { type: 'text/plain' });
-      const blobUrl = URL.createObjectURL(pdbBlob);
-
-      // Load structure in viewer using blob URL
-      const code = `
-try {
-  await builder.clearStructure();
-  await builder.loadStructure('${blobUrl}');
-  await builder.addCartoonRepresentation({ color: 'secondary-structure' });
-  builder.focusView();
-  console.log('Structure loaded successfully');
-} catch (e) { 
-  console.error('Failed to load structure:', e); 
-}`;
-
-      // Save code to editor so user can see and modify it
-      setCurrentCode(code);
-
-      // Save code to active session for persistence
-      if (activeSessionId) {
-        const { saveVisualizationCode } = useChatHistoryStore.getState();
-        saveVisualizationCode(activeSessionId, code);
-        console.log('[FileEditor] Saved visualization code to session:', activeSessionId);
-      }
-
       await executor.executeCode(code);
+
+      // Switch to viewer pane and make it visible
       setViewerVisible(true);
       setActivePane('viewer');
-
-      // Keep blob URL alive for a bit longer to ensure structure loads
-      setTimeout(() => {
-        URL.revokeObjectURL(blobUrl);
-      }, 5000);
-    } catch (err) {
-      console.error('Failed to load structure in viewer:', err);
-      setError('Failed to load structure in viewer');
+    } catch (err: any) {
+      console.error('[FileEditor] Failed to load file in 3D viewer:', err);
+      alert(`Failed to load file in 3D viewer: ${err.message || 'Unknown error'}`);
     } finally {
       setIsExecuting(false);
     }
   };
 
-  const handleDownload = () => {
-    const blob = new Blob([content], { type: 'text/plain' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = filename;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    URL.revokeObjectURL(url);
-  };
-
-  if (loading) {
-    return (
-      <div className="h-full flex items-center justify-center bg-white">
-        <Loader2 className="w-6 h-6 animate-spin text-gray-400" />
-      </div>
-    );
-  }
-
-  if (error) {
-    return (
-      <div className="h-full flex flex-col items-center justify-center bg-white p-4">
-        <div className="text-red-500 mb-2">{error}</div>
-        <button
-          onClick={onClose}
-          className="px-4 py-2 bg-gray-200 text-gray-700 rounded hover:bg-gray-300"
-        >
-          Close
-        </button>
-      </div>
-    );
-  }
+  // Check if file is a PDB file that can be viewed in 3D
+  const isPdbFile = filename.toLowerCase().endsWith('.pdb') || 
+                    fileType === 'upload' || 
+                    fileType === 'rfdiffusion' || 
+                    fileType === 'alphafold';
 
   return (
     <div className="h-full flex flex-col bg-white">
       {/* Header */}
       <div className="flex items-center justify-between px-4 py-2 border-b border-gray-200 bg-gray-50">
-        <div className="flex items-center space-x-2">
-          <span className="text-sm font-medium text-gray-700">{filename}</span>
+        <div className="flex items-center gap-2">
+          <FileText className="w-4 h-4 text-gray-600" />
+          <span className="text-sm font-medium text-gray-900">{filename}</span>
           <span className="text-xs text-gray-500">({fileType})</span>
         </div>
-        <div className="flex items-center space-x-2">
-          <button
-            onClick={handleLoadInViewer}
-            disabled={!plugin || !content}
-            className="flex items-center space-x-1 px-3 py-1.5 bg-blue-600 text-white rounded text-sm hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed"
-            title="Load in 3D Viewer"
-          >
-            <Play className="w-4 h-4" />
-            <span>Load in Viewer</span>
-          </button>
+        <div className="flex items-center gap-2">
+          {isPdbFile && (
+            <button
+              onClick={handleView3D}
+              disabled={!plugin}
+              className="flex items-center space-x-1 px-3 py-2 bg-white text-blue-600 hover:bg-gray-100 rounded-md disabled:opacity-50 disabled:cursor-not-allowed text-sm transition-colors"
+              title="View in 3D canvas"
+            >
+              <Play className="w-4 h-4" />
+              <span>View in 3D</span>
+            </button>
+          )}
           <button
             onClick={handleDownload}
-            className="flex items-center space-x-1 px-3 py-1.5 bg-gray-200 text-gray-700 rounded text-sm hover:bg-gray-300"
+            className="p-1.5 text-gray-600 hover:text-gray-900 hover:bg-gray-200 rounded transition-colors"
             title="Download file"
           >
             <Download className="w-4 h-4" />
-            <span>Download</span>
           </button>
           <button
             onClick={onClose}
-            className="p-1.5 text-gray-400 hover:text-gray-600"
-            title="Close"
+            className="p-1.5 text-gray-600 hover:text-gray-900 hover:bg-gray-200 rounded transition-colors"
+            title="Close editor"
           >
             <X className="w-4 h-4" />
           </button>
@@ -167,12 +198,32 @@ try {
       </div>
 
       {/* Content */}
-      <div className="flex-1 overflow-auto">
-        <pre className="p-4 text-xs font-mono whitespace-pre-wrap break-words bg-white text-gray-800">
-          {content}
-        </pre>
+      <div className="flex-1 overflow-auto p-4">
+        {loading ? (
+          <div className="flex items-center justify-center h-full">
+            <div className="text-center">
+              <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-gray-400 mx-auto mb-2"></div>
+              <p className="text-sm text-gray-500">Loading file...</p>
+            </div>
+          </div>
+        ) : error ? (
+          <div className="flex items-center justify-center h-full">
+            <div className="text-center">
+              <p className="text-sm text-red-600 mb-2">{error}</p>
+              <button
+                onClick={() => window.location.reload()}
+                className="text-sm text-blue-600 hover:text-blue-800 underline"
+              >
+                Reload page
+              </button>
+            </div>
+          </div>
+        ) : (
+          <pre className="text-xs font-mono text-gray-800 whitespace-pre-wrap break-words">
+            {content}
+          </pre>
+        )}
       </div>
     </div>
   );
 };
-

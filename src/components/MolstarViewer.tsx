@@ -12,6 +12,7 @@ import { StructureElement, StructureProperties } from 'molstar/lib/mol-model/str
 // OrderedSet no longer needed after switching to getFirstLocation
 import { CodeExecutor } from '../utils/codeExecutor';
 import { MolstarToolbar } from './MolstarToolbar';
+import { getCodeToExecute } from '../utils/codeUtils';
 
 export const MolstarViewer: React.FC = () => {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -19,64 +20,44 @@ export const MolstarViewer: React.FC = () => {
   const [plugin, setPlugin] = useState<PluginUIContext | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [isInitialized, setIsInitialized] = useState(false);
-  const [hasCheckedPersistedCode, setHasCheckedPersistedCode] = useState(false);
   const { setPlugin: setStorePlugin, pendingCodeToRun, setPendingCodeToRun, setActivePane, setIsExecuting, currentCode, setCurrentCode } = useAppStore();
   const addSelection = useAppStore(state => state.addSelection);
   const lastLoadedPdb = useAppStore(state => state.lastLoadedPdb);
-  const { activeSessionId, getVisualizationCode } = useChatHistoryStore();
+  const { activeSessionId, getActiveSession } = useChatHistoryStore();
 
-  // Helper function to get the code to execute (checks both global and session-specific)
-  const getCodeToExecute = (): string | null => {
-    // First check global currentCode
-    if (currentCode && currentCode.trim()) {
-      return currentCode;
-    }
-    
-    // Then check session-specific visualization code
-    if (activeSessionId) {
-      const sessionCode = getVisualizationCode(activeSessionId);
-      if (sessionCode && sessionCode.trim()) {
-        return sessionCode;
-      }
-    }
-    
-    return null;
+  // Helper function to check if code contains blob URLs (expired and should be ignored)
+  const hasBlobUrl = (code: string): boolean => {
+    return code.includes('blob:http://') || code.includes('blob:https://');
   };
 
-  // Check for persisted code on mount (after stores have hydrated)
-  useEffect(() => {
-    // Give stores a moment to hydrate from localStorage
-    const checkPersistedCode = () => {
-      const code = getCodeToExecute();
-      if (code) {
-        // If we found persisted code, update the store so it's available
-        if (!currentCode || currentCode.trim() === '') {
-          setCurrentCode(code);
-          console.log('[Molstar] Restored persisted visualization code');
-        }
-      }
-      setHasCheckedPersistedCode(true);
-    };
+  // Get code to execute using shared utility
+  const getCode = (): string | null => {
+    return getCodeToExecute(currentCode, pendingCodeToRun, activeSessionId, getActiveSession);
+  };
 
-    // Small delay to ensure Zustand persistence has hydrated
-    const timer = setTimeout(checkPersistedCode, 150);
-    return () => clearTimeout(timer);
-  }, []); // Only run once on mount
+  // Cleanup blob URLs from currentCode when session changes
+  useEffect(() => {
+    // Only clear if there's actually blob URL code
+    if (currentCode && currentCode.trim() && hasBlobUrl(currentCode)) {
+      console.warn('[Molstar] Cleaning up blob URL from currentCode on session change');
+      setCurrentCode('');
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeSessionId]); // Run when session changes (intentionally not including currentCode to avoid loops)
 
   useEffect(() => {
     const initViewer = async () => {
       if (!containerRef.current || isInitialized) return;
-      
-      // Wait for persisted code check to complete before initializing
-      if (!hasCheckedPersistedCode) {
-        console.log('[Molstar] Waiting for persisted code check...');
-        return;
-      }
 
       try {
         setIsLoading(true);
         console.log('[Molstar] initViewer: start');
         console.log('[Molstar] initViewer: containerRef set?', !!containerRef.current);
+
+        // Add timeout to prevent infinite loading
+        const initTimeout = setTimeout(() => {
+          console.warn('[Molstar] Initialization taking longer than expected...');
+        }, 10000); // 10 second warning
 
         const spec = DefaultPluginUISpec();
         const pluginInstance = await createPluginUI({
@@ -103,6 +84,7 @@ export const MolstarViewer: React.FC = () => {
             ]
           },
         });
+        clearTimeout(initTimeout);
         console.log('[Molstar] createPluginUI: success');
 
         setPlugin(pluginInstance);
@@ -155,41 +137,53 @@ export const MolstarViewer: React.FC = () => {
           try {
             setIsExecuting(true);
             const exec = new CodeExecutor(pluginInstance);
-            await exec.executeCode(pendingCodeToRun);
+            // Add timeout for code execution to prevent infinite loading
+            const executionPromise = exec.executeCode(pendingCodeToRun);
+            const timeoutPromise = new Promise((_, reject) => 
+              setTimeout(() => reject(new Error('Code execution timeout after 30 seconds')), 30000)
+            );
+            await Promise.race([executionPromise, timeoutPromise]);
             setActivePane('viewer');
           } catch (e) {
             console.error('[Molstar] pending code execution failed', e);
           } finally {
             setIsExecuting(false);
             setPendingCodeToRun(null);
+            setIsLoading(false); // Ensure loading state is cleared
           }
           return;
         }
 
-        // Priority 2: Get code to execute (checks both global and session-specific)
-        const codeToExecute = getCodeToExecute();
+        // Priority 2: Get code to execute (prioritizes message code)
+        // getCode() uses shared utility that filters out blob URLs automatically
+        const codeToExecute = getCode();
         if (codeToExecute) {
           try {
             setIsExecuting(true);
             const exec = new CodeExecutor(pluginInstance);
-            await exec.executeCode(codeToExecute);
-            // Sync to store if it came from session
+            // Add timeout for code execution to prevent infinite loading
+            const executionPromise = exec.executeCode(codeToExecute);
+            const timeoutPromise = new Promise((_, reject) => 
+              setTimeout(() => reject(new Error('Code execution timeout after 30 seconds')), 30000)
+            );
+            await Promise.race([executionPromise, timeoutPromise]);
+            // Sync to store if it came from message
             if (!currentCode || currentCode.trim() === '') {
               setCurrentCode(codeToExecute);
             }
             setActivePane('viewer');
             lastExecutedCodeRef.current = codeToExecute;
           } catch (e) {
-            console.error('[Molstar] execute persisted code on mount failed', e);
+            console.error('[Molstar] execute code on mount failed', e);
           } finally {
             setIsExecuting(false);
+            setIsLoading(false); // Ensure loading state is cleared
           }
           return;
         }
 
-        // Fallback: load default only when no code is present
-        await loadDefaultStructure(pluginInstance);
-        console.log('[Molstar] initViewer: default structure loaded');
+        // Viewer initialized - code will be executed when it becomes available
+        console.log('[Molstar] initViewer: viewer initialized (waiting for code)');
         
       } catch (error) {
         console.error('[Molstar] initViewer: failed', error);
@@ -214,9 +208,12 @@ export const MolstarViewer: React.FC = () => {
       }
       console.log('[Molstar] cleanup: end');
     };
-  }, [hasCheckedPersistedCode, activeSessionId]);
+  }, []); // Only initialize once on mount
 
-  const loadDefaultStructure = async (pluginInstance: PluginUIContext) => {
+  // Unused function - kept for potential future use
+  // @ts-ignore - intentionally unused
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  const _loadDefaultStructure = async (pluginInstance: PluginUIContext) => {
     try {
       console.log('[Molstar] loadDefaultStructure: start');
       console.time('[Molstar] download');
@@ -272,23 +269,27 @@ export const MolstarViewer: React.FC = () => {
     const run = async () => {
       if (!plugin || !isInitialized) return;
       
-      // Get code to execute (checks both global and session-specific)
-      let code = currentCode?.trim();
-      
-      // If no global code, check session-specific code
-      if (!code && activeSessionId) {
-        const sessionCode = getVisualizationCode(activeSessionId);
-        if (sessionCode && sessionCode.trim()) {
-          code = sessionCode;
-          // Sync to store so it's available globally
-          if (!currentCode || currentCode.trim() === '') {
-            setCurrentCode(sessionCode);
-          }
-        }
-      }
+      // Get code to execute (prioritizes message code over global code)
+      // getCode() uses shared utility that filters out blob URLs automatically
+      let code = getCode();
       
       if (!code) return;
       if (lastExecutedCodeRef.current === code) return;
+      
+      // Double-check for blob URLs (safety check)
+      if (hasBlobUrl(code)) {
+        console.warn('[Molstar] Re-execute: Code contains blob URL (expired), skipping');
+        // Clear the stale code
+        if (currentCode === code) {
+          setCurrentCode('');
+        }
+        return;
+      }
+      
+      // Sync to store if it came from message
+      if (code !== currentCode) {
+        setCurrentCode(code);
+      }
       
       try {
         setIsExecuting(true);

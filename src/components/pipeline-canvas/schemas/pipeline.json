@@ -1,0 +1,116 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/santosrai/pipeline-canvas/schemas/pipeline.json",
+  "title": "Pipeline Canvas Schema",
+  "description": "JSON Schema for pipeline canvas types - Pipeline, PipelineBlueprint, PipelineNode",
+  "definitions": {
+    "NodeType": {
+      "type": "string",
+      "enum": [
+        "input_node",
+        "rfdiffusion_node",
+        "proteinmpnn_node",
+        "alphafold_node",
+        "message_input_node",
+        "http_request_node"
+      ]
+    },
+    "NodeStatus": {
+      "type": "string",
+      "enum": ["idle", "running", "success", "completed", "error", "pending"]
+    },
+    "PipelineStatus": {
+      "type": "string",
+      "enum": ["draft", "running", "completed", "failed"]
+    },
+    "PipelineNodeBlueprint": {
+      "type": "object",
+      "required": ["id", "type", "label"],
+      "properties": {
+        "id": { "type": "string" },
+        "type": { "$ref": "#/definitions/NodeType" },
+        "label": { "type": "string" },
+        "config": {
+          "type": "object",
+          "additionalProperties": true
+        },
+        "inputs": {
+          "type": "object",
+          "additionalProperties": { "type": "string" }
+        }
+      }
+    },
+    "Edge": {
+      "type": "object",
+      "required": ["source", "target"],
+      "properties": {
+        "source": { "type": "string" },
+        "target": { "type": "string" }
+      }
+    },
+    "PipelineBlueprint": {
+      "type": "object",
+      "required": ["rationale", "nodes", "edges"],
+      "properties": {
+        "rationale": { "type": "string" },
+        "nodes": {
+          "type": "array",
+          "items": { "$ref": "#/definitions/PipelineNodeBlueprint" }
+        },
+        "edges": {
+          "type": "array",
+          "items": { "$ref": "#/definitions/Edge" }
+        },
+        "missing_resources": {
+          "type": "array",
+          "items": { "type": "string" },
+          "default": []
+        }
+      }
+    },
+    "PipelineNode": {
+      "allOf": [
+        { "$ref": "#/definitions/PipelineNodeBlueprint" },
+        {
+          "type": "object",
+          "properties": {
+            "status": { "$ref": "#/definitions/NodeStatus" },
+            "result_metadata": {
+              "type": "object",
+              "additionalProperties": true
+            },
+            "error": { "type": "string" },
+            "position": {
+              "type": "object",
+              "properties": {
+                "x": { "type": "number" },
+                "y": { "type": "number" }
+              }
+            }
+          }
+        }
+      ]
+    },
+    "Pipeline": {
+      "type": "object",
+      "required": ["id", "name", "nodes", "edges", "status"],
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string" },
+        "nodes": {
+          "type": "array",
+          "items": { "$ref": "#/definitions/PipelineNode" }
+        },
+        "edges": {
+          "type": "array",
+          "items": { "$ref": "#/definitions/Edge" }
+        },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" },
+        "status": { "$ref": "#/definitions/PipelineStatus" },
+        "description": { "type": "string" }
+      }
+    }
+  },
+  "$ref": "#/definitions/Pipeline"
+}

@@ -354,9 +354,6 @@ export async function applyOverpaintToSelection(plugin: PluginUIContext, colorNa
     for (const component of structureRef.components) {
       for (const repr of component.representations) {
         try {
-          // Create overpaint theme using the bundle
-          const overpaintData = Overpaint.ofBundle(bundle, color, 1.0, loci.structure);
-          
           // Apply overpaint via state update
           await plugin.build().to(repr.cell)
             .apply(
@@ -398,10 +395,11 @@ async function applyColorViaComponent(
       }]
     };
 
-    // Apply overpaint through the hierarchy manager
+    // Apply color through the hierarchy manager
+    // Note: Using type assertion as the exact API may vary by Molstar version
     await plugin.managers.structure.component.applyTheme(
-      { overpaint: params },
-      structureRef.components
+      { overpaint: params } as any,
+      [structureRef] as any
     );
     
     console.log('[MolstarSelections] Applied color via component theme');
@@ -563,8 +561,14 @@ async function hideRepresentationsAll(plugin: PluginUIContext) {
         if (reprType && ATOM_BOND_REPR_TYPES.includes(reprType)) {
           console.log('[MolstarSelections] Hiding representation:', reprType);
           try {
-            // Use setVisibility to toggle the representation on/off
-            await plugin.state.updateCellState(repr.cell.transform.ref, { isHidden: true });
+            // Use state builder to update visibility
+            await plugin.state.data.build()
+              .to(repr.cell)
+              .update(repr.cell.transform.transformer, (old: any) => ({
+                ...old,
+                params: { ...old.params, alpha: 0 }
+              }))
+              .commit();
             console.log('[MolstarSelections] Successfully hid:', reprType);
           } catch (e) {
             console.warn('[MolstarSelections] Failed to hide representation:', e);
@@ -601,8 +605,14 @@ async function showRepresentationsAll(plugin: PluginUIContext) {
         if (reprType && ATOM_BOND_REPR_TYPES.includes(reprType)) {
           console.log('[MolstarSelections] Showing representation:', reprType);
           try {
-            // Use setVisibility to toggle the representation on
-            await plugin.state.updateCellState(repr.cell.transform.ref, { isHidden: false });
+            // Use state builder to update visibility
+            await plugin.state.data.build()
+              .to(repr.cell)
+              .update(repr.cell.transform.transformer, (old: any) => ({
+                ...old,
+                params: { ...old.params, alpha: 1 }
+              }))
+              .commit();
             foundHiddenRepr = true;
             console.log('[MolstarSelections] Successfully showed:', reprType);
           } catch (e) {
@@ -699,7 +709,13 @@ export async function toggleAtomsBondsVisibility(plugin: PluginUIContext, visibl
           if (reprType && ATOM_BOND_REPR_TYPES.includes(reprType)) {
             foundAtomBondRepr = true;
             try {
-              await plugin.state.updateCellState(repr.cell.transform.ref, { isHidden: !visible });
+              await plugin.state.data.build()
+                .to(repr.cell)
+                .update(repr.cell.transform.transformer, (old: any) => ({
+                  ...old,
+                  params: { ...old.params, alpha: visible ? 1 : 0 }
+                }))
+                .commit();
               console.log(`[MolstarSelections] Toggled ${reprType} visibility to:`, visible);
             } catch (e) {
               console.warn('[MolstarSelections] Failed to toggle visibility:', e);
@@ -787,9 +803,11 @@ export async function applyTransparencyToSelection(plugin: PluginUIContext, alph
         }]
       };
 
+      // Note: transparency theme may not be available in all Molstar versions
+      // Using type assertion and applying to structure references instead of components
       await plugin.managers.structure.component.applyTheme(
-        { transparency: params },
-        structureRef.components
+        { transparency: params } as any,
+        [structureRef] as any
       );
       
       console.log('[MolstarSelections] Successfully applied transparency via component theme');

@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { X, Search, Plus, Trash2, Download, Upload, Star, MoreVertical } from 'lucide-react';
 import { useChatHistoryStore, useSessionManagement } from '../stores/chatHistoryStore';
+import { useAppStore } from '../stores/appStore';
 import { SessionListItem } from './SessionListItem';
 
 interface ChatHistoryPanelProps {
@@ -24,6 +25,7 @@ export const ChatHistoryPanel: React.FC<ChatHistoryPanelProps> = ({ isOpen, onCl
   } = useChatHistoryStore();
   
   const { createSession } = useSessionManagement();
+  const { setViewerVisible, setActivePane } = useAppStore();
   const [showBulkActions, setShowBulkActions] = useState(false);
 
   if (!isOpen) return null;
@@ -34,6 +36,8 @@ export const ChatHistoryPanel: React.FC<ChatHistoryPanelProps> = ({ isOpen, onCl
 
   const handleNewChat = () => {
     createSession();
+    setViewerVisible(false); // Hide 3D visual editor when starting new chat
+    setActivePane(null); // Hide all panes for new chat
     onClose();
   };
 

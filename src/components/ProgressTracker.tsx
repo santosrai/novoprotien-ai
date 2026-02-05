@@ -306,7 +306,7 @@ export const useRFdiffusionProgress = createProgressHook({
   eventName: 'rfdiffusion-progress',
   title: 'RFdiffusion Protein Design',
   startMessage: 'Starting protein design...',
-  successMessage: 'Design completed successfully!',
-  errorMessage: 'Design failed',
-  cancelMessage: 'Design cancelled'
+  successMessage: 'Protein design completed successfully!',
+  errorMessage: 'Protein design failed',
+  cancelMessage: 'Protein design cancelled'
 });

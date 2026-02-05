@@ -1,37 +1,45 @@
-import React, { useState, useRef, useEffect } from 'react';
-import { Send, Sparkles, Download, Play, X, Copy, Paperclip } from 'lucide-react';
+import React, { useState, useRef, useEffect, useCallback } from 'react';
+import { Send, Sparkles, Download, Play, X, Copy, ChevronDown, ChevronUp } from 'lucide-react';
 import { useAppStore } from '../stores/appStore';
 import { useChatHistoryStore, useActiveSession, Message } from '../stores/chatHistoryStore';
 import { CodeExecutor } from '../utils/codeExecutor';
-import { api, fetchAgents, fetchModels, Agent, Model, streamAgentRoute } from '../utils/api';
+import { api, getAuthHeaders } from '../utils/api';
+import { useModels, useAgents } from '../hooks/queries';
 import { v4 as uuidv4 } from 'uuid';
 import { AlphaFoldDialog } from './AlphaFoldDialog';
+import { OpenFold2Dialog } from './OpenFold2Dialog';
 import { RFdiffusionDialog } from './RFdiffusionDialog';
 import { ProteinMPNNDialog } from './ProteinMPNNDialog';
-import { ProgressTracker, useAlphaFoldProgress, useProteinMPNNProgress, useRFdiffusionProgress } from './ProgressTracker';
+import { ProgressTracker, useAlphaFoldProgress, useProteinMPNNProgress } from './ProgressTracker';
 import { ErrorDisplay } from './ErrorDisplay';
-import { ErrorDetails, AlphaFoldErrorHandler, RFdiffusionErrorHandler, ErrorCategory, ErrorSeverity } from '../utils/errorHandler';
+import { ErrorDetails, AlphaFoldErrorHandler, OpenFold2ErrorHandler, RFdiffusionErrorHandler, ErrorCategory, ErrorSeverity } from '../utils/errorHandler';
 import { logAlphaFoldError } from '../utils/errorLogger';
 import { AgentSelector } from './AgentSelector';
 import { ModelSelector } from './ModelSelector';
 import { useAgentSettings } from '../stores/settingsStore';
 import { ThinkingProcessDisplay } from './ThinkingProcessDisplay';
-import { PDBFileUpload } from './PDBFileUpload';
-import ReactMarkdown from 'react-markdown';
-import { generatePDBSummary } from '../utils/pdbUtils';
-import { usePipelineStore, PipelineBlueprint } from '../components/pipeline-canvas';
+import { AttachmentMenu } from './AttachmentMenu';
+import { JobLoadingPill } from './JobLoadingPill';
+import { PipelineBlueprintDisplay } from './PipelineBlueprintDisplay';
+import { PipelineSelectionModal } from './PipelineSelectionModal';
+import { ServerFilesDialog } from './ServerFilesDialog';
+import { usePipelineStore } from '../components/pipeline-canvas';
+import { PipelineBlueprint } from '../components/pipeline-canvas';
 
 // Extended message metadata for structured agent results
-// Note: Message interface now includes thinkingProcess and uploadedFile, so ExtendedMessage is mainly for type compatibility
 interface ExtendedMessage extends Message {
-  // These fields are now part of Message interface, but keeping for backward compatibility
   alphafoldResult?: {
     pdbContent?: string;
     filename?: string;
     sequence?: string;
     parameters?: any;
     metadata?: any;
-    jobType?: 'alphafold' | 'rfdiffusion';
+  };
+  openfold2Result?: {
+    pdbContent?: string;
+    filename?: string;
+    job_id?: string;
+    message?: string;
   };
   proteinmpnnResult?: {
     jobId: string;
@@ -48,9 +56,21 @@ interface ExtendedMessage extends Message {
     };
     metadata?: Record<string, any>;
   };
-  // uploadedFile is now in Message interface, but keeping here for backward compatibility
-  // thinkingProcess is now in Message interface, but keeping here for type compatibility
+  thinkingProcess?: {
+    steps: Array<{
+      id: string;
+      title: string;
+      content: string;
+      status: 'pending' | 'processing' | 'completed';
+      timestamp?: Date;
+    }>;
+    isComplete: boolean;
+    totalSteps: number;
+  };
   error?: ErrorDetails;
+  blueprint?: PipelineBlueprint;
+  blueprintRationale?: string;
+  blueprintApproved?: boolean;
 }
 
 const renderProteinMPNNResult = (result: ExtendedMessage['proteinmpnnResult']) => {
@@ -139,36 +159,48 @@ const renderProteinMPNNResult = (result: ExtendedMessage['proteinmpnnResult']) =
 };
 
 // Helper function to convert backend thinking data to frontend format
-const convertThinkingData = (thinkingProcess: any, isComplete: boolean = false): ExtendedMessage['thinkingProcess'] | undefined => {
+const convertThinkingData = (thinkingProcess: any): ExtendedMessage['thinkingProcess'] | undefined => {
   if (!thinkingProcess) return undefined;
   
   // Backend returns: { steps: [...], isComplete: bool, totalSteps: number }
   // Frontend expects: { steps: ThinkingStep[], isComplete: bool, totalSteps: number }
   if (thinkingProcess.steps && Array.isArray(thinkingProcess.steps)) {
-    const steps = thinkingProcess.steps.map((step: any, index: number) => {
-      // If not complete and this is the last step, mark it as processing
-      let status = step.status || 'completed';
-      if (!isComplete && index === thinkingProcess.steps.length - 1) {
-        status = 'processing';
-      }
-      
-      return {
-        id: step.id || `step_${index}`,
+    return {
+      steps: thinkingProcess.steps.map((step: any) => ({
+        id: step.id || `step_${Math.random()}`,
         title: step.title || 'Thinking Step',
         content: step.content || '',
-        status: status as 'pending' | 'processing' | 'completed',
+        status: step.status || 'completed',
         timestamp: step.timestamp ? new Date(step.timestamp) : undefined
-      };
-    });
-    
-    return {
-      steps,
-      isComplete: isComplete && thinkingProcess.isComplete !== false,
+      })),
+      isComplete: thinkingProcess.isComplete !== false,
       totalSteps: thinkingProcess.totalSteps || thinkingProcess.steps.length
     };
   }
   
   return undefined;
+};
+
+// Generate a user-friendly message for code execution
+const getExecutionMessage = (userRequest: string): string => {
+  const request = userRequest.toLowerCase().trim();
+  
+  // Extract the main subject (what they want to see)
+  const subjectMatch = request.match(/(?:show|display|visualize|view|load|open|see)\s+(.+?)(?:\s|$)/i);
+  const subject = subjectMatch ? subjectMatch[1].trim() : request;
+  
+  // Clean up common trailing words
+  const cleanSubject = subject.replace(/\s+(structure|protein|molecule|chain|helix)$/i, '').trim();
+  
+  // If it's a short, meaningful subject, use it
+  if (cleanSubject && cleanSubject.length < 40 && cleanSubject.length > 0) {
+    // Capitalize first letter
+    const capitalized = cleanSubject.charAt(0).toUpperCase() + cleanSubject.slice(1);
+    return `Loading ${capitalized}...`;
+  }
+  
+  // Fallback to a simple message
+  return 'Loading structure...';
 };
 
 const extractProteinMPNNSequences = (payload: any): string[] => {
@@ -235,59 +267,114 @@ const createProteinMPNNError = (
 });
 
 export const ChatPanel: React.FC = () => {
-  const { plugin, currentCode, setCurrentCode, setIsExecuting, setActivePane, setPendingCodeToRun, setViewerVisible, setCurrentStructureOrigin, currentStructureOrigin } = useAppStore();
-  const { setGhostBlueprint } = usePipelineStore();
-  const lastLoadedPdb = useAppStore(state => state.lastLoadedPdb);
+  const { plugin, currentCode, setCurrentCode, setIsExecuting, setActivePane, setPendingCodeToRun, setViewerVisible, setCurrentStructureOrigin, pendingCodeToRun } = useAppStore();
   const selections = useAppStore(state => state.selections);
   const removeSelection = useAppStore(state => state.removeSelection);
   const clearSelections = useAppStore(state => state.clearSelections);
+  const { setGhostBlueprint } = usePipelineStore();
 
   // Chat history store
-  const { createSession, activeSessionId, saveVisualizationCode, getVisualizationCode, saveViewerVisibility, getViewerVisibility, getActiveSession, saveModelSettings, getModelSettings } = useChatHistoryStore();
+  const { createSession, activeSessionId, saveVisualizationCode, getVisualizationCode, saveViewerVisibility, getViewerVisibility } = useChatHistoryStore();
   const isViewerVisible = useAppStore(state => state.isViewerVisible);
   
   // Helper function to set viewer visibility and save to session
-  const setViewerVisibleAndSave = (visible: boolean) => {
+  const setViewerVisibleAndSave = useCallback((visible: boolean) => {
     setViewerVisible(visible);
     if (activeSessionId) {
       saveViewerVisibility(activeSessionId, visible);
     }
-  };
+  }, [setViewerVisible, activeSessionId, saveViewerVisibility]);
   const { activeSession, addMessage, updateMessages } = useActiveSession();
 
   // Agent and model settings
-  const { settings: agentSettings, updateSettings: updateAgentSettings } = useAgentSettings();
+  const { settings: agentSettings } = useAgentSettings();
   
   const [input, setInput] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [lastAgentId, setLastAgentId] = useState<string>('');
+  const [isQuickStartExpanded, setIsQuickStartExpanded] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const previousSessionIdRef = useRef<string | null>(null);
+  
+  // PDB file upload state - track files with their upload status
+  interface FileUploadState {
+    file: File;
+    status: 'uploading' | 'uploaded' | 'error';
+    fileInfo?: {
+      file_id: string;
+      filename: string;
+      file_url: string;
+      atoms: number;
+      chains: string[];
+      size: number;
+    };
+    error?: string;
+  }
+  const [fileUploads, setFileUploads] = useState<FileUploadState[]>([]);
+  const [uploadError, setUploadError] = useState<string | null>(null);
+  // Pipeline selection state
+  const [showPipelineModal, setShowPipelineModal] = useState(false);
+  const [showServerFilesDialog, setShowServerFilesDialog] = useState(false);
+  const [selectedPipeline, setSelectedPipeline] = useState<{ id: string; name: string } | null>(null);
   // Refs to track latest values for session switching (avoid stale closures)
   const currentCodeRef = useRef<string | null>(currentCode);
   const isViewerVisibleRef = useRef<boolean>(isViewerVisible);
-  // Ref to prevent saving during restoration
-  const isRestoringRef = useRef(false);
+  const hasAttemptedCreateRef = useRef<boolean>(false);
 
-  // Initialize session if none exists
+  // Get sync state and sessions from store
+  const isSyncing = useChatHistoryStore(state => state._isSyncing);
+  const sessions = useChatHistoryStore(state => state.sessions);
+
+  // Reset hasAttemptedCreateRef when a session is successfully created or switched
   useEffect(() => {
-    if (!activeSessionId) {
-      createSession();
+    if (activeSessionId) {
+      hasAttemptedCreateRef.current = false;
     }
-  }, [activeSessionId, createSession]);
+  }, [activeSessionId]);
+
+  // Initialize session if none exists (but wait for sync to complete)
+  useEffect(() => {
+    // Don't create if:
+    // 1. Already have an active session
+    // 2. Sync is in progress (wait for it to complete)
+    // 3. Already attempted to create (prevent duplicate creation)
+    // 4. Sessions exist (even if no activeSessionId, they might be loading)
+    if (activeSessionId || isSyncing || hasAttemptedCreateRef.current || sessions.length > 0) {
+      return;
+    }
+
+    // Wait a bit for store rehydration and backend sync to complete
+    const timeoutId = setTimeout(() => {
+      // Double-check conditions after delay
+      const currentState = useChatHistoryStore.getState();
+      if (!currentState.activeSessionId && !currentState._isSyncing && currentState.sessions.length === 0) {
+        hasAttemptedCreateRef.current = true;
+        createSession();
+      }
+    }, 500); // Wait 500ms for sync to complete
+
+    return () => clearTimeout(timeoutId);
+  }, [activeSessionId, isSyncing, sessions.length, createSession]);
 
   // Initialize previous session ID ref on mount
   useEffect(() => {
     if (activeSessionId && !previousSessionIdRef.current) {
       previousSessionIdRef.current = activeSessionId;
-      // Restore viewer visibility for initial session on mount
-      const savedVisibility = getViewerVisibility(activeSessionId);
-      if (savedVisibility !== undefined) {
-        setViewerVisible(savedVisibility);
+      // Check if this is a new session (no messages) - hide all panes
+      const isNewSession = !activeSession || activeSession.messages.length === 0;
+      if (isNewSession) {
+        setViewerVisible(false);
+        setActivePane(null);
+      } else {
+        // Restore viewer visibility for existing session on mount
+        const savedVisibility = getViewerVisibility(activeSessionId);
+        if (savedVisibility !== undefined) {
+          setViewerVisible(savedVisibility);
+        }
       }
     }
-  }, [activeSessionId, getViewerVisibility, setViewerVisible]);
+  }, [activeSessionId, activeSession, getViewerVisibility, setViewerVisible, setActivePane]);
 
   // Keep refs updated with latest values (prevents stale closures)
   useEffect(() => {
@@ -298,16 +385,21 @@ export const ChatPanel: React.FC = () => {
     isViewerVisibleRef.current = isViewerVisible;
   }, [isViewerVisible]);
 
+  // Auto-show viewer when pendingCodeToRun is set
+  useEffect(() => {
+    if (pendingCodeToRun && pendingCodeToRun.trim()) {
+      setViewerVisibleAndSave(true);
+      setActivePane('viewer');
+    }
+  }, [pendingCodeToRun, setViewerVisibleAndSave, setActivePane]);
+
   // Restore visualization code and viewer visibility when switching sessions
   useEffect(() => {
     if (!activeSessionId) return;
     
-    // Only restore when session actually changes (not when settings change)
-    const sessionChanged = previousSessionIdRef.current !== activeSessionId;
-    
     // Save current state to previous session before switching
     // Use refs to ensure we have the latest values even if they changed after effect was scheduled
-    if (previousSessionIdRef.current && sessionChanged) {
+    if (previousSessionIdRef.current && previousSessionIdRef.current !== activeSessionId) {
       const codeToSave = currentCodeRef.current?.trim() || '';
       if (codeToSave) {
         saveVisualizationCode(previousSessionIdRef.current, codeToSave);
@@ -316,121 +408,58 @@ export const ChatPanel: React.FC = () => {
       // Save viewer visibility to previous session
       saveViewerVisibility(previousSessionIdRef.current, isViewerVisibleRef.current);
       console.log('[ChatPanel] Saved viewer visibility to previous session:', previousSessionIdRef.current, isViewerVisibleRef.current);
-      // Save model settings to previous session
-      saveModelSettings(
-        previousSessionIdRef.current,
-        agentSettings.selectedAgentId,
-        agentSettings.selectedModel
-      );
-      console.log('[ChatPanel] Saved model settings to previous session:', previousSessionIdRef.current, {
-        selectedAgentId: agentSettings.selectedAgentId,
-        selectedModel: agentSettings.selectedModel,
+    }
+    
+    // Check if this is a new session (no messages) - don't restore code for new sessions
+    const isNewSession = !activeSession || activeSession.messages.length === 0;
+    
+    if (isNewSession) {
+      // For new sessions, clear any existing code (don't restore from previous sessions)
+      if (currentCodeRef.current && currentCodeRef.current.trim()) {
+        console.log('[ChatPanel] Clearing code for new session:', activeSessionId);
+        setCurrentCode('');
+      }
+      // Hide all panes for new sessions
+      setViewerVisible(false);
+      setActivePane(null); // Reset active pane to hide all panes
+      console.log('[ChatPanel] Hiding all panes for new session:', activeSessionId);
+    } else {
+      // Only restore code for existing sessions with messages
+      getVisualizationCode(activeSessionId).then((savedCode) => {
+        const hasValidCode = savedCode && 
+          savedCode.trim() && 
+          !savedCode.includes('blob:http://') && 
+          !savedCode.includes('blob:https://');
+        
+        if (hasValidCode) {
+          console.log('[ChatPanel] Restoring visualization code for session:', activeSessionId);
+          setCurrentCode(savedCode);
+          // Show viewer if code exists (respect saved visibility preference if available)
+          const savedVisibility = getViewerVisibility(activeSessionId);
+          setViewerVisible(savedVisibility !== undefined ? savedVisibility : true);
+        } else {
+          // Clear code if session has no saved visualization or code is invalid
+          if (currentCodeRef.current && currentCodeRef.current.trim()) {
+            console.log('[ChatPanel] Clearing code for session without valid visualization:', activeSessionId);
+            setCurrentCode('');
+          }
+          setViewerVisible(false); // Hide viewer if no valid code
+        }
+      }).catch((error) => {
+        console.error('[ChatPanel] Failed to restore visualization code:', error);
+        setViewerVisible(false); // Hide viewer on error
       });
     }
     
-    // Only restore when session changes
-    if (sessionChanged) {
-      // Restore code for new session
-      const savedCode = getVisualizationCode(activeSessionId);
-      if (savedCode && savedCode.trim()) {
-        console.log('[ChatPanel] Restoring visualization code for session:', activeSessionId);
-        setCurrentCode(savedCode);
-      } else {
-        // Clear code if session has no saved visualization
-        // Use ref to check current state
-        if (currentCodeRef.current && currentCodeRef.current.trim()) {
-          console.log('[ChatPanel] Clearing code for session without visualization:', activeSessionId);
-          setCurrentCode('');
-        }
-      }
-      
-      // Restore viewer visibility for new session
-      const savedVisibility = getViewerVisibility(activeSessionId);
-      if (savedVisibility !== undefined) {
-        console.log('[ChatPanel] Restoring viewer visibility for session:', activeSessionId, savedVisibility);
-        setViewerVisible(savedVisibility);
-      } else {
-        // Default to hidden for new sessions
-        setViewerVisible(false);
-      }
-      
-      // Restore model settings for new session
-      const savedModelSettings = getModelSettings(activeSessionId);
-      if (savedModelSettings) {
-        console.log('[ChatPanel] Restoring model settings for session:', activeSessionId, savedModelSettings);
-        isRestoringRef.current = true;
-        updateAgentSettings({
-          selectedAgentId: savedModelSettings.selectedAgentId,
-          selectedModel: savedModelSettings.selectedModel,
-        });
-        // Reset flag in next tick to allow the update to complete
-        Promise.resolve().then(() => {
-          setTimeout(() => {
-            isRestoringRef.current = false;
-          }, 50);
-        });
-      } else {
-        // For new sessions, keep current global settings (or use defaults)
-        console.log('[ChatPanel] No saved model settings for session, using current settings:', activeSessionId);
-        // Don't set restoring flag here - we want to save the current settings
-        saveModelSettings(
-          activeSessionId,
-          agentSettings.selectedAgentId,
-          agentSettings.selectedModel
-        );
-      }
-      
-      // Update previous session ID
-      previousSessionIdRef.current = activeSessionId;
-    }
-  }, [activeSessionId, getVisualizationCode, saveVisualizationCode, getViewerVisibility, saveViewerVisibility, setCurrentCode, setViewerVisible, saveModelSettings, getModelSettings, updateAgentSettings]);
+    // Update previous session ID
+    previousSessionIdRef.current = activeSessionId;
+  }, [activeSessionId, getVisualizationCode, saveVisualizationCode, getViewerVisibility, saveViewerVisibility, setCurrentCode, setViewerVisible]);
 
-  // Save model settings when they change (for current session)
-  // Skip saving during initial session switch to avoid overwriting restored settings
-  useEffect(() => {
-    // Only save if we have an active session and not currently restoring
-    if (activeSessionId && !isRestoringRef.current) {
-      // Use requestAnimationFrame to ensure this runs after any restoration updates
-      const rafId = requestAnimationFrame(() => {
-        if (!isRestoringRef.current && activeSessionId) {
-          saveModelSettings(
-            activeSessionId,
-            agentSettings.selectedAgentId,
-            agentSettings.selectedModel
-          );
-          console.log('[ChatPanel] Saved model settings for current session:', activeSessionId, {
-            selectedAgentId: agentSettings.selectedAgentId,
-            selectedModel: agentSettings.selectedModel,
-          });
-        }
-      });
-      
-      return () => cancelAnimationFrame(rafId);
-    }
-  }, [activeSessionId, agentSettings.selectedAgentId, agentSettings.selectedModel, saveModelSettings]);
-
-  // Fetch agents and models on mount
-  useEffect(() => {
-    const loadAgentsAndModels = async () => {
-      try {
-        console.log('[ChatPanel] Loading agents and models...');
-        const [agentsData, modelsData] = await Promise.all([
-          fetchAgents(),
-          fetchModels(),
-        ]);
-        console.log('[ChatPanel] Agents loaded:', agentsData.length);
-        console.log('[ChatPanel] Models loaded:', modelsData.length);
-        setAgents(agentsData);
-        setModels(modelsData);
-      } catch (error) {
-        console.error('[ChatPanel] Failed to load agents or models:', error);
-        // Set empty arrays on error so components still render
-        setAgents([]);
-        setModels([]);
-      }
-    };
-    loadAgentsAndModels();
-  }, []);
+  // Use React Query for agents/models - deduplicates requests, avoids Strict Mode double-fetch
+  const { data: agentsData } = useAgents();
+  const { data: modelsData } = useModels();
+  const agents = agentsData ?? [];
+  const models = modelsData ?? [];
 
   // Get messages from active session
   const rawMessages = activeSession?.messages || [];
@@ -446,39 +475,12 @@ export const ChatPanel: React.FC = () => {
   const [proteinmpnnData, setProteinmpnnData] = useState<any>(null);
   const proteinmpnnProgress = useProteinMPNNProgress();
 
+  // OpenFold2 state
+  const [showOpenFold2Dialog, setShowOpenFold2Dialog] = useState(false);
+
   // RFdiffusion state
   const [showRFdiffusionDialog, setShowRFdiffusionDialog] = useState(false);
   const [rfdiffusionData, setRfdiffusionData] = useState<any>(null);
-  const rfdiffusionProgress = useRFdiffusionProgress();
-
-  // Agent and model selection state
-  const [agents, setAgents] = useState<Agent[]>([]);
-  const [models, setModels] = useState<Model[]>([]);
-
-  // Pending file state (file selected but not uploaded yet)
-  const [pendingFile, setPendingFile] = useState<File | null>(null);
-  
-  // Uploaded file state (after upload completes)
-  // Note: Currently tracked via uploadedFileInfo local variable, state value kept for future use
-  const [, setUploadedFile] = useState<{
-    filename: string;
-    file_id: string;
-    file_url: string;
-    size: number;
-    atoms: number;
-    chains: string[];
-  } | null>(null);
-
-  // Helper function to check if a model is a thinking model
-  const isThinkingModel = (modelId: string | null): boolean => {
-    if (!modelId) return false;
-    const lowerId = modelId.toLowerCase();
-    return lowerId.includes('-thinking') || lowerId.includes(':thinking') || lowerId.includes('thinking');
-  };
-
-  // Check if currently selected model is a thinking model
-  const selectedModelId = agentSettings.selectedModel;
-  const isThinkingModelSelected = isThinkingModel(selectedModelId);
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -511,7 +513,7 @@ export const ChatPanel: React.FC = () => {
     try {
       const parsed = JSON.parse(content);
       return (
-        <pre className="text-xs whitespace-pre-wrap bg-white border border-gray-200 rounded p-2 overflow-x-auto">
+        <pre className="text-[10px] whitespace-pre-wrap bg-white border border-gray-200 rounded p-1.5 overflow-x-auto leading-relaxed">
           {JSON.stringify(parsed, null, 2)}
         </pre>
       );
@@ -530,11 +532,11 @@ export const ChatPanel: React.FC = () => {
       const dataRows = lines.slice(2).map(l => l.split("|").map(s => s.trim()));
       return (
         <div className="overflow-x-auto">
-          <table className="text-xs w-full border border-gray-200">
+          <table className="text-[10px] w-full border border-gray-200">
             <thead className="bg-gray-50">
               <tr>
                 {header.map((h, i) => (
-                  <th key={i} className="text-left px-2 py-1 border-b border-gray-200">{h}</th>
+                  <th key={i} className="text-left px-1.5 py-0.5 border-b border-gray-200">{h}</th>
                 ))}
               </tr>
             </thead>
@@ -542,7 +544,7 @@ export const ChatPanel: React.FC = () => {
               {dataRows.map((r, ri) => (
                 <tr key={ri} className={ri % 2 ? 'bg-gray-50' : ''}>
                   {r.map((c, ci) => (
-                    <td key={ci} className="px-2 py-1 align-top border-b border-gray-100">{c || '-'}</td>
+                    <td key={ci} className="px-1.5 py-0.5 align-top border-b border-gray-100">{c || '-'}</td>
                   ))}
                 </tr>
               ))}
@@ -552,81 +554,106 @@ export const ChatPanel: React.FC = () => {
       );
     }
 
-    // Render markdown content
-    return (
-      <div className="prose prose-sm max-w-none">
-        <ReactMarkdown
-          components={{
-            // Style code blocks
-            code: ({ node, inline, className, children, ...props }: any) => {
-              return !inline ? (
-                <pre className="bg-gray-100 rounded p-2 overflow-x-auto text-xs my-2">
-                  <code className={className} {...props}>
-                    {children}
-                  </code>
-                </pre>
-              ) : (
-                <code className="bg-gray-100 px-1 py-0.5 rounded text-xs" {...props}>
-                  {children}
-                </code>
-              );
-            },
-            // Style paragraphs
-            p: ({ children }: any) => <p className="mb-2 last:mb-0 text-sm">{children}</p>,
-            // Style lists
-            ul: ({ children }: any) => <ul className="list-disc list-inside mb-2 space-y-1">{children}</ul>,
-            ol: ({ children }: any) => <ol className="list-decimal list-inside mb-2 space-y-1">{children}</ol>,
-            li: ({ children }: any) => <li className="ml-4">{children}</li>,
-            // Style headings
-            h1: ({ children }: any) => <h1 className="text-lg font-bold mb-2 mt-4 first:mt-0">{children}</h1>,
-            h2: ({ children }: any) => <h2 className="text-base font-bold mb-2 mt-3 first:mt-0">{children}</h2>,
-            h3: ({ children }: any) => <h3 className="text-sm font-bold mb-1 mt-2 first:mt-0">{children}</h3>,
-            // Style strong and emphasis
-            strong: ({ children }: any) => <strong className="font-semibold">{children}</strong>,
-            em: ({ children }: any) => <em className="italic">{children}</em>,
-            // Style blockquotes
-            blockquote: ({ children }: any) => (
-              <blockquote className="border-l-4 border-gray-300 pl-4 italic my-2">
-                {children}
-              </blockquote>
-            ),
-            // Style links
-            a: ({ children, href }: any) => (
-              <a href={href} className="text-blue-600 hover:text-blue-800 underline" target="_blank" rel="noopener noreferrer">
-                {children}
-              </a>
-            ),
-          }}
-        >
-          {content}
-        </ReactMarkdown>
-      </div>
+    // Handle multi-paragraph content with proper line breaks
+    // Split by double newlines for paragraphs, single newlines for line breaks
+    const paragraphs = content.split(/\n\n+/).filter(p => p.trim());
+    
+    if (paragraphs.length > 1) {
+      // Multi-paragraph content - render each paragraph separately
+      return (
+        <div className="text-sm space-y-1">
+          {paragraphs.map((para, idx) => (
+            <p key={idx} className="whitespace-pre-wrap leading-relaxed">{para.trim()}</p>
+          ))}
+        </div>
+      );
+    }
+    
+    // Single paragraph or no double newlines - preserve single newlines
+    return <p className="text-sm whitespace-pre-wrap leading-relaxed">{content}</p>;
+  };
+
+  // Helper function to validate uploaded file info (type guard)
+  const isValidUploadedFile = (
+    fileInfo: ExtendedMessage['uploadedFile']
+  ): fileInfo is NonNullable<ExtendedMessage['uploadedFile']> => {
+    return !!(
+      fileInfo &&
+      fileInfo.file_id &&
+      fileInfo.filename &&
+      fileInfo.file_url &&
+      typeof fileInfo.atoms === 'number' &&
+      Array.isArray(fileInfo.chains)
     );
   };
 
   const loadUploadedFileInViewer = async (fileInfo: { file_id: string; filename: string; file_url: string }) => {
-    if (!plugin) return;
+    // Wait for plugin to be ready (with timeout and retry)
+    const waitForPlugin = async (maxWait = 5000, retryInterval = 100): Promise<boolean> => {
+      const startTime = Date.now();
+      while (Date.now() - startTime < maxWait) {
+        if (plugin) {
+          // Check if plugin has the necessary builders (indicates it's initialized)
+          try {
+            if (plugin.builders && plugin.builders.data && plugin.builders.structure) {
+              return true;
+            }
+          } catch (e) {
+            // Plugin exists but might not be fully ready
+          }
+        }
+        await new Promise(resolve => setTimeout(resolve, retryInterval));
+      }
+      return false;
+    };
+
+    const isPluginReady = await waitForPlugin();
+    if (!isPluginReady) {
+      console.warn('[ChatPanel] Plugin not ready, using API endpoint directly');
+      // Use API endpoint instead of blob URL to avoid initialization issues
+      const apiUrl = `/api/upload/pdb/${fileInfo.file_id}`;
+      const code = `
+try {
+  await builder.clearStructure();
+  await builder.loadStructure('${apiUrl}');
+  await builder.addCartoonRepresentation({ color: 'secondary-structure' });
+  builder.focusView();
+  console.log('Uploaded file loaded successfully');
+} catch (e) { 
+  console.error('Failed to load uploaded file:', e); 
+}`;
+      
+      // Queue code to run when plugin is ready
+      setPendingCodeToRun(code);
+      setCurrentCode(code);
+      setViewerVisibleAndSave(true);
+      setActivePane('viewer');
+      
+      // Save code to active session
+      if (activeSessionId) {
+        saveVisualizationCode(activeSessionId, code);
+      }
+      
+      return;
+    }
+    
+    if (!plugin) {
+      console.warn('[ChatPanel] Plugin not available, cannot execute code');
+      return;
+    }
     
     try {
       setIsExecuting(true);
       const executor = new CodeExecutor(plugin);
       
-      // Fetch file content and create blob URL (like AlphaFold does)
-      const fileResponse = await fetch(fileInfo.file_url);
-      if (!fileResponse.ok) {
-        throw new Error('Failed to fetch uploaded file');
-      }
-      const fileContent = await fileResponse.text();
+      // Use API endpoint directly instead of blob URL to avoid blob URL expiration issues
+      const apiUrl = `/api/upload/pdb/${fileInfo.file_id}`;
       
-      // Create blob URL
-      const pdbBlob = new Blob([fileContent], { type: 'text/plain' });
-      const blobUrl = URL.createObjectURL(pdbBlob);
-      
-      // Load structure in viewer using blob URL
+      // Load structure in viewer using API endpoint
       const code = `
 try {
   await builder.clearStructure();
-  await builder.loadStructure('${blobUrl}');
+  await builder.loadStructure('${apiUrl}');
   await builder.addCartoonRepresentation({ color: 'secondary-structure' });
   builder.focusView();
   console.log('Uploaded file loaded successfully');
@@ -656,30 +683,13 @@ try {
       await executor.executeCode(code);
       setViewerVisibleAndSave(true);
       setActivePane('viewer');
-      
-      // Keep blob URL alive for a bit longer to ensure structure loads
-      setTimeout(() => {
-        URL.revokeObjectURL(blobUrl);
-      }, 5000);
     } catch (err) {
       console.error('Failed to load uploaded file in viewer:', err);
+      // Show user-friendly error
+      alert(`Failed to load ${fileInfo.filename} in 3D viewer. Please try again.`);
     } finally {
       setIsExecuting(false);
     }
-  };
-
-  // Helper function to validate uploaded file info (type guard)
-  const isValidUploadedFile = (
-    fileInfo: ExtendedMessage['uploadedFile']
-  ): fileInfo is NonNullable<ExtendedMessage['uploadedFile']> => {
-    return !!(
-      fileInfo &&
-      fileInfo.file_id &&
-      fileInfo.filename &&
-      fileInfo.file_url &&
-      typeof fileInfo.atoms === 'number' &&
-      Array.isArray(fileInfo.chains)
-    );
   };
 
   const renderFileAttachment = (fileInfo: ExtendedMessage['uploadedFile'], isUserMessage: boolean = false) => {
@@ -729,13 +739,47 @@ try {
     );
   };
 
+  const renderPipelineAttachment = (pipeline: ExtendedMessage['pipeline'], isUserMessage: boolean = false) => {
+    if (!pipeline) return null;
+
+    // Use different styling for user vs AI messages
+    const bgClass = isUserMessage 
+      ? 'bg-white bg-opacity-20 border-white border-opacity-30' 
+      : 'bg-gradient-to-r from-purple-50 to-indigo-50 border border-purple-200';
+    const textClass = isUserMessage ? 'text-white' : 'text-gray-900';
+    const textSecondaryClass = isUserMessage ? 'text-white text-opacity-80' : 'text-gray-600';
+
+    const statusColors: Record<string, string> = {
+      draft: 'bg-gray-100 text-gray-700',
+      running: 'bg-blue-100 text-blue-700',
+      completed: 'bg-green-100 text-green-700',
+      failed: 'bg-red-100 text-red-700',
+    };
+
+    return (
+      <div className={`mt-3 p-4 ${bgClass} rounded-lg`}>
+        <div className="flex items-center space-x-2 mb-3">
+          <div className={`w-8 h-8 ${isUserMessage ? 'bg-white bg-opacity-30' : 'bg-purple-600'} rounded-full flex items-center justify-center`}>
+            <span className={`${isUserMessage ? 'text-white' : 'text-white'} text-sm font-bold`}>⚙️</span>
+          </div>
+          <div className="flex-1">
+            <h4 className={`font-medium ${textClass}`}>Pipeline: {pipeline.name}</h4>
+            <div className="flex items-center gap-2 mt-1">
+              <span className={`text-xs px-2 py-0.5 rounded-full ${statusColors[pipeline.status] || statusColors.draft}`}>
+                {pipeline.status}
+              </span>
+            </div>
+          </div>
+        </div>
+        <p className={`text-xs ${textSecondaryClass} mt-2`}>
+          Ask questions about this pipeline's nodes, execution history, or output files.
+        </p>
+      </div>
+    );
+  };
+
   const renderAlphaFoldResult = (result: ExtendedMessage['alphafoldResult']) => {
     if (!result) return null;
-
-    const isRFdiffusion = result.jobType === 'rfdiffusion';
-    const title = isRFdiffusion ? 'RFdiffusion Protein Design' : 'AlphaFold2 Structure Prediction';
-    const iconText = isRFdiffusion ? 'RF' : 'AF';
-    const defaultFilename = isRFdiffusion ? 'rfdiffusion_result.pdb' : 'alphafold_result.pdb';
 
     const downloadPDB = () => {
       if (result.pdbContent) {
@@ -743,7 +787,7 @@ try {
         const url = URL.createObjectURL(blob);
         const a = document.createElement('a');
         a.href = url;
-        a.download = result.filename || defaultFilename;
+        a.download = result.filename || 'alphafold_result.pdb';
         document.body.appendChild(a);
         a.click();
         document.body.removeChild(a);
@@ -758,51 +802,28 @@ try {
         setIsExecuting(true);
         const executor = new CodeExecutor(plugin);
         
-        // Create temporary PDB blob URL
+        // Create temporary PDB data URL
         const pdbBlob = new Blob([result.pdbContent], { type: 'text/plain' });
-        const blobUrl = URL.createObjectURL(pdbBlob);
+        const pdbUrl = URL.createObjectURL(pdbBlob);
         
-        // Load structure in viewer using blob URL
+        // Load structure in viewer
         const code = `
 try {
   await builder.clearStructure();
-  await builder.loadStructure('${blobUrl}');
-  await builder.addCartoonRepresentation({ color: 'secondary-structure' });
-  builder.focusView();
-  console.log('Structure loaded successfully');
+  // Note: This would need to be adapted to load from blob URL
+  // For now, we'll show the sequence info and guide user to download
+  console.log('AlphaFold result ready for visualization');
 } catch (e) { 
-  console.error('Failed to load structure:', e); 
+  console.error('Failed to load AlphaFold result:', e); 
 }`;
-        
-        // Save code to editor so user can see and modify it
-        setCurrentCode(code);
-        
-        // Set structure origin for LLM context
-        const isRFdiffusion = result.jobType === 'rfdiffusion';
-        setCurrentStructureOrigin({
-          type: isRFdiffusion ? 'rfdiffusion' : 'alphafold',
-          jobId: result.parameters?.jobId,
-          parameters: result.parameters,
-          metadata: result.metadata,
-          filename: result.filename
-        });
-        
-        // Save code to active session for persistence
-        if (activeSessionId) {
-          saveVisualizationCode(activeSessionId, code);
-          console.log('[ChatPanel] Saved visualization code to session:', activeSessionId);
-        }
         
         await executor.executeCode(code);
         setViewerVisibleAndSave(true);
         setActivePane('viewer');
         
-        // Keep blob URL alive for a bit longer to ensure structure loads
-        setTimeout(() => {
-          URL.revokeObjectURL(blobUrl);
-        }, 5000);
+        URL.revokeObjectURL(pdbUrl);
       } catch (err) {
-        console.error('Failed to load structure in viewer:', err);
+        console.error('Failed to load AlphaFold result in viewer:', err);
       } finally {
         setIsExecuting(false);
       }
@@ -812,10 +833,10 @@ try {
       <div className="mt-3 p-4 bg-gradient-to-r from-purple-50 to-blue-50 border border-purple-200 rounded-lg">
         <div className="flex items-center space-x-2 mb-3">
           <div className="w-8 h-8 bg-purple-600 rounded-full flex items-center justify-center">
-            <span className="text-white text-sm font-bold">{iconText}</span>
+            <span className="text-white text-sm font-bold">AF</span>
           </div>
           <div>
-            <h4 className="font-medium text-gray-900">{title}</h4>
+            <h4 className="font-medium text-gray-900">AlphaFold2 Structure Prediction</h4>
             <p className="text-xs text-gray-600">
               {result.sequence ? `${result.sequence.length} residues` : 'Structure predicted'}
             </p>
@@ -844,6 +865,68 @@ try {
             <span>Download PDB</span>
           </button>
           
+          <button
+            onClick={loadInViewer}
+            disabled={!plugin}
+            className="flex items-center space-x-1 px-3 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed text-sm"
+          >
+            <Play className="w-4 h-4" />
+            <span>View 3D</span>
+          </button>
+        </div>
+      </div>
+    );
+  };
+
+  const renderOpenFold2Result = (result: ExtendedMessage['openfold2Result']) => {
+    if (!result?.pdbContent) return null;
+    const downloadPDB = () => {
+      const blob = new Blob([result.pdbContent!], { type: 'text/plain' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = result.filename || 'openfold2_result.pdb';
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    };
+    const loadInViewer = async () => {
+      if (!result.pdbContent || !plugin) return;
+      try {
+        setIsExecuting(true);
+        const executor = new CodeExecutor(plugin);
+        const pdbBlob = new Blob([result.pdbContent], { type: 'text/plain' });
+        const blobUrl = URL.createObjectURL(pdbBlob);
+        await executor.executeCode(`await builder.clearStructure(); await builder.loadStructure('${blobUrl}');`);
+        URL.revokeObjectURL(blobUrl);
+        setViewerVisibleAndSave(true);
+        setActivePane('viewer');
+      } catch (err) {
+        console.error('Failed to load OpenFold2 result in viewer:', err);
+      } finally {
+        setIsExecuting(false);
+      }
+    };
+    return (
+      <div className="mt-3 p-4 bg-gradient-to-r from-amber-50 to-orange-50 border border-amber-200 rounded-lg">
+        <div className="flex items-center space-x-2 mb-3">
+          <div className="w-8 h-8 bg-amber-600 rounded-full flex items-center justify-center">
+            <span className="text-white text-sm font-bold">OF2</span>
+          </div>
+          <div>
+            <h4 className="font-medium text-gray-900">OpenFold2 Structure Prediction</h4>
+            <p className="text-xs text-gray-600">Structure predicted successfully</p>
+          </div>
+        </div>
+        <div className="flex space-x-2">
+          <button
+            onClick={downloadPDB}
+            className="flex items-center space-x-1 px-3 py-2 bg-amber-600 text-white rounded-md hover:bg-amber-700 text-sm"
+          >
+            <Download className="w-4 h-4" />
+            <span>Download PDB</span>
+          </button>
           <button
             onClick={loadInViewer}
             disabled={!plugin}
@@ -904,8 +987,7 @@ try {
       const response = await api.post('/alphafold/fold', {
         sequence,
         parameters,
-        jobId,
-        sessionId: activeSessionId || undefined, // Associate with current session
+        jobId
       });
       
       console.log('📨 [AlphaFold] API response received:', response.status, response.data);
@@ -930,22 +1012,20 @@ try {
                   filename: result.filename || `folded_${Date.now()}.pdb`,
                   sequence,
                   parameters,
-                  metadata: result.metadata,
-                  jobType: 'alphafold'
+                  metadata: result.metadata
                 }
               };
-        addMessage(aiMessage);
-        alphafoldProgress.completeProgress();
-        
-        // Notify FileBrowser to refresh
-        window.dispatchEvent(new CustomEvent('session-file-added'));
-        
-        return true;
-            } else if (st === 'error') {
+              addMessage(aiMessage);
+              alphafoldProgress.completeProgress();
+              return true;
+            } else if (st === 'error' || st === 'not_found') {
+              const errorMsg = st === 'not_found'
+                ? 'Job not found. The server may have been restarted. Please try submitting again.'
+                : statusResp.data?.error || 'Folding computation failed';
               const apiError = AlphaFoldErrorHandler.createError(
                 'FOLDING_FAILED',
                 { jobId, sequenceLength: sequence.length, parameters },
-                statusResp.data?.error || 'Folding computation failed',
+                errorMsg,
                 undefined,
                 jobId
               );
@@ -968,7 +1048,32 @@ try {
               alphafoldProgress.updateProgress(`Processing... (${Math.round(elapsed)}s)`, pct);
               return false;
             }
-          } catch (e) {
+          } catch (e: unknown) {
+            const status = (e as { response?: { status?: number } })?.response?.status;
+            const terminalStatuses = [400, 401, 403, 404, 410];
+            if (typeof status === 'number' && terminalStatuses.includes(status)) {
+              const errorMsg = status === 404
+                ? 'Job not found. The folding job may have expired or the server was restarted.'
+                : `Request failed (HTTP ${status}). Please try submitting again.`;
+              const apiError = AlphaFoldErrorHandler.createError(
+                'FOLDING_FAILED',
+                { jobId, sequenceLength: sequence.length, parameters },
+                errorMsg,
+                undefined,
+                jobId
+              );
+              logAlphaFoldError(apiError, { httpStatus: status, sequence: sequence.slice(0, 100), parameters });
+              const errorMessage: ExtendedMessage = {
+                id: (Date.now() + 1).toString(),
+                content: apiError.userMessage,
+                type: 'ai',
+                timestamp: new Date(),
+                error: apiError
+              };
+              addMessage(errorMessage);
+              alphafoldProgress.errorProgress(apiError.userMessage);
+              return true;
+            }
             console.warn('⚠️ [AlphaFold] Polling failed, will retry...', e);
             return false;
           }
@@ -1021,8 +1126,7 @@ try {
             filename: result.filename || `folded_${Date.now()}.pdb`,
             sequence,
             parameters,
-            metadata: result.metadata,
-            jobType: 'alphafold'
+            metadata: result.metadata
           }
         };
         
@@ -1080,6 +1184,72 @@ try {
       
       addMessage(errorMessage);
       alphafoldProgress.errorProgress(structuredError.userMessage);
+    }
+  };
+
+  const handleOpenFold2Confirm = async (sequence: string, parameters: { alignmentsRaw?: string; templatesRaw?: string; relax_prediction: boolean }) => {
+    setShowOpenFold2Dialog(false);
+    const jobId = `of2_${Date.now()}`;
+    const validationError = OpenFold2ErrorHandler.handleSequenceValidation(sequence, jobId);
+    if (validationError) {
+      addMessage({
+        id: (Date.now() + 1).toString(),
+        content: validationError.userMessage,
+        type: 'ai',
+        timestamp: new Date(),
+        error: validationError,
+      });
+      return;
+    }
+    addMessage({
+      id: (Date.now()).toString(),
+      content: 'OpenFold2 structure prediction in progress...',
+      type: 'ai',
+      timestamp: new Date(),
+    });
+    try {
+      const response = await api.post('/openfold2/predict', {
+        sequence,
+        alignmentsRaw: parameters.alignmentsRaw,
+        templatesRaw: parameters.templatesRaw,
+        relax_prediction: parameters.relax_prediction ?? false,
+        jobId,
+        sessionId: activeSessionId ?? undefined,
+      });
+      const data = response.data;
+      if (data.status === 'completed' && data.pdbContent) {
+        const aiMessage: ExtendedMessage = {
+          id: (Date.now() + 1).toString(),
+          content: 'OpenFold2 structure prediction completed successfully! The structure is ready for visualization.',
+          type: 'ai',
+          timestamp: new Date(),
+          openfold2Result: {
+            pdbContent: data.pdbContent,
+            filename: data.filename || `openfold2_${jobId}.pdb`,
+            job_id: data.job_id,
+            message: data.message,
+          },
+        };
+        addMessage(aiMessage);
+      } else {
+        const err = OpenFold2ErrorHandler.createError(data.code || 'API_ERROR', { jobId }, data.error);
+        addMessage({
+          id: (Date.now() + 1).toString(),
+          content: err.userMessage,
+          type: 'ai',
+          timestamp: new Date(),
+          error: err,
+        });
+      }
+    } catch (error: any) {
+      const err = OpenFold2ErrorHandler.createError('API_ERROR', { jobId }, error?.response?.data?.error || error?.message);
+      addMessage({
+        id: (Date.now() + 1).toString(),
+        content: err.userMessage,
+        type: 'ai',
+        timestamp: new Date(),
+        error: err,
+      });
     }
   };
 
@@ -1281,222 +1451,101 @@ try {
     setShowRFdiffusionDialog(false);
     
     const jobId = `rf_${Date.now()}`;
-    console.log('🚀 [RFdiffusion] User confirmed design request');
-    console.log('⚙️ [RFdiffusion] Parameters:', parameters);
-    console.log('🆔 [RFdiffusion] Generated job ID:', jobId);
     
-    rfdiffusionProgress.startProgress(jobId, 'Submitting RFdiffusion design request...');
-    console.log('📡 [RFdiffusion] Starting progress tracking for job:', jobId);
+    // Create pending message immediately with jobId and jobType
+    const pendingMessageId = uuidv4();
+    const pendingMessage: ExtendedMessage = {
+      id: pendingMessageId,
+      content: 'RFdiffusion protein design in progress...',
+      type: 'ai',
+      timestamp: new Date(),
+      jobId,
+      jobType: 'rfdiffusion'
+    };
+    addMessage(pendingMessage);
     
+    // Make API call in background (it will wait for completion)
     try {
-      console.log('🌐 [RFdiffusion] Making API call to /api/rfdiffusion/design');
       const response = await api.post('/rfdiffusion/design', {
         parameters,
-        jobId,
-        sessionId: activeSessionId || undefined, // Associate with current session
+        jobId
       });
-      
-      console.log('📨 [RFdiffusion] API response received:', response.status, response.data);
 
-      // Async flow: 202 Accepted → poll status endpoint until completion
-      if (response.status === 202 || response.data.status === 'accepted' || response.data.status === 'queued' || response.data.status === 'running') {
-        console.log('🕒 [RFdiffusion] Job accepted, starting polling for status...', { jobId });
-        const start = Date.now();
-        const poll = async () => {
-          try {
-            const statusResp = await api.get(`/rfdiffusion/status/${jobId}`);
-            const st = statusResp.data?.status;
-            if (st === 'completed') {
-              const result = statusResp.data?.data || {};
-              
-              // Auto-download PDB file
-              if (result.pdbContent) {
-                const blob = new Blob([result.pdbContent], { type: 'text/plain' });
-                const url = URL.createObjectURL(blob);
-                const a = document.createElement('a');
-                a.href = url;
-                a.download = result.filename || `rfdiffusion_${Date.now()}.pdb`;
-                document.body.appendChild(a);
-                a.click();
-                document.body.removeChild(a);
-                URL.revokeObjectURL(url);
-              }
-              
-              const aiMessage: ExtendedMessage = {
-                id: (Date.now() + 1).toString(),
-                content: `RFdiffusion protein design completed successfully! The designed structure is ready for download and visualization.`,
-                type: 'ai',
-                timestamp: new Date(),
-                alphafoldResult: {
-                  pdbContent: result.pdbContent,
-                  filename: result.filename || `designed_${Date.now()}.pdb`,
-                  parameters,
-                  metadata: result.metadata,
-                  jobType: 'rfdiffusion'
-                }
-              };
-              addMessage(aiMessage);
-              rfdiffusionProgress.completeProgress();
-              
-              // Notify FileBrowser to refresh
-              window.dispatchEvent(new CustomEvent('session-file-added'));
-              
-              return true;
-            } else if (st === 'error') {
-              const apiError = RFdiffusionErrorHandler.handleError(statusResp.data, {
-                jobId,
-                parameters,
-                feature: 'RFdiffusion'
-              });
-              const errorMessage: ExtendedMessage = {
-                id: (Date.now() + 1).toString(),
-                content: apiError.userMessage,
-                type: 'ai',
-                timestamp: new Date(),
-                error: apiError
-              };
-              addMessage(errorMessage);
-              rfdiffusionProgress.errorProgress(apiError.userMessage);
-              return true;
-            } else {
-              // Update progress heuristically up to 90%
-              const elapsed = (Date.now() - start) / 1000;
-              const estDuration = 480; // 8 minutes heuristic for RFdiffusion
-              const pct = Math.min(90, Math.round((elapsed / estDuration) * 90));
-              rfdiffusionProgress.updateProgress(`Processing... (${Math.round(elapsed)}s)`, pct);
-              return false;
-            }
-          } catch (e) {
-            console.warn('⚠️ [RFdiffusion] Polling failed, will retry...', e);
-            return false;
-          }
-        };
-
-        // Poll every 3s until done or timeout (~20 minutes for RFdiffusion)
-        const timeoutSec = 20 * 60;
-        let finished = false;
-        while (!finished && (Date.now() - start) / 1000 < timeoutSec) {
-          // eslint-disable-next-line no-await-in-loop
-          finished = await poll();
-          if (finished) break;
-          // eslint-disable-next-line no-await-in-loop
-          await new Promise(res => setTimeout(res, 3000));
-        }
-
-        if (!finished) {
-          const apiError = RFdiffusionErrorHandler.handleError(
-            { userMessage: 'RFdiffusion design timed out', technicalMessage: 'Job exceeded maximum wait time' },
-            { jobId, parameters, feature: 'RFdiffusion' }
-          );
-          const errorMessage: ExtendedMessage = {
-            id: (Date.now() + 1).toString(),
-            content: apiError.userMessage,
-            type: 'ai',
-            timestamp: new Date(),
-            error: apiError
-          };
-          addMessage(errorMessage);
-          rfdiffusionProgress.errorProgress(apiError.userMessage);
-        }
-        return; // Exit after async flow
-      }
-
-      // Synchronous success flow
       if (response.data.status === 'success') {
         const result = response.data.data;
         
-        // Auto-download PDB file
-        if (result.pdbContent) {
-          const blob = new Blob([result.pdbContent], { type: 'text/plain' });
-          const url = URL.createObjectURL(blob);
-          const a = document.createElement('a');
-          a.href = url;
-          a.download = result.filename || `rfdiffusion_${Date.now()}.pdb`;
-          document.body.appendChild(a);
-          a.click();
-          document.body.removeChild(a);
-          URL.revokeObjectURL(url);
-        }
-        
-        // Add result message to chat
-        const aiMessage: ExtendedMessage = {
-          id: (Date.now() + 1).toString(),
-          content: `RFdiffusion protein design completed successfully! The designed structure is ready for download and visualization.`,
-          type: 'ai',
-          timestamp: new Date(),
-          alphafoldResult: {
-            pdbContent: result.pdbContent,
-            filename: result.filename || `designed_${Date.now()}.pdb`,
-            parameters,
-            metadata: result.metadata,
-            jobType: 'rfdiffusion'
+        // Update the pending message with the result
+        if (activeSession) {
+          const messages = activeSession.messages || [];
+          const messageIndex = messages.findIndex(m => m.id === pendingMessageId);
+          if (messageIndex !== -1) {
+            const updatedMessages = [...messages];
+            updatedMessages[messageIndex] = {
+              ...updatedMessages[messageIndex],
+              content: `RFdiffusion protein design completed successfully! The designed structure is ready for download and visualization.`,
+              alphafoldResult: {
+                pdbContent: result.pdbContent,
+                filename: result.filename || `designed_${Date.now()}.pdb`,
+                parameters,
+                metadata: result.metadata
+              },
+              jobId: undefined,
+              jobType: undefined
+            };
+            updateMessages(updatedMessages);
           }
-        };
-        
-        addMessage(aiMessage);
-        rfdiffusionProgress.completeProgress();
-        
-        // Notify FileBrowser to refresh
-        window.dispatchEvent(new CustomEvent('session-file-added'));
-      } else if (response.data.status === 'error') {
-        // Handle API error response - use the response.data directly
+        }
+      } else {
+        // Handle API error response
         const apiError = RFdiffusionErrorHandler.handleError(response.data, {
           jobId,
           parameters,
           feature: 'RFdiffusion'
         });
         
-        const errorMessage: ExtendedMessage = {
-          id: (Date.now() + 1).toString(),
-          content: apiError.userMessage,
-          type: 'ai',
-          timestamp: new Date(),
-          error: apiError
-        };
-        
-        addMessage(errorMessage);
-        rfdiffusionProgress.errorProgress(apiError.userMessage);
-      } else {
-        // Unexpected response format
-        const apiError = RFdiffusionErrorHandler.handleError(
-          { userMessage: 'Unexpected response from server', technicalMessage: JSON.stringify(response.data) },
-          { jobId, parameters, feature: 'RFdiffusion' }
-        );
-        
-        const errorMessage: ExtendedMessage = {
-          id: (Date.now() + 1).toString(),
-          content: apiError.userMessage,
-          type: 'ai',
-          timestamp: new Date(),
-          error: apiError
-        };
-        
-        addMessage(errorMessage);
-        rfdiffusionProgress.errorProgress(apiError.userMessage);
+        // Update the pending message with error
+        if (activeSession) {
+          const messages = activeSession.messages || [];
+          const messageIndex = messages.findIndex(m => m.id === pendingMessageId);
+          if (messageIndex !== -1) {
+            const updatedMessages = [...messages];
+            updatedMessages[messageIndex] = {
+              ...updatedMessages[messageIndex],
+              content: apiError.userMessage,
+              error: apiError,
+              jobId: undefined,
+              jobType: undefined
+            };
+            updateMessages(updatedMessages);
+          }
+        }
       }
     } catch (error: any) {
       console.error('RFdiffusion request failed:', error);
       
-      // Extract error data from axios response if available
-      const errorData = error?.response?.data || error?.data || error;
-      
       // Handle different types of errors
-      const structuredError = RFdiffusionErrorHandler.handleError(errorData, {
+      const structuredError = RFdiffusionErrorHandler.handleError(error, {
         jobId,
         parameters,
         feature: 'RFdiffusion'
       });
       
-      const errorMessage: ExtendedMessage = {
-        id: (Date.now() + 1).toString(),
-        content: structuredError.userMessage,
-        type: 'ai',
-        timestamp: new Date(),
-        error: structuredError
-      };
-      
-      addMessage(errorMessage);
-      rfdiffusionProgress.errorProgress(structuredError.userMessage);
+      // Update the pending message with error
+      if (activeSession) {
+        const messages = activeSession.messages || [];
+        const messageIndex = messages.findIndex(m => m.id === pendingMessageId);
+        if (messageIndex !== -1) {
+          const updatedMessages = [...messages];
+          updatedMessages[messageIndex] = {
+            ...updatedMessages[messageIndex],
+            content: structuredError.userMessage,
+            error: structuredError,
+            jobId: undefined,
+            jobType: undefined
+          };
+          updateMessages(updatedMessages);
+        }
+      }
     }
   };
 
@@ -1546,6 +1595,11 @@ try {
         setShowProteinMPNNDialog(true);
         return true;
       }
+
+      if (data.action === 'open_openfold2_dialog') {
+        setShowOpenFold2Dialog(true);
+        return true;
+      }
     } catch (e) {
       console.log('[AlphaFold] Response parsing failed:', e);
       console.log('[AlphaFold] Raw response was:', responseData);
@@ -1554,82 +1608,81 @@ try {
     return false; // Not handled
   };
 
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!input.trim() || isLoading) return;
+  // Upload file immediately when selected
+  const uploadFile = async (file: File) => {
+    // Find the file in state by reference
+    setFileUploads(prev => prev.map(item => 
+      item.file === file ? { ...item, status: 'uploading' } : item
+    ));
 
-    // Upload pending file if one exists
-    let fileUploadResult: { file_id: string } | null = null;
-    let uploadedFileInfo: {
-      file_id: string;
-      filename: string;
-      file_url: string;
-      atoms: number;
-      chains: string[];
-    } | null = null;
-    if (pendingFile) {
-      try {
-        setIsLoading(true);
-        const formData = new FormData();
-        formData.append('file', pendingFile);
-        if (activeSessionId) {
-          formData.append('session_id', activeSessionId);
-        }
+    try {
+      setUploadError(null);
+      const formData = new FormData();
+      formData.append('file', file);
+      if (activeSessionId) {
+        formData.append('session_id', activeSessionId);
+      }
 
-        const response = await fetch('/api/upload/pdb', {
-          method: 'POST',
-          body: formData,
-        });
+      const headers = getAuthHeaders();
+      const response = await fetch('/api/upload/pdb', {
+        method: 'POST',
+        headers,
+        body: formData,
+      });
 
-        if (!response.ok) {
-          const errorData = await response.json();
-          throw new Error(errorData.detail || 'Upload failed');
-        }
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.detail || 'Upload failed');
+      }
 
-        const result = await response.json();
-        fileUploadResult = { file_id: result.file_info.file_id };
-        uploadedFileInfo = {
-          file_id: result.file_info.file_id,
-          filename: result.file_info.filename,
-          file_url: result.file_info.file_url,
-          atoms: result.file_info.atoms,
-          chains: result.file_info.chains,
-        };
-        setUploadedFile({
-          ...uploadedFileInfo,
-          size: result.file_info.size || 0,
-        });
-        
-        // Clear pending file after successful upload
-        setPendingFile(null);
-        
-        // Clear previous PDB context when new file is uploaded
-        setCurrentCode('');
-        setCurrentStructureOrigin(null);
-        
-        // Clear and load new uploaded file in viewer
-        if (plugin) {
-          try {
-            setIsExecuting(true);
-            const executor = new CodeExecutor(plugin);
-            // Clear previous structure
-            await executor.executeCode('try { await builder.clearStructure(); } catch(e) { console.warn("Clear failed:", e); }');
-            console.log('[ChatPanel] Cleared previous structure for new file upload');
-            
-            // Fetch file content and create blob URL (like AlphaFold does)
-            const fileUrl = result.file_info.file_url || `/api/upload/pdb/${result.file_info.file_id}`;
-            const fileResponse = await fetch(fileUrl);
-            if (!fileResponse.ok) {
-              throw new Error('Failed to fetch uploaded file');
-            }
-            const fileContent = await fileResponse.text();
-            
-            // Create blob URL
-            const pdbBlob = new Blob([fileContent], { type: 'text/plain' });
-            const blobUrl = URL.createObjectURL(pdbBlob);
-            
-            // Load structure in viewer using blob URL
-            const loadCode = `
+      const result = await response.json();
+      const fileInfo = {
+        file_id: result.file_info.file_id,
+        filename: result.file_info.filename,
+        file_url: result.file_info.file_url,
+        atoms: result.file_info.atoms,
+        chains: result.file_info.chains,
+        size: result.file_info.size || 0,
+      };
+
+      // Mark file as uploaded
+      let isFirstFile = false;
+      setFileUploads(prev => {
+        const updated = prev.map(item => 
+          item.file === file 
+            ? { ...item, status: 'uploaded' as const, fileInfo } 
+            : item
+        );
+        // Check if this is the first uploaded file
+        isFirstFile = updated.findIndex(item => item.status === 'uploaded') === 0;
+        return updated;
+      });
+
+      // Dispatch event to notify file browser to refresh
+      window.dispatchEvent(new CustomEvent('session-file-added'));
+
+      // Clear previous PDB context when new file is uploaded
+      setCurrentCode('');
+      setCurrentStructureOrigin(null);
+
+      // Auto-load first uploaded file in viewer
+      if (isFirstFile && plugin) {
+        try {
+          setIsExecuting(true);
+          const executor = new CodeExecutor(plugin);
+          await executor.executeCode('try { await builder.clearStructure(); } catch(e) { console.warn("Clear failed:", e); }');
+          
+          const fileUrl = result.file_info.file_url || `/api/upload/pdb/${result.file_info.file_id}`;
+          const fileResponse = await fetch(fileUrl, { headers: getAuthHeaders() });
+          if (!fileResponse.ok) {
+            throw new Error('Failed to fetch uploaded file');
+          }
+          const fileContent = await fileResponse.text();
+          
+          const pdbBlob = new Blob([fileContent], { type: 'text/plain' });
+          const blobUrl = URL.createObjectURL(pdbBlob);
+          
+          const loadCode = `
 try {
   await builder.loadStructure('${blobUrl}');
   await builder.addCartoonRepresentation({ color: 'secondary-structure' });
@@ -1638,352 +1691,145 @@ try {
 } catch (e) { 
   console.error('Failed to load uploaded file:', e); 
 }`;
-            
-            setCurrentCode(loadCode);
-            setCurrentStructureOrigin({
-              type: 'upload',
-              filename: result.file_info.filename,
-              metadata: {
-                file_id: result.file_info.file_id,
-                file_url: fileUrl,
-              },
-            });
-            
-            // Save code to active session
-            if (activeSessionId) {
-              saveVisualizationCode(activeSessionId, loadCode);
-            }
-            
-            await executor.executeCode(loadCode);
-            setViewerVisibleAndSave(true);
-            setActivePane('viewer');
-            console.log('[ChatPanel] Auto-loaded uploaded file in viewer');
-            
-            // Keep blob URL alive for a bit longer to ensure structure loads
-            setTimeout(() => {
-              URL.revokeObjectURL(blobUrl);
-            }, 5000);
-          } catch (e) {
-            console.warn('[ChatPanel] Failed to load uploaded file in viewer:', e);
-          } finally {
-            setIsExecuting(false);
+          
+          setCurrentCode(loadCode);
+          setCurrentStructureOrigin({
+            type: 'upload',
+            filename: result.file_info.filename,
+            metadata: {
+              file_id: result.file_info.file_id,
+              file_url: blobUrl,
+            },
+          });
+          
+          if (activeSessionId) {
+            saveVisualizationCode(activeSessionId, loadCode);
           }
+          
+          await executor.executeCode(loadCode);
+          setViewerVisibleAndSave(true);
+          setActivePane('viewer');
+          
+          setTimeout(() => {
+            URL.revokeObjectURL(blobUrl);
+          }, 5000);
+        } catch (viewerError) {
+          console.error('Failed to auto-load uploaded file in viewer:', viewerError);
+        } finally {
+          setIsExecuting(false);
         }
-      } catch (error: any) {
-        console.error('File upload failed:', error);
-        // Show error but continue with message
-        const errorMsg: Message = {
-          id: uuidv4(),
-          content: `Failed to upload file: ${error.message}`,
-          type: 'ai',
-          timestamp: new Date()
-        };
-        addMessage(errorMsg);
-        setPendingFile(null); // Clear pending file even on error
-        setIsLoading(false);
-        return;
       }
+    } catch (error: any) {
+      console.error('File upload failed:', error);
+      setUploadError(error.message);
+      // Mark file as error
+      setFileUploads(prev => prev.map(item => 
+        item.file === file 
+          ? { ...item, status: 'error', error: error.message } 
+          : item
+      ));
     }
+  };
 
+  // Handle file selection - add to list and start upload immediately
+  const handleFileSelected = (file: File) => {
+    const newFileState: FileUploadState = {
+      file,
+      status: 'uploading',
+    };
+    setFileUploads(prev => [...prev, newFileState]);
+    // Start upload immediately (file reference will be used to find it in state)
+    uploadFile(file);
+  };
+
+  // Handle multiple files selected
+  const handleFilesSelected = (files: File[]) => {
+    const newFileStates: FileUploadState[] = files.map(file => ({
+      file,
+      status: 'uploading',
+    }));
+    setFileUploads(prev => [...prev, ...newFileStates]);
+    // Start uploads immediately for all files
+    files.forEach(file => {
+      uploadFile(file);
+    });
+  };
+
+  // Handle pipeline selection
+  const handlePipelineSelect = () => {
+    setShowPipelineModal(true);
+  };
+
+  // Handle server files selection
+  const handleServerFilesSelect = () => {
+    setShowServerFilesDialog(true);
+  };
+
+  const handlePipelineSelected = (pipelineId: string) => {
+    const { savedPipelines } = usePipelineStore.getState();
+    const pipeline = savedPipelines.find(p => p.id === pipelineId);
+    if (pipeline) {
+      setSelectedPipeline({
+        id: pipeline.id,
+        name: pipeline.name,
+      });
+    }
+    setShowPipelineModal(false);
+  };
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!input.trim() || isLoading) return;
+
+    // Get uploaded file info (use first uploaded file)
+    const uploadedFileInfo = fileUploads.find(f => f.status === 'uploaded' && f.fileInfo)?.fileInfo || null;
+
+    // Create user message immediately and add to chat
     const userMessage: Message = {
       id: uuidv4(),
       content: input.trim(),
       type: 'user',
       timestamp: new Date(),
-      // Attach file info if file was uploaded
       uploadedFile: uploadedFileInfo || undefined,
+      pipeline: selectedPipeline ? {
+        id: selectedPipeline.id,
+        name: selectedPipeline.name,
+        workflowDefinition: null, // Will be fetched by backend if needed
+        status: 'draft' as const,
+      } : undefined,
     };
 
+    // Add user message to chat immediately (before any async operations)
     addMessage(userMessage);
+    const messageInput = input.trim();
     setInput('');
     setIsLoading(true);
 
-    // Create placeholder AI message immediately for real-time thinking display
-    let placeholderMessageId: string | null = null;
-    if (isThinkingModelSelected) {
-      const placeholderMsg: ExtendedMessage = {
-        id: uuidv4(),
-        content: '',
-        type: 'ai',
-        timestamp: new Date(),
-        thinkingProcess: {
-          steps: [],
-          isComplete: false,
-          totalSteps: 0
-        }
-      };
-      placeholderMessageId = placeholderMsg.id;
-      addMessage(placeholderMsg);
-    }
-
+    // Clear uploaded files and pipeline from state after message is sent
+    setFileUploads([]);
+    const pipelineIdToSend = selectedPipeline?.id;
+    setSelectedPipeline(null);
+    
     try {
-      const text = userMessage.content;
+      const text = messageInput;
       let code = '';
+      let aiText = ''; // AI text response for better user experience
       let thinkingProcess: ExtendedMessage['thinkingProcess'] | undefined = undefined;
-      let messageAlreadyUpdated = false; // Track if message was updated during streaming
-      
-      const payload = {
-        input: text,
-        currentCode,
-        currentStructureOrigin: currentStructureOrigin || undefined, // Include structure origin context
-        history: messages.slice(-6).map(m => {
-          const base: any = { type: m.type, content: m.content };
-          
-          // Include RF diffusion/AlphaFold result metadata
-          if (m.alphafoldResult) {
-            base.alphafoldResult = {
-              jobType: m.alphafoldResult.jobType,
-              parameters: m.alphafoldResult.parameters,
-              filename: m.alphafoldResult.filename,
-              // Don't include pdbContent (too large), but include metadata
-              metadata: m.alphafoldResult.metadata
-            };
-          }
-          
-          // Include ProteinMPNN result metadata if present
-          if (m.proteinmpnnResult) {
-            base.proteinmpnnResult = {
-              jobId: m.proteinmpnnResult.jobId,
-              metadata: m.proteinmpnnResult.metadata
-            };
-          }
-          
-          return base;
-        }),
-        selection: selections.length > 0 ? selections[0] : null, // First selection for backward compatibility
-        selections: selections, // Full selections array for new multi-selection support
-        agentId: agentSettings.selectedAgentId || undefined, // Only send if manually selected
-        model: agentSettings.selectedModel || undefined, // Only send if manually selected
-        uploadedFileId: fileUploadResult?.file_id || undefined, // Only include file ID when file is uploaded with this message
-      };
-      console.log('[AI] route:request', payload);
-      console.log('[DEBUG] currentCode length:', currentCode?.length || 0);
-      console.log('[DEBUG] selections count:', selections.length);
-      console.log('[DEBUG] selections:', selections);
-      
-      // Use streaming for thinking models
-      console.log('[Stream] Check:', { 
-        isThinkingModelSelected, 
-        placeholderMessageId, 
-        selectedModelId,
-        willUseStreaming: isThinkingModelSelected && placeholderMessageId 
-      });
-      
-      if (isThinkingModelSelected && placeholderMessageId) {
-        try {
-          console.log('[Stream] Starting streaming request for thinking model');
-          let accumulatedContent = '';
-          let accumulatedThinkingSteps: Array<{
-            id: string;
-            title: string;
-            content: string;
-            status: 'pending' | 'processing' | 'completed';
-          }> = [];
-          let finalResult: any = null;
-          
-          // Helper function to get fresh session and update messages
-          const updateMessageWithFreshSession = (updater: (msg: ExtendedMessage) => ExtendedMessage) => {
-            const currentSession = getActiveSession();
-            if (!currentSession || currentSession.id !== activeSessionId) {
-              console.warn('[Stream] Session changed or not found during streaming', {
-                currentSessionId: currentSession?.id,
-                expectedSessionId: activeSessionId
-              });
-              return false;
-            }
-            
-            // Verify placeholder message exists
-            const placeholderExists = currentSession.messages.some((msg: Message) => msg.id === placeholderMessageId);
-            if (!placeholderExists) {
-              console.warn('[Stream] Placeholder message not found in session', { placeholderMessageId });
-              return false;
-            }
-            
-            const updatedMessages = currentSession.messages.map((msg: Message) => 
-              msg.id === placeholderMessageId
-                ? updater(msg as ExtendedMessage)
-                : msg
-            );
-            updateMessages(updatedMessages);
-            return true;
-          };
-          
-          for await (const chunk of streamAgentRoute(payload)) {
-            // Check if session still exists and matches
-            const currentSession = getActiveSession();
-            if (!currentSession || currentSession.id !== activeSessionId) {
-              console.warn('[Stream] Session changed during streaming, stopping');
-              break;
-            }
-            
-            if (chunk.type === 'thinking_step') {
-              const step = chunk.data;
-              // Update or add step
-              const existingIdx = accumulatedThinkingSteps.findIndex(s => s.id === step.id);
-              if (existingIdx >= 0) {
-                accumulatedThinkingSteps[existingIdx] = step;
-              } else {
-                accumulatedThinkingSteps.push(step);
-              }
-              
-              // Update message with current thinking steps using fresh session
-              const thinkingData: ExtendedMessage['thinkingProcess'] = {
-                steps: [...accumulatedThinkingSteps],
-                isComplete: false,
-                totalSteps: accumulatedThinkingSteps.length
-              };
-              
-              updateMessageWithFreshSession(msg => ({
-                ...msg,
-                thinkingProcess: thinkingData
-              }));
-            } else if (chunk.type === 'content') {
-              // Accumulate content
-              accumulatedContent += chunk.data.text || '';
-              
-              // Update message content incrementally using fresh session
-              updateMessageWithFreshSession(msg => ({
-                ...msg,
-                content: accumulatedContent
-              }));
-            } else if (chunk.type === 'complete') {
-              // Final result
-              finalResult = chunk.data;
-              console.log('[Stream] Complete:', finalResult);
-              
-              // Finalize message using fresh session
-              const thinkingData = convertThinkingData(finalResult.thinkingProcess, true);
-              updateMessageWithFreshSession(msg => ({
-                ...msg,
-                content: finalResult.text || accumulatedContent,
-                thinkingProcess: thinkingData || msg.thinkingProcess
-              }));
-              
-              // Handle special agents (AlphaFold, etc.)
-              const agentId = finalResult.agentId;
-              if (agentId === 'alphafold-agent' || agentId === 'proteinmpnn-agent' || agentId === 'rfdiffusion-agent') {
-                if (handleAlphaFoldResponse(finalResult.text)) {
-                  setIsLoading(false);
-                  return;
-                }
-              }
-
-              // Check if this is a pipeline blueprint response (streaming)
-              try {
-                const parsed = JSON.parse(finalResult.text || '');
-                if (parsed.type === 'blueprint' && parsed.blueprint) {
-                  console.log('🔧 [Pipeline] Blueprint detected in stream, setting ghost blueprint');
-                  const blueprint: PipelineBlueprint = {
-                    rationale: parsed.rationale || parsed.content || 'Pipeline blueprint generated',
-                    nodes: parsed.blueprint.nodes || [],
-                    edges: parsed.blueprint.edges || [],
-                    missing_resources: parsed.blueprint.missing_resources || [],
-                  };
-                  
-                  setGhostBlueprint(blueprint);
-                  setViewerVisible(true);
-                  setActivePane('pipeline');
-                  
-                  // Update message with blueprint info
-                  updateMessageWithFreshSession((msg: ExtendedMessage) => ({
-                    ...msg,
-                    content: blueprint.rationale + (blueprint.missing_resources.length > 0 
-                      ? `\n\n⚠️ Missing resources: ${blueprint.missing_resources.join(', ')}`
-                      : ''),
-                  }));
-                  
-                  setIsLoading(false);
-                  return;
-                }
-              } catch (e) {
-                // Not a JSON blueprint, continue
-              }
-              
-              // For text agents, we're done
-              if (finalResult.type === 'text') {
-                setIsLoading(false);
-                return;
-              }
-              
-              // For code agents, continue with code execution below
-              code = finalResult.code || '';
-              thinkingProcess = thinkingData;
-              break;
-            } else if (chunk.type === 'error') {
-              console.error('[Stream] Error:', chunk.data);
-              const errorMsg: ExtendedMessage = {
-                id: uuidv4(),
-                content: `Error: ${chunk.data.error || 'Streaming failed'}`,
-                type: 'ai',
-                timestamp: new Date()
-              };
-              addMessage(errorMsg);
-              setIsLoading(false);
-              return;
-            }
-          }
-          
-          // If we got a complete result, continue with normal flow
-          if (finalResult && finalResult.type === 'code') {
-            // Update placeholder message with final code result using fresh session
-            const currentSession = getActiveSession();
-            if (placeholderMessageId && currentSession && currentSession.id === activeSessionId) {
-              const finalThinkingProcess = convertThinkingData(finalResult.thinkingProcess, true);
-              // Handle empty code case - preserve message with thinking process
-              const defaultMessageContent = finalResult.code && finalResult.code.trim()
-                ? `Generated code for: "${text}". Executing...`
-                : `I couldn't generate valid code for: "${text}". ${finalThinkingProcess ? 'See my thinking process above for details.' : ''}`;
-              
-              // Try to generate PDB summary asynchronously
-              generatePDBSummary(text).then(summary => {
-                if (summary) {
-                  const currentSession = getActiveSession();
-                  if (currentSession && currentSession.id === activeSessionId && placeholderMessageId) {
-                    updateMessageWithFreshSession((msg: ExtendedMessage) => 
-                      msg.id === placeholderMessageId ? {
-                        ...msg,
-                        content: summary,
-                        thinkingProcess: finalThinkingProcess || msg.thinkingProcess
-                      } : msg
-                    );
-                  }
-                }
-              }).catch(err => {
-                console.warn('Failed to generate PDB summary:', err);
-              });
-              
-              // Set default message immediately
-              updateMessageWithFreshSession((msg: ExtendedMessage) => ({
-                ...msg,
-                content: defaultMessageContent,
-                thinkingProcess: finalThinkingProcess || msg.thinkingProcess
-              }));
-              messageAlreadyUpdated = true; // Mark that we've updated the message
-            }
-            // Continue to code execution below (code variable is already set)
-            // If code is empty, execution will be skipped but message is preserved
-          } else if (finalResult && finalResult.type === 'text') {
-            // Already handled above, return early
-            setIsLoading(false);
-            return;
-          } else {
-            // Stream completed but no final result - this shouldn't happen
-            console.warn('[Stream] Stream completed without final result');
-            setIsLoading(false);
-            return;
-          }
-        } catch (streamError: any) {
-          console.error('[Stream] Streaming failed, falling back to regular API:', streamError);
-          setIsLoading(false);
-          // Fall through to regular API call
-        } finally {
-          // Ensure loading is cleared even if we break out of the loop
-          // (though we should have already cleared it in all return paths)
-        }
-      }
-      
-      // Regular (non-streaming) API call
       try {
+        const payload = {
+          input: text,
+          currentCode,
+          history: messages.slice(-6).map(m => ({ type: m.type, content: m.content })),
+          selection: selections.length > 0 ? selections[0] : null, // First selection for backward compatibility
+          selections: selections, // Full selections array for new multi-selection support
+          agentId: agentSettings.selectedAgentId || undefined, // Only send if manually selected
+          model: agentSettings.selectedModel || undefined, // Only send if manually selected
+          pipeline_id: pipelineIdToSend || undefined, // Pass pipeline ID to backend
+        };
+        console.log('[AI] route:request', payload);
+        console.log('[DEBUG] currentCode length:', currentCode?.length || 0);
+        console.log('[DEBUG] selections count:', selections.length);
+        console.log('[DEBUG] selections:', selections);
         const response = await api.post('/agents/route', payload);
         console.log('[AI] route:response', response?.data);
         
@@ -2036,8 +1882,7 @@ try {
         }
         if (agentType === 'text') {
           const aiText = response.data?.text || 'Okay.';
-          // Mark as complete since we have the full response
-          thinkingProcess = convertThinkingData(response.data?.thinkingProcess, true);
+          thinkingProcess = convertThinkingData(response.data?.thinkingProcess);
           console.log('[AI] route:text', { text: aiText?.slice?.(0, 400), hasThinking: !!thinkingProcess });
           
           // Check if this is an AlphaFold response
@@ -2103,6 +1948,14 @@ try {
             return;
           }
 
+          if (agentId === 'openfold2-agent') {
+            if (handleAlphaFoldResponse(aiText)) {
+              return;
+            }
+            setShowOpenFold2Dialog(true);
+            return;
+          }
+
           // Check if this is an RFdiffusion response
           if (agentId === 'rfdiffusion-agent') {
             if (handleAlphaFoldResponse(aiText)) {
@@ -2135,85 +1988,98 @@ try {
             }
           }
 
-          // Check if this is a pipeline blueprint response
-          try {
-            const parsed = JSON.parse(aiText);
-            if (parsed.type === 'blueprint' && parsed.blueprint) {
-              console.log('🔧 [Pipeline] Blueprint detected, setting ghost blueprint');
-              const blueprint: PipelineBlueprint = {
-                rationale: parsed.rationale || parsed.content || 'Pipeline blueprint generated',
-                nodes: parsed.blueprint.nodes || [],
-                edges: parsed.blueprint.edges || [],
-                missing_resources: parsed.blueprint.missing_resources || [],
-              };
+          // Check if this is a pipeline-agent response with blueprint
+          if (agentId === 'pipeline-agent') {
+            console.log('🔧 [Pipeline] Agent detected, processing response');
+            console.log('📄 [Pipeline] Agent response text:', aiText.slice(0, 200) + '...');
+            console.log('📦 [Pipeline] Full response data:', response.data);
+            
+            // Try to parse blueprint from response
+            try {
+              let blueprintData: any = null;
               
-              setGhostBlueprint(blueprint);
-              setViewerVisible(true);
-              setActivePane('pipeline');
-              
-              // Create a message explaining the blueprint
-              const blueprintMsg: ExtendedMessage = {
-                id: uuidv4(),
-                content: blueprint.rationale + (blueprint.missing_resources.length > 0 
-                  ? `\n\n⚠️ Missing resources: ${blueprint.missing_resources.join(', ')}`
-                  : ''),
-                type: 'ai',
-                timestamp: new Date(),
-              };
-              
-              if (placeholderMessageId && activeSession) {
-                const updatedMessages = activeSession.messages.map(msg => 
-                  msg.id === placeholderMessageId
-                    ? blueprintMsg
-                    : msg
-                );
-                updateMessages(updatedMessages);
+              // First, check if blueprint is already in response.data (structured response)
+              if (response.data?.blueprint || (response.data?.type === 'blueprint' && response.data?.blueprint)) {
+                blueprintData = response.data;
+                console.log('✅ [Pipeline] Blueprint found in response.data');
               } else {
-                addMessage(blueprintMsg);
+                // Try to parse from text response
+                // First, try to parse the entire response as JSON
+                try {
+                  blueprintData = JSON.parse(aiText);
+                } catch {
+                  // If not valid JSON, try to extract JSON from markdown code blocks
+                  const jsonMatch = aiText.match(/```(?:json)?\s*(\{[\s\S]*?\})\s*```/);
+                  if (jsonMatch) {
+                    blueprintData = JSON.parse(jsonMatch[1]);
+                  } else {
+                    // Try to find JSON object in the text
+                    const jsonObjectMatch = aiText.match(/\{[\s\S]*"type"\s*:\s*"blueprint"[\s\S]*\}/);
+                    if (jsonObjectMatch) {
+                      blueprintData = JSON.parse(jsonObjectMatch[0]);
+                    }
+                  }
+                }
               }
-              
-              return; // Exit early, blueprint is set
+
+              if (blueprintData && blueprintData.type === 'blueprint' && blueprintData.blueprint) {
+                console.log('✅ [Pipeline] Blueprint detected in response');
+                console.log('📋 [Pipeline] Blueprint nodes:', blueprintData.blueprint.nodes?.length || 0);
+                
+                // Set blueprint in pipeline store
+                setGhostBlueprint(blueprintData.blueprint);
+                console.log('💾 [Pipeline] Blueprint set in pipeline store');
+                
+                // Create message with blueprint
+                const chatMsg: ExtendedMessage = {
+                  id: uuidv4(),
+                  content: blueprintData.message || aiText,
+                  type: 'ai',
+                  timestamp: new Date(),
+                  blueprint: blueprintData.blueprint,
+                  blueprintRationale: blueprintData.rationale || blueprintData.blueprint.rationale,
+                };
+                
+                // Add thinking process if available
+                if (thinkingProcess) {
+                  chatMsg.thinkingProcess = thinkingProcess;
+                }
+                
+                addMessage(chatMsg);
+                console.log('💬 [Pipeline] Message with blueprint added to chat');
+                return; // Exit early - blueprint displayed
+              } else {
+                console.warn('⚠️ [Pipeline] Blueprint data found but invalid structure:', blueprintData);
+              }
+            } catch (error) {
+              console.warn('⚠️ [Pipeline] Failed to parse blueprint from response:', error);
+              // Fall through to regular text message
             }
-          } catch (e) {
-            // Not a JSON blueprint, continue with normal text handling
           }
           
           // Bio-chat and other text agents should never modify the editor code
           console.log(`[${agentId}] Text response received, preserving current editor code`);
           
-          // Update placeholder message or create new one
-          if (placeholderMessageId && activeSession) {
-            const updatedMessages = activeSession.messages.map(msg => 
-              msg.id === placeholderMessageId
-                ? { 
-                    ...msg, 
-                    content: aiText,
-                    thinkingProcess: thinkingProcess || (msg as ExtendedMessage).thinkingProcess
-                  } as ExtendedMessage
-                : msg
-            );
-            updateMessages(updatedMessages);
-          } else {
-            const chatMsg: ExtendedMessage = {
-              id: uuidv4(),
-              content: aiText,
-              type: 'ai',
-              timestamp: new Date()
-            };
-            
-            // Add thinking process if available
-            if (thinkingProcess) {
-              chatMsg.thinkingProcess = thinkingProcess;
-            }
-            
-            addMessage(chatMsg);
+          const chatMsg: ExtendedMessage = {
+            id: uuidv4(),
+            content: aiText,
+            type: 'ai',
+            timestamp: new Date()
+          };
+          
+          // Add thinking process if available
+          if (thinkingProcess) {
+            chatMsg.thinkingProcess = thinkingProcess;
           }
+          
+          addMessage(chatMsg);
           return; // Exit early - no code generation or execution
         }
         code = response.data?.code || '';
-        // Mark as complete since we have the full response
-        thinkingProcess = convertThinkingData(response.data?.thinkingProcess, true);
-        console.log('[AI] route:code', { length: code?.length, hasThinking: !!thinkingProcess });
+        // Extract AI text response for better user experience
+        aiText = response.data?.text || '';
+        thinkingProcess = convertThinkingData(response.data?.thinkingProcess);
+        console.log('[AI] route:code', { length: code?.length, hasThinking: !!thinkingProcess, hasText: !!aiText });
       } catch (apiErr) {
         console.warn('AI generation failed (backend unavailable or error).', apiErr);
         const likelyVis = isLikelyVisualization(text);
@@ -2251,118 +2117,55 @@ try {
         console.log('[ChatPanel] Saved visualization code to session:', activeSessionId);
       }
 
-      // Update placeholder message or create new one
-      // Mark thinking process as complete now that we have the full response
-      // Skip if message was already updated during streaming
-      if (!messageAlreadyUpdated) {
-        const currentSession = getActiveSession();
-        if (placeholderMessageId && currentSession && currentSession.id === activeSessionId) {
-          const finalThinkingProcess = thinkingProcess 
-            ? convertThinkingData({ 
-                steps: thinkingProcess.steps, 
-                isComplete: true, 
-                totalSteps: thinkingProcess.totalSteps 
-              }, true)
-            : (currentSession.messages.find(m => m.id === placeholderMessageId) as ExtendedMessage)?.thinkingProcess;
-          
-          // Determine message content based on whether code is empty
-          const defaultMessageContent = code && code.trim()
-            ? `Generated code for: "${text}". Executing...`
-            : `I couldn't generate valid code for: "${text}". ${thinkingProcess ? 'See my thinking process above for details.' : ''}`;
-          
-          // Try to generate PDB summary asynchronously
-          generatePDBSummary(text).then(summary => {
-            if (summary) {
-              const currentSession = getActiveSession();
-              if (currentSession && currentSession.id === activeSessionId && placeholderMessageId) {
-                const updatedMessages = currentSession.messages.map(msg => 
-                  msg.id === placeholderMessageId
-                    ? { 
-                        ...msg, 
-                        content: summary,
-                        thinkingProcess: finalThinkingProcess
-                      } as ExtendedMessage
-                    : msg
-                );
-                updateMessages(updatedMessages);
-              }
-            }
-          }).catch(err => {
-            console.warn('Failed to generate PDB summary:', err);
-          });
-          
-          const updatedMessages = currentSession.messages.map(msg => 
-            msg.id === placeholderMessageId
-              ? { 
-                  ...msg, 
-                  content: defaultMessageContent,
-                  thinkingProcess: finalThinkingProcess
-                } as ExtendedMessage
-              : msg
-          );
-          updateMessages(updatedMessages);
+      // Determine message content: prefer AI text, then a descriptive message if code exists, otherwise loading message
+      let messageContent = aiText;
+      if (!messageContent && code && code.trim()) {
+        // Code was generated, provide a descriptive message
+        const request = text.toLowerCase().trim();
+        const subjectMatch = request.match(/(?:show|display|visualize|view|load|open|see)\s+(.+?)(?:\s|$)/i);
+        const subject = subjectMatch ? subjectMatch[1].trim() : request;
+        const cleanSubject = subject.replace(/\s+(structure|protein|molecule|chain|helix)$/i, '').trim();
+        if (cleanSubject && cleanSubject.length < 40 && cleanSubject.length > 0) {
+          const capitalized = cleanSubject.charAt(0).toUpperCase() + cleanSubject.slice(1);
+          messageContent = `Visualizing ${capitalized}...`;
         } else {
-          const defaultMessageContent = code && code.trim()
-            ? `Generated code for: "${text}". Executing...`
-            : `I couldn't generate valid code for: "${text}".`;
-          
-          const aiResponse: ExtendedMessage = {
-            id: uuidv4(),
-            content: defaultMessageContent,
-            type: 'ai',
-            timestamp: new Date()
-          };
-          
-          // Add thinking process if available
-          if (thinkingProcess) {
-            aiResponse.thinkingProcess = thinkingProcess;
-          }
-          
-          addMessage(aiResponse);
-          
-          // Try to generate PDB summary asynchronously and update message
-          generatePDBSummary(text).then(summary => {
-            if (summary) {
-              const currentSession = getActiveSession();
-              if (currentSession && currentSession.id === activeSessionId) {
-                const updatedMessages = currentSession.messages.map(msg => 
-                  msg.id === aiResponse.id
-                    ? { 
-                        ...msg, 
-                        content: summary
-                      } as ExtendedMessage
-                    : msg
-                );
-                updateMessages(updatedMessages);
-              }
-            }
-          }).catch(err => {
-            console.warn('Failed to generate PDB summary:', err);
-          });
+          messageContent = 'Visualizing structure...';
         }
       }
+      if (!messageContent) {
+        // Last resort: use the loading message
+        messageContent = getExecutionMessage(text);
+      }
 
-      // Only execute code if it's not empty
-      if (code && code.trim()) {
-        if (plugin) {
-          setIsExecuting(true);
-          try {
-            const exec = new CodeExecutor(plugin);
-            await exec.executeCode(code);
-            setViewerVisibleAndSave(true);
-            setActivePane('viewer');
-          } finally {
-            setIsExecuting(false);
-          }
-        } else {
-          // If no plugin yet, queue code to run once viewer initializes
-          setPendingCodeToRun(code);
+      const aiResponse: ExtendedMessage = {
+        id: uuidv4(),
+        content: messageContent,
+        type: 'ai',
+        timestamp: new Date()
+      };
+      
+      // Add thinking process if available
+      if (thinkingProcess) {
+        aiResponse.thinkingProcess = thinkingProcess;
+      }
+      
+      addMessage(aiResponse);
+
+      if (plugin) {
+        setIsExecuting(true);
+        try {
+          const exec = new CodeExecutor(plugin);
+          await exec.executeCode(code);
           setViewerVisibleAndSave(true);
           setActivePane('viewer');
+        } finally {
+          setIsExecuting(false);
         }
       } else {
-        // Code is empty - message is already updated above, just ensure loading is cleared
-        console.warn('[ChatPanel] Empty code received, skipping execution');
+        // If no plugin yet, queue code to run once viewer initializes
+        setPendingCodeToRun(code);
+        setViewerVisibleAndSave(true);
+        setActivePane('viewer');
       }
     } catch (err) {
       console.error('[Molstar] chat flow failed', err);
@@ -2374,12 +2177,7 @@ try {
       };
       addMessage(aiError);
     } finally {
-      // Always clear loading state, even if streaming or regular API call fails
       setIsLoading(false);
-      // Clear uploaded file state after message is sent
-      if (uploadedFileInfo) {
-        setUploadedFile(null);
-      }
     }
   };
 
@@ -2402,13 +2200,13 @@ try {
   return (
     <div className="h-full flex flex-col">
       {!showCenteredLayout && (
-        <div className="p-4 border-b border-gray-200">
+        <div className="px-3 py-1.5 border-b border-gray-200 flex-shrink-0">
           <div className="flex items-center space-x-2">
-            <Sparkles className="w-5 h-5 text-blue-600" />
+            <Sparkles className="w-3.5 h-3.5 text-blue-600" />
             <div>
-              <h2 className="text-lg font-semibold text-gray-900">AI Assistant</h2>
+              <h2 className="text-xs font-semibold text-gray-900">AI Assistant</h2>
               {activeSession && (
-                <p className="text-xs text-gray-500 truncate max-w-[200px]">
+                <p className="text-[10px] text-gray-500 truncate max-w-[180px]">
                   {activeSession.title}
                 </p>
               )}
@@ -2418,14 +2216,14 @@ try {
       )}
 
       {!showCenteredLayout ? (
-        <div className="flex-1 overflow-y-auto p-4 space-y-4">
+        <div className="flex-1 overflow-y-auto px-3 py-1.5 space-y-2 min-h-0">
           {messages.map((message) => (
           <div
             key={message.id}
             className={`flex ${message.type === 'user' ? 'justify-end' : 'justify-start'}`}
           >
             <div
-              className={`max-w-[80%] p-3 rounded-lg ${
+              className={`max-w-[85%] p-2 rounded-lg ${
                 message.type === 'user'
                   ? 'bg-blue-600 text-white'
                   : 'bg-gray-100 text-gray-900'
@@ -2433,33 +2231,125 @@ try {
             >
               {message.type === 'ai' ? (
                 <>
-                  {message.thinkingProcess && isThinkingModelSelected && (
+                  {message.thinkingProcess && (
                     <ThinkingProcessDisplay
                       thinkingSteps={message.thinkingProcess.steps}
                       isProcessing={!message.thinkingProcess.isComplete}
                       currentStep={message.thinkingProcess.steps.findIndex(s => s.status === 'processing') + 1}
                     />
                   )}
+                  {/* Show JobLoadingPill for messages with jobId and jobType */}
+                  {message.jobId && message.jobType && (
+                    <JobLoadingPill
+                      message={message}
+                      onJobComplete={(data: any) => {
+                        // Update message with result
+                        if (activeSession) {
+                          const messages = activeSession.messages || [];
+                          const messageIndex = messages.findIndex(m => m.id === message.id);
+                          if (messageIndex !== -1) {
+                            const updatedMessages = [...messages];
+                            updatedMessages[messageIndex] = {
+                              ...updatedMessages[messageIndex],
+                              content: `RFdiffusion protein design completed successfully! The designed structure is ready for download and visualization.`,
+                              alphafoldResult: {
+                                pdbContent: data.pdbContent,
+                                filename: data.filename || `designed_${Date.now()}.pdb`,
+                                parameters: data.parameters,
+                                metadata: data.metadata
+                              },
+                              jobId: undefined,
+                              jobType: undefined
+                            };
+                            updateMessages(updatedMessages);
+                          }
+                        }
+                      }}
+                      onJobError={(error: string) => {
+                        // Update message with error
+                        if (activeSession) {
+                          const messages = activeSession.messages || [];
+                          const messageIndex = messages.findIndex(m => m.id === message.id);
+                          if (messageIndex !== -1) {
+                            const updatedMessages = [...messages];
+                            updatedMessages[messageIndex] = {
+                              ...updatedMessages[messageIndex],
+                              content: error,
+                              error: RFdiffusionErrorHandler.handleError({ error }, { jobId: message.jobId, feature: 'RFdiffusion' }),
+                              jobId: undefined,
+                              jobType: undefined
+                            };
+                            updateMessages(updatedMessages);
+                          }
+                        }
+                      }}
+                    />
+                  )}
                   {renderMessageContent(message.content)}
-                  {/* Show uploaded file attachment if the most recent user message before this AI message had one */}
+                  {/* Show pipeline blueprint if present */}
+                  {message.blueprint && (
+                    <div className="mt-3">
+                      <PipelineBlueprintDisplay
+                        blueprint={message.blueprint}
+                        rationale={message.blueprintRationale}
+                        isApproved={message.blueprintApproved || false}
+                        onApprove={(selectedNodeIds) => {
+                          console.log('[ChatPanel] Blueprint approved with nodes:', selectedNodeIds);
+                          
+                          // Update the message to show it's been approved
+                          if (activeSession) {
+                            const messages = activeSession.messages || [];
+                            const messageIndex = messages.findIndex(m => m.id === message.id);
+                            if (messageIndex !== -1) {
+                              const updatedMessages = [...messages];
+                              updatedMessages[messageIndex] = {
+                                ...updatedMessages[messageIndex],
+                                blueprintApproved: true,
+                                content: `Pipeline blueprint approved! Created pipeline with ${selectedNodeIds.length} node${selectedNodeIds.length === 1 ? '' : 's'}. You can now configure parameters in the pipeline canvas.`,
+                              } as ExtendedMessage;
+                              updateMessages(updatedMessages);
+                            }
+                          }
+                        }}
+                        onReject={() => {
+                          console.log('[ChatPanel] Blueprint rejected');
+                          
+                          // Update the message to show it's been rejected
+                          if (activeSession) {
+                            const messages = activeSession.messages || [];
+                            const messageIndex = messages.findIndex(m => m.id === message.id);
+                            if (messageIndex !== -1) {
+                              const updatedMessages = [...messages];
+                              updatedMessages[messageIndex] = {
+                                ...updatedMessages[messageIndex],
+                                blueprintApproved: false,
+                                content: message.content + '\n\nPipeline blueprint rejected.',
+                              } as ExtendedMessage;
+                              updateMessages(updatedMessages);
+                            }
+                          }
+                        }}
+                      />
+                    </div>
+                  )}
+                  {/* Show uploaded file attachment if the immediately previous message was a user message with a file */}
                   {(() => {
                     const messageIndex = messages.findIndex(m => m.id === message.id);
-                    if (messageIndex < 0) return null;
+                    if (messageIndex <= 0) return null;
                     
-                    // Find the most recent user message before this AI message
-                    for (let i = messageIndex - 1; i >= 0; i--) {
-                      const prevMsg = messages[i];
-                      if (prevMsg.type === 'user' && prevMsg.uploadedFile && isValidUploadedFile(prevMsg.uploadedFile)) {
-                        return (
-                          <div className="mt-3">
-                            {renderFileAttachment(prevMsg.uploadedFile, false)}
-                          </div>
-                        );
-                      }
+                    // Only check the immediately previous message (not all previous messages)
+                    const prevMsg = messages[messageIndex - 1];
+                    if (prevMsg.type === 'user' && prevMsg.uploadedFile && isValidUploadedFile(prevMsg.uploadedFile)) {
+                      return (
+                        <div className="mt-3">
+                          {renderFileAttachment(prevMsg.uploadedFile, false)}
+                        </div>
+                      );
                     }
                     return null;
                   })()}
                   {renderAlphaFoldResult(message.alphafoldResult)}
+                  {renderOpenFold2Result(message.openfold2Result)}
                   {renderProteinMPNNResult(message.proteinmpnnResult)}
                   {message.error && (
                     <div className="mt-3">
@@ -2480,27 +2370,29 @@ try {
                 </>
               ) : (
                 <>
-                  <p className="text-sm">{message.content}</p>
-                  {message.uploadedFile && (
-                    <div className="mt-2">
+                  <p className="text-sm leading-relaxed">{message.content}</p>
+                  {message.uploadedFile && isValidUploadedFile(message.uploadedFile) && (
+                    <div className="mt-1.5">
                       {renderFileAttachment(message.uploadedFile, true)}
+                    </div>
+                  )}
+                  {message.pipeline && (
+                    <div className="mt-1.5">
+                      {renderPipelineAttachment(message.pipeline, true)}
                     </div>
                   )}
                 </>
               )}
-              <div className="text-xs mt-1 opacity-70">
-                {new Date(message.timestamp).toLocaleTimeString()}
-              </div>
             </div>
           </div>
         ))}
         {isLoading && (
           <div className="flex justify-start">
-            <div className="bg-gray-100 p-3 rounded-lg">
-              <div className="flex space-x-2">
-                <div className="w-2 h-2 bg-gray-400 rounded-full animate-bounce"></div>
-                <div className="w-2 h-2 bg-gray-400 rounded-full animate-bounce" style={{ animationDelay: '0.1s' }}></div>
-                <div className="w-2 h-2 bg-gray-400 rounded-full animate-bounce" style={{ animationDelay: '0.2s' }}></div>
+            <div className="bg-gray-100 p-2 rounded-lg">
+              <div className="flex space-x-1.5">
+                <div className="w-1.5 h-1.5 bg-gray-400 rounded-full animate-bounce"></div>
+                <div className="w-1.5 h-1.5 bg-gray-400 rounded-full animate-bounce" style={{ animationDelay: '0.1s' }}></div>
+                <div className="w-1.5 h-1.5 bg-gray-400 rounded-full animate-bounce" style={{ animationDelay: '0.2s' }}></div>
               </div>
             </div>
           </div>
@@ -2516,12 +2408,12 @@ try {
         </div>
       )}
 
-      <div className={`p-4 ${!showCenteredLayout ? 'border-t border-gray-200' : ''}`}>
+      <div className={`px-3 py-1.5 flex-shrink-0 ${!showCenteredLayout ? 'border-t border-gray-200' : ''}`}>
         {/* Multiple selection chips */}
         {selections.length > 0 && (
-          <div className="mb-3">
-            <div className="flex items-center justify-between mb-2">
-              <div className="text-xs text-gray-500 font-medium">
+          <div className="mb-1.5">
+            <div className="flex items-center justify-between mb-1">
+              <div className="text-[10px] text-gray-500 font-medium">
                 Selected Residues ({selections.length})
               </div>
               {selections.length > 1 && (
@@ -2555,76 +2447,173 @@ try {
         <ProgressTracker
           isVisible={alphafoldProgress.isVisible}
           onCancel={alphafoldProgress.cancelProgress}
-          className="mb-3"
+          className="mb-1.5"
           title={alphafoldProgress.title}
           eventName={alphafoldProgress.eventName}
         />
         <ProgressTracker
           isVisible={proteinmpnnProgress.isVisible}
           onCancel={proteinmpnnProgress.cancelProgress}
-          className="mb-3"
+          className="mb-1.5"
           title={proteinmpnnProgress.title}
           eventName={proteinmpnnProgress.eventName}
         />
-        <ProgressTracker
-          isVisible={rfdiffusionProgress.isVisible}
-          onCancel={rfdiffusionProgress.cancelProgress}
-          className="mb-3"
-          title={rfdiffusionProgress.title}
-          eventName={rfdiffusionProgress.eventName}
-        />
 
         {!showCenteredLayout && (
-          <div className="mb-3">
-            <div className="text-xs text-gray-500 mb-2">Quick start:</div>
-            <div className="flex flex-wrap gap-2">
-              {quickPrompts.map((prompt, index) => (
-                <button
-                  key={index}
-                  onClick={() => setInput(prompt)}
-                  className="text-xs bg-gray-100 hover:bg-gray-200 text-gray-700 px-2 py-1 rounded"
-                >
-                  {prompt}
-                </button>
-              ))}
+          <div className="mb-1.5">
+            <button
+              onClick={() => setIsQuickStartExpanded(!isQuickStartExpanded)}
+              className="flex items-center justify-between w-full text-[10px] text-gray-500 hover:text-gray-700 transition-colors mb-1"
+            >
+              <span>Quick start:</span>
+              {isQuickStartExpanded ? (
+                <ChevronUp className="w-2.5 h-2.5" />
+              ) : (
+                <ChevronDown className="w-2.5 h-2.5" />
+              )}
+            </button>
+            <div
+              className={`overflow-hidden transition-all duration-200 ease-in-out ${
+                isQuickStartExpanded ? 'max-h-24 opacity-100' : 'max-h-0 opacity-0'
+              }`}
+            >
+              <div className="flex flex-wrap gap-1">
+                {quickPrompts.map((prompt, index) => (
+                  <button
+                    key={index}
+                    onClick={() => setInput(prompt)}
+                    className="text-[10px] bg-gray-100 hover:bg-gray-200 text-gray-700 px-1.5 py-0.5 rounded transition-colors"
+                  >
+                    {prompt}
+                  </button>
+                ))}
+              </div>
             </div>
           </div>
         )}
 
         <form onSubmit={handleSubmit} className={`flex flex-col gap-2 ${showCenteredLayout ? 'max-w-2xl w-full mx-auto' : ''}`}>
-          {/* Show uploaded file capsule at top of input area */}
-          {pendingFile && (
-            <div className="flex items-center space-x-2 px-3 py-2 bg-blue-50 border border-blue-200 rounded-lg">
-              <Paperclip className="w-4 h-4 text-blue-600" />
-              <span className="text-sm text-blue-700 font-medium flex-1 truncate" title={pendingFile.name}>
-                {pendingFile.name}
-              </span>
-              <span className="text-xs text-blue-600">
-                ({(pendingFile.size / 1024).toFixed(1)} KB)
-              </span>
-              <button
-                type="button"
-                onClick={() => setPendingFile(null)}
-                disabled={isLoading}
-                className="p-1 hover:bg-blue-100 rounded disabled:opacity-50"
-                title="Remove file"
-              >
-                <X className="w-4 h-4 text-blue-600" />
-              </button>
+          {/* File uploads display with status */}
+          {fileUploads.length > 0 && (
+            <div className="flex items-center space-x-1.5 px-2 py-1 bg-blue-50 border border-blue-200 rounded-lg flex-wrap gap-1.5 mb-1.5">
+              {fileUploads.map((fileState, index) => {
+                const isUploading = fileState.status === 'uploading';
+                const isUploaded = fileState.status === 'uploaded';
+                const isError = fileState.status === 'error';
+                
+                return (
+                  <div 
+                    key={index} 
+                    className={`flex items-center space-x-1 px-2 py-1 rounded-md border ${
+                      isUploading 
+                        ? 'bg-yellow-50 border-yellow-300' 
+                        : isUploaded 
+                        ? 'bg-green-50 border-green-300' 
+                        : isError
+                        ? 'bg-red-50 border-red-300'
+                        : 'bg-white border-blue-200'
+                    }`}
+                  >
+                    {isUploading && (
+                      <div className="w-3 h-3 border-2 border-blue-600 border-t-transparent rounded-full animate-spin mr-1"></div>
+                    )}
+                    {isUploaded && (
+                      <span className="text-green-600 mr-1">✓</span>
+                    )}
+                    {isError && (
+                      <span className="text-red-600 mr-1">✗</span>
+                    )}
+                    <span 
+                      className={`text-xs truncate max-w-[200px] ${
+                        isUploading 
+                          ? 'text-yellow-700' 
+                          : isUploaded 
+                          ? 'text-green-700' 
+                          : isError
+                          ? 'text-red-700'
+                          : 'text-blue-700'
+                      }`} 
+                      title={fileState.file.name}
+                    >
+                      📎 {fileState.file.name}
+                    </span>
+                    {isError && fileState.error && (
+                      <span className="text-xs text-red-600 ml-1" title={fileState.error}>
+                        ⚠
+                      </span>
+                    )}
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setFileUploads(prev => prev.filter((_, i) => i !== index));
+                        setUploadError(null);
+                      }}
+                      className={`p-0.5 rounded ml-1 ${
+                        isUploading 
+                          ? 'hover:bg-yellow-100' 
+                          : isUploaded 
+                          ? 'hover:bg-green-100' 
+                          : isError
+                          ? 'hover:bg-red-100'
+                          : 'hover:bg-blue-100'
+                      }`}
+                      title="Remove file"
+                    >
+                      <X className={`w-3 h-3 ${
+                        isUploading 
+                          ? 'text-yellow-600' 
+                          : isUploaded 
+                          ? 'text-green-600' 
+                          : isError
+                          ? 'text-red-600'
+                          : 'text-blue-600'
+                      }`} />
+                    </button>
+                  </div>
+                );
+              })}
             </div>
           )}
           
-          {/* Large text input area */}
-          <div className="relative">
+          {/* Upload error display */}
+          {uploadError && (
+            <div className="px-2 py-1 bg-red-50 border border-red-200 rounded-lg mb-1.5">
+              <p className="text-[10px] text-red-700">{uploadError}</p>
+            </div>
+          )}
+
+          {/* Selected pipeline display */}
+          {selectedPipeline && (
+            <div className="flex items-center space-x-1.5 px-2 py-1 bg-purple-50 border border-purple-200 rounded-lg flex-wrap gap-1.5 mb-1.5">
+              <div className="flex items-center space-x-1 px-2 py-1 rounded-md bg-purple-100 border border-purple-300">
+                <span className="text-purple-600 mr-1">⚙️</span>
+                <span className="text-xs text-purple-700 truncate max-w-[200px]" title={selectedPipeline.name}>
+                  {selectedPipeline.name}
+                </span>
+                <button
+                  type="button"
+                  onClick={() => setSelectedPipeline(null)}
+                  className="p-0.5 rounded ml-1 hover:bg-purple-200"
+                  title="Remove pipeline"
+                >
+                  <X className="w-3 h-3 text-purple-600" />
+                </button>
+              </div>
+            </div>
+          )}
+          
+          {/* Large text input area with integrated controls */}
+          <div className="relative bg-white border border-gray-300 rounded-lg focus-within:ring-2 focus-within:ring-blue-500 focus-within:border-transparent">
+            {/* Textarea with padding for controls */}
             <textarea
               ref={textareaRef}
               value={input}
               onChange={(e) => setInput(e.target.value)}
               placeholder={"Chat, visualize, or build..."}
-              className={`w-full px-4 py-3 bg-white text-gray-900 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent text-sm placeholder-gray-400 resize-none ${
-                showCenteredLayout ? 'min-h-[120px] text-base' : 'min-h-[100px]'
-              }`}
-              rows={showCenteredLayout ? 4 : 3}
+              className={`w-full bg-transparent text-gray-900 focus:outline-none text-sm placeholder-gray-400 resize-none ${
+                showCenteredLayout ? 'min-h-[120px] text-base' : 'min-h-[60px]'
+              } px-2.5 pb-8 pt-2`}
+              rows={showCenteredLayout ? 4 : 1}
               disabled={isLoading}
               onKeyDown={(e) => {
                 if (e.key === 'Enter' && !e.shiftKey) {
@@ -2633,69 +2622,73 @@ try {
                 }
               }}
             />
-          
-          </div>
-          
-          {/* Bottom row: Agent, Model selectors, Microphone, and Send button */}
-          <div className="flex items-center gap-2">
-            {/* Agent Selector */}
-            {agents.length > 0 && (
-              <AgentSelector
-                agents={agents}
-              />
-            )}
             
-            {/* Model Selector */}
-            <ModelSelector
-              models={models}
-            />
-            
-            {/* Spacer */}
-            <div className="flex-1" />
-            
-            {/* Upload PDB file button */}
-            <PDBFileUpload
-              onFileSelected={(file) => {
-                // Store file locally, don't upload yet
-                setPendingFile(file);
-              }}
-              onFileCleared={() => {
-                // Clear pending file
-                setPendingFile(null);
-              }}
-              onError={(error) => {
-                console.error('File selection error:', error);
-                // Could show a toast notification here
-              }}
-              disabled={isLoading}
-              pendingFile={pendingFile}
-              sessionId={activeSessionId}
-            />
-            
-            {/* Microphone button */}
-            <button
-              type="button"
-              className="p-2 text-gray-400 hover:text-gray-600 transition-colors"
-              title="Voice input"
-            >
-              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z" />
-              </svg>
-            </button>
-            
-            {/* Send button */}
-            <button
-              type="submit"
-              disabled={!input.trim() || isLoading}
-              className={`flex items-center justify-center transition-colors disabled:opacity-50 disabled:cursor-not-allowed ${
-                showCenteredLayout 
-                  ? 'p-2 text-gray-400 hover:text-gray-600' 
-                  : 'px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700'
-              }`}
-              title="Send"
-            >
-              <Send className="w-5 h-5" />
-            </button>
+            {/* Bottom controls bar: Agent, Model selectors, Microphone, and Send button */}
+            <div className="absolute bottom-0 left-0 right-0 flex items-center justify-between gap-1.5 px-2 py-1 border-t border-gray-100 bg-white rounded-b-lg z-10">
+              {/* Leading actions: Agent and Model selectors */}
+              <div className="flex items-center gap-2 flex-shrink-0">
+                {/* Agent Selector */}
+                {agents.length > 0 && (
+                  <AgentSelector
+                    agents={agents}
+                  />
+                )}
+                
+                {/* Model Selector */}
+                <ModelSelector
+                  models={models}
+                />
+              </div>
+              
+              {/* Trailing actions: Attachment, Microphone, and Send button */}
+              <div className="flex items-center gap-1 flex-shrink-0 ml-auto">
+                {/* File upload attachment button */}
+                <AttachmentMenu
+                  onFileSelected={(file) => {
+                    handleFileSelected(file);
+                    setUploadError(null);
+                  }}
+                  onFilesSelected={(files) => {
+                    handleFilesSelected(files);
+                    setUploadError(null);
+                  }}
+                  onFileCleared={() => {
+                    setFileUploads([]);
+                    setUploadError(null);
+                  }}
+                  onError={(error) => {
+                    setUploadError(error);
+                    console.error('File upload error:', error);
+                  }}
+                  onPipelineSelect={handlePipelineSelect}
+                  onServerFilesSelect={handleServerFilesSelect}
+                  disabled={isLoading}
+                  pendingFiles={fileUploads.map(f => f.file)}
+                  sessionId={activeSessionId}
+                />
+                
+                {/* Microphone button */}
+                <button
+                  type="button"
+                  className="p-1.5 text-gray-400 hover:text-gray-600 transition-colors rounded-md hover:bg-gray-100"
+                  title="Voice input"
+                >
+                  <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z" />
+                  </svg>
+                </button>
+                
+                {/* Send button */}
+                <button
+                  type="submit"
+                  disabled={!input.trim() || isLoading}
+                  className="flex items-center justify-center p-1.5 text-gray-400 hover:text-gray-600 transition-colors disabled:opacity-50 disabled:cursor-not-allowed rounded-md hover:bg-gray-100"
+                  title="Send"
+                >
+                  <Send className="w-5 h-5" />
+                </button>
+              </div>
+            </div>
           </div>
         </form>
 
@@ -2712,6 +2705,13 @@ try {
                   <span>{prompt}</span>
                 </button>
               ))}
+              <button
+                onClick={() => setShowOpenFold2Dialog(true)}
+                className="px-4 py-2 bg-amber-50 hover:bg-amber-100 text-amber-800 rounded-lg border border-amber-200 text-sm font-medium transition-colors"
+                title="OpenFold2 structure prediction"
+              >
+                OpenFold2
+              </button>
               <button
                 onClick={() => {}}
                 className="px-4 py-2 bg-white hover:bg-gray-50 text-gray-700 rounded-lg border border-gray-200 text-sm font-medium transition-colors"
@@ -2737,23 +2737,6 @@ try {
         onClose={() => setShowRFdiffusionDialog(false)}
         onConfirm={handleRFdiffusionConfirm}
         initialData={rfdiffusionData}
-        contextPdb={(() => {
-          // Extract PDB context from viewer
-          // Priority 1: lastLoadedPdb from store
-          if (lastLoadedPdb) {
-            return { type: 'pdb_id' as const, value: lastLoadedPdb };
-          }
-          // Priority 2: Extract from currentCode
-          if (currentCode) {
-            const match = currentCode.match(/loadStructure\s*\(\s*['"]([0-9A-Za-z]{4})['"]/);
-            if (match) {
-              return { type: 'pdb_id' as const, value: match[1].toUpperCase() };
-            }
-          }
-          // Priority 3: Check chat history for uploaded files (could be enhanced)
-          // For now, return undefined if no PDB detected
-          return undefined;
-        })()}
       />
 
       <ProteinMPNNDialog
@@ -2761,6 +2744,33 @@ try {
         onClose={() => setShowProteinMPNNDialog(false)}
         onConfirm={handleProteinMPNNConfirm}
         initialData={proteinmpnnData}
+      />
+
+      <OpenFold2Dialog
+        isOpen={showOpenFold2Dialog}
+        onClose={() => setShowOpenFold2Dialog(false)}
+        onConfirm={handleOpenFold2Confirm}
+      />
+
+      {/* Pipeline Selection Modal */}
+      <PipelineSelectionModal
+        isOpen={showPipelineModal}
+        onClose={() => setShowPipelineModal(false)}
+        onPipelineSelect={handlePipelineSelected}
+      />
+
+      {/* Server Files Dialog */}
+      <ServerFilesDialog
+        isOpen={showServerFilesDialog}
+        onClose={() => setShowServerFilesDialog(false)}
+        onFileSelect={(file) => {
+          handleFileSelected(file);
+          setUploadError(null);
+        }}
+        onError={(error) => {
+          setUploadError(error);
+          console.error('Server file selection error:', error);
+        }}
       />
     </div>
   );

@@ -13,7 +13,8 @@ import {
   Tag,
   Atom,
   Link2,
-  Circle
+  Circle,
+  Trash2
 } from 'lucide-react';
 import { PluginUIContext } from 'molstar/lib/mol-plugin-ui/context';
 import {
@@ -34,8 +35,6 @@ import {
   applyUniformColor,
   applyColorScheme,
   addRepresentation,
-  hideRepresentations,
-  showRepresentations,
   toggleRibbon,
   addLabels,
   subscribeToSelectionChanges,
@@ -44,6 +43,7 @@ import {
   type RepresentationType,
 } from '../utils/molstarSelections';
 import { useAppStore } from '../stores/appStore';
+import { CodeExecutor } from '../utils/codeExecutor';
 
 interface MolstarToolbarProps {
   plugin: PluginUIContext | null;
@@ -159,7 +159,7 @@ const DropdownMenu: React.FC<DropdownMenuProps> = ({ label, children, disabled }
       
       {isOpen && (
         <div 
-          className="absolute top-full left-0 mt-1 min-w-[180px] bg-white border border-gray-200 rounded shadow-xl z-[9999]"
+          className="absolute top-full left-0 mt-1 min-w-[180px] bg-white border border-gray-200 rounded shadow-xl z-[9999] text-black"
           onClick={(e) => {
             // Only close if clicking on a leaf item (not a submenu trigger)
             const target = e.target as HTMLElement;
@@ -334,6 +334,22 @@ export const MolstarToolbar: React.FC<MolstarToolbarProps> = ({ plugin }) => {
     recordMolstarAction({ type: 'label', target: type, timestamp: Date.now() });
   };
   
+  const handleClearStructure = async () => {
+    if (!plugin) return;
+    try {
+      const executor = new CodeExecutor(plugin);
+      await executor.executeCode('try { await builder.clearStructure(); builder.focusView(); } catch(e) { console.warn("Clear failed:", e); }');
+      recordMolstarAction({ type: 'clear', target: 'structure', timestamp: Date.now() });
+      // Also clear the current code in the store
+      const { setCurrentCode } = useAppStore.getState();
+      if (setCurrentCode) {
+        setCurrentCode('');
+      }
+    } catch (e) {
+      console.error('[MolstarToolbar] Failed to clear structure:', e);
+    }
+  };
+  
   return (
     <div className="flex items-center gap-1 px-2 py-1 bg-gray-50 border-b border-gray-200">
       {/* Select Menu */}
@@ -464,10 +480,33 @@ export const MolstarToolbar: React.FC<MolstarToolbarProps> = ({ plugin }) => {
           <div className="border-t border-gray-200 my-1" />
           <MenuItem label="Off" onClick={() => handleLabels('off')} />
         </MenuItem>
+        
+        <div className="border-t border-gray-200 my-1" />
+        
+        <MenuItem
+          label="Clear Structure"
+          icon={<Trash2 className="w-3 h-3" />}
+          onClick={handleClearStructure}
+        />
       </DropdownMenu>
       
       {/* Spacer */}
       <div className="flex-1" />
+      
+      {/* Clear Structure Button */}
+      <button
+        onClick={handleClearStructure}
+        disabled={isDisabled}
+        className={`flex items-center gap-1 px-2 py-1 text-sm font-medium rounded transition-colors ${
+          isDisabled
+            ? 'text-gray-400 cursor-not-allowed'
+            : 'text-red-600 hover:bg-red-50 hover:text-red-700'
+        }`}
+        title="Clear all structures from viewer"
+      >
+        <Trash2 className="w-4 h-4" />
+        <span className="hidden sm:inline">Clear</span>
+      </button>
       
       {/* Selection Indicator */}
       <SelectionIndicator 

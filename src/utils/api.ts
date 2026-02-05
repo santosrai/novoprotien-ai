@@ -1,8 +1,8 @@
 import axios from 'axios';
 
 // Configure API base URL. Set VITE_API_BASE in your env, e.g.:
-const VITE_API_BASE = "http://localhost:8787/api"
-// const baseURL = import.meta.env?.VITE_API_BASE || '/api';
+// Prefer environment variable, fallback to relative path for flexibility
+const VITE_API_BASE = (import.meta as any).env?.VITE_API_BASE || "http://localhost:8787/api";
 const baseURL = VITE_API_BASE || '/api';
 
 export const api = axios.create({
@@ -11,26 +11,129 @@ export const api = axios.create({
 });
 
 
-// Add request interceptor to inject API key
+// Add request interceptor to inject JWT token
 api.interceptors.request.use((config) => {
-  // Get settings from localStorage directly to avoid circular dependencies or hook rules outside components
+  // Get auth token from localStorage
+  try {
+    const authStorage = localStorage.getItem('novoprotein-auth-storage');
+    if (authStorage) {
+      const { state } = JSON.parse(authStorage);
+      const accessToken = state?.accessToken;
+      if (accessToken) {
+        config.headers['Authorization'] = `Bearer ${accessToken}`;
+      }
+    }
+  } catch (e) {
+    console.warn('Failed to read auth token from storage', e);
+  }
+  
+  // Legacy: Also check for API key (for backward compatibility)
   try {
     const storageItem = localStorage.getItem('novoprotein-settings-storage');
     if (storageItem) {
       const { state } = JSON.parse(storageItem);
       const apiKey = state?.settings?.api?.key;
-      if (apiKey) {
+      if (apiKey && !config.headers['Authorization']) {
         config.headers['x-api-key'] = apiKey;
       }
     }
   } catch (e) {
-    console.warn('Failed to read API key from storage', e);
+    // Ignore
   }
+  
   return config;
 });
 
+// Add response interceptor to handle auth errors
+api.interceptors.response.use(
+  (response) => response,
+  async (error) => {
+    const originalRequest = error.config;
+    
+    // Handle 401 Unauthorized - try to refresh token
+    if (error.response?.status === 401 && !originalRequest._retry) {
+      originalRequest._retry = true;
+      
+      try {
+        const authStorage = localStorage.getItem('novoprotein-auth-storage');
+        if (authStorage) {
+          const { state } = JSON.parse(authStorage);
+          const refreshToken = state?.refreshToken;
+          
+          if (refreshToken) {
+            // Try to refresh access token
+            const response = await axios.post(`${baseURL}/auth/refresh`, {
+              refresh_token: refreshToken
+            });
+            
+            const { access_token } = response.data;
+            
+            // Update stored token
+            const updatedState = { ...state, accessToken: access_token };
+            localStorage.setItem('novoprotein-auth-storage', JSON.stringify({ state: updatedState }));
+            
+            // Retry original request with new token
+            originalRequest.headers['Authorization'] = `Bearer ${access_token}`;
+            return api(originalRequest);
+          }
+        }
+        
+        // No auth storage or no refresh token - redirect to signin
+        // (Only redirect if not already on signin/signup pages)
+        if (!window.location.pathname.startsWith('/signin') && !window.location.pathname.startsWith('/signup')) {
+          window.location.href = '/signin';
+        }
+        return Promise.reject(error);
+      } catch (refreshError) {
+        // Refresh failed, sign out user
+        localStorage.removeItem('novoprotein-auth-storage');
+        window.location.href = '/signin';
+        return Promise.reject(refreshError);
+      }
+    }
+    
+    // Handle 402 Payment Required (insufficient credits)
+    if (error.response?.status === 402) {
+      // This will be handled by the component
+      return Promise.reject(error);
+    }
+    
+    return Promise.reject(error);
+  }
+);
+
 export function setApiBaseUrl(url: string) {
   api.defaults.baseURL = url;
+}
+
+/**
+ * Get the current authentication token from localStorage.
+ * This is useful for fetch() calls that need to include the Authorization header.
+ */
+export function getAuthToken(): string | null {
+  try {
+    const authStorage = localStorage.getItem('novoprotein-auth-storage');
+    if (authStorage) {
+      const { state } = JSON.parse(authStorage);
+      return state?.accessToken || null;
+    }
+  } catch (e) {
+    console.warn('Failed to read auth token from storage', e);
+  }
+  return null;
+}
+
+/**
+ * Get headers for authenticated fetch requests.
+ * Includes Authorization header if token is available.
+ */
+export function getAuthHeaders(): Record<string, string> {
+  const token = getAuthToken();
+  const headers: Record<string, string> = {};
+  if (token) {
+    headers['Authorization'] = `Bearer ${token}`;
+  }
+  return headers;
 }
 
 export interface Model {
@@ -99,25 +202,11 @@ export async function* streamAgentRoute(payload: {
   model?: string;
   uploadedFileId?: string;
 }): AsyncGenerator<StreamChunk, void, unknown> {
-  // Get API key from localStorage
-  let apiKey: string | undefined;
-  try {
-    const storageItem = localStorage.getItem('novoprotein-settings-storage');
-    if (storageItem) {
-      const { state } = JSON.parse(storageItem);
-      apiKey = state?.settings?.api?.key;
-    }
-  } catch (e) {
-    console.warn('Failed to read API key from storage', e);
-  }
-
-  // Build headers
+  // Build headers with auth (required for all API calls)
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
+    ...getAuthHeaders(),
   };
-  if (apiKey) {
-    headers['x-api-key'] = apiKey;
-  }
 
   // Make streaming request
   const response = await fetch(`${baseURL}/agents/route-stream`, {
@@ -203,4 +292,3 @@ export async function* streamAgentRoute(payload: {
     reader.releaseLock();
   }
 }
-

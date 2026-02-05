@@ -1,6 +1,6 @@
-export type NodeType = 'input_node' | 'rfdiffusion_node' | 'proteinmpnn_node' | 'alphafold_node';
+export type NodeType = 'input_node' | 'rfdiffusion_node' | 'proteinmpnn_node' | 'alphafold_node' | 'openfold2_node' | 'message_input_node' | 'http_request_node';
 
-export type NodeStatus = 'idle' | 'running' | 'success' | 'error' | 'pending';
+export type NodeStatus = 'idle' | 'running' | 'success' | 'completed' | 'error' | 'pending';
 
 export interface PipelineNodeBlueprint {
   id: string;
@@ -37,6 +37,13 @@ export interface Pipeline {
 export interface NodeConfig {
   // Input Node
   filename?: string;
+  file_id?: string;
+  file_url?: string;
+  atoms?: number;
+  chains?: string[];
+  chain_residue_counts?: Record<string, number>;
+  total_residues?: number;
+  suggested_contigs?: string;
   
   // RFdiffusion Node
   contigs?: string;
@@ -50,6 +57,7 @@ export interface NodeConfig {
   recycle_count?: number;
   num_relax?: number;
 }
+
 
 
 

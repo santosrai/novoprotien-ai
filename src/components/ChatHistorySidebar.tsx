@@ -31,7 +31,7 @@ export const ChatHistorySidebar: React.FC = () => {
   } = useChatHistoryStore();
 
   const { createSession } = useSessionManagement();
-  const { setViewerVisible } = useAppStore();
+  const { setViewerVisible, setActivePane } = useAppStore();
   const [showBulkActions, setShowBulkActions] = useState(false);
   const searchInputRef = useRef<HTMLInputElement>(null);
 
@@ -86,10 +86,11 @@ export const ChatHistorySidebar: React.FC = () => {
     return () => document.removeEventListener('keydown', handleKeyDown);
   }, [toggleSidebar, isSidebarCollapsed, searchQuery, setSearchQuery]);
 
-  const handleNewChat = () => {
-    const newSessionId = createSession();
+  const handleNewChat = async () => {
+    const newSessionId = await createSession();
     setSearchQuery(''); // Clear search when creating new chat
     setViewerVisible(false); // Hide 3D visual editor when starting new chat
+    setActivePane(null); // Hide all panes for new chat
     // Save visibility state to new session
     if (newSessionId) {
       saveViewerVisibility(newSessionId, false);

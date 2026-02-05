@@ -1,7 +1,16 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { usePipelineStore } from '../store/pipelineStore';
+import { usePipelineContext } from '../context/PipelineContext';
 import { Pipeline } from '../types/index';
-import { Trash2, Play, Edit2, X } from 'lucide-react';
+import { Trash2, Play, Edit2 } from 'lucide-react';
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+} from './ui/dialog';
+import { Input } from './ui/input';
+import { Button } from './ui/button';
 
 interface PipelineManagerProps {
   isOpen: boolean;
@@ -9,11 +18,21 @@ interface PipelineManagerProps {
 }
 
 export const PipelineManager: React.FC<PipelineManagerProps> = ({ isOpen, onClose }) => {
-  const { savedPipelines, loadPipeline, deletePipeline } = usePipelineStore();
+  const { savedPipelines, loadPipeline, deletePipeline, syncPipelines } = usePipelineStore();
+  const { authState, apiClient } = usePipelineContext();
+  const user = authState?.user;
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editName, setEditName] = useState('');
 
-  if (!isOpen) return null;
+  // Sync pipelines from backend when modal opens and user is authenticated
+  useEffect(() => {
+    if (isOpen && user && apiClient) {
+      console.log('[PipelineManager] Syncing pipelines from backend...');
+      syncPipelines({ apiClient, authState }).catch((error) => {
+        console.error('[PipelineManager] Failed to sync pipelines:', error);
+      });
+    }
+  }, [isOpen, user, apiClient, authState, syncPipelines]);
 
   const handleLoad = (pipeline: Pipeline) => {
     loadPipeline(pipeline.id);
@@ -22,7 +41,7 @@ export const PipelineManager: React.FC<PipelineManagerProps> = ({ isOpen, onClos
 
   const handleDelete = (pipelineId: string) => {
     if (confirm('Are you sure you want to delete this pipeline?')) {
-      deletePipeline(pipelineId);
+      deletePipeline(pipelineId, { apiClient, authState });
     }
   };
 
@@ -34,7 +53,10 @@ export const PipelineManager: React.FC<PipelineManagerProps> = ({ isOpen, onClos
   const handleSaveEdit = (pipelineId: string) => {
     const pipeline = savedPipelines.find((p) => p.id === pipelineId);
     if (pipeline && editName.trim()) {
-      usePipelineStore.getState().savePipeline(editName.trim());
+      usePipelineStore.getState().savePipeline(editName.trim(), undefined, undefined, {
+        apiClient,
+        authState,
+      });
       setEditingId(null);
       setEditName('');
     }
@@ -59,21 +81,13 @@ export const PipelineManager: React.FC<PipelineManagerProps> = ({ isOpen, onClos
   };
 
   return (
-    <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
-      <div className="bg-white rounded-lg shadow-xl w-full max-w-4xl max-h-[90vh] flex flex-col">
-        {/* Header */}
-        <div className="sticky top-0 bg-white border-b border-gray-200 px-6 py-4 flex items-center justify-between">
-          <h2 className="text-xl font-semibold text-gray-900">Pipeline Manager</h2>
-          <button
-            onClick={onClose}
-            className="text-gray-400 hover:text-gray-600 text-2xl"
-          >
-            <X className="w-6 h-6" />
-          </button>
-        </div>
+    <Dialog open={isOpen} onOpenChange={(open) => !open && onClose()}>
+      <DialogContent className="sm:max-w-4xl max-h-[90vh] flex flex-col">
+        <DialogHeader>
+          <DialogTitle>Pipeline Manager</DialogTitle>
+        </DialogHeader>
 
-        {/* Content */}
-        <div className="p-6 flex-1 overflow-y-auto">
+        <div className="flex-1 overflow-y-auto">
           {savedPipelines.length === 0 ? (
             <div className="text-center py-12">
               <p className="text-gray-500 mb-2">No saved pipelines</p>
@@ -92,25 +106,28 @@ export const PipelineManager: React.FC<PipelineManagerProps> = ({ isOpen, onClos
                     <div className="flex-1">
                       {editingId === pipeline.id ? (
                         <div className="flex items-center gap-2 mb-2">
-                          <input
+                          <Input
                             type="text"
                             value={editName}
                             onChange={(e) => setEditName(e.target.value)}
-                            className="px-2 py-1 text-sm border border-gray-300 rounded focus:outline-none focus:ring-2 focus:ring-blue-500"
+                            className="text-sm"
                             autoFocus
                           />
-                          <button
+                          <Button
                             onClick={() => handleSaveEdit(pipeline.id)}
-                            className="px-2 py-1 text-xs bg-blue-600 text-white rounded hover:bg-blue-700"
+                            size="sm"
+                            className="text-xs"
                           >
                             Save
-                          </button>
-                          <button
+                          </Button>
+                          <Button
                             onClick={handleCancelEdit}
-                            className="px-2 py-1 text-xs bg-gray-200 text-gray-700 rounded hover:bg-gray-300"
+                            variant="outline"
+                            size="sm"
+                            className="text-xs"
                           >
                             Cancel
-                          </button>
+                          </Button>
                         </div>
                       ) : (
                         <h3 className="text-sm font-semibold text-gray-900 mb-1">
@@ -134,27 +151,31 @@ export const PipelineManager: React.FC<PipelineManagerProps> = ({ isOpen, onClos
                     </div>
                     
                     <div className="flex items-center gap-2 ml-4">
-                      <button
+                      <Button
+                        variant="ghost"
+                        size="icon"
                         onClick={() => handleLoad(pipeline)}
-                        className="p-2 text-blue-600 hover:bg-blue-50 rounded"
                         title="Load pipeline"
                       >
                         <Play className="w-4 h-4" />
-                      </button>
-                      <button
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        size="icon"
                         onClick={() => handleStartEdit(pipeline)}
-                        className="p-2 text-gray-600 hover:bg-gray-50 rounded"
                         title="Rename pipeline"
                       >
                         <Edit2 className="w-4 h-4" />
-                      </button>
-                      <button
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        size="icon"
                         onClick={() => handleDelete(pipeline.id)}
-                        className="p-2 text-red-600 hover:bg-red-50 rounded"
                         title="Delete pipeline"
+                        className="text-red-600 hover:text-red-700 hover:bg-red-50"
                       >
                         <Trash2 className="w-4 h-4" />
-                      </button>
+                      </Button>
                     </div>
                   </div>
                 </div>
@@ -162,10 +183,12 @@ export const PipelineManager: React.FC<PipelineManagerProps> = ({ isOpen, onClos
             </div>
           )}
         </div>
-      </div>
-    </div>
+      </DialogContent>
+    </Dialog>
   );
 };
+
+
 
 
 

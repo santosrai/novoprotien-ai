@@ -103,6 +103,29 @@ A molecular visualization application integrating MolStar viewer with AI-powered
 - `fold residues 100-200 from chain A` → Fold subsequence
 - `fold MVLSEGEWQL...` → Fold user-provided sequence
 
+### OpenFold2 Integration Details:
+**OpenFold2** structure prediction via NVIDIA NIM (manual agent selection, no auto-route).
+
+**New Components Added**:
+- `OpenFold2Dialog.tsx`: Dialog for sequence input, optional MSA (a3m) and template (hhr) upload
+- `openfold2_client.py`: NVIDIA OpenFold2 NIM API client (synchronous prediction)
+- `openfold2.py`: Server handler for blocking prediction requests
+- `OpenFold2ErrorHandler`: Dedicated error handling for OpenFold2
+
+**Agent System**:
+- `openfold2-agent` in registry (manual selection only)
+- Returns `{"action": "open_openfold2_dialog"}` to open dialog
+
+**API Endpoints**:
+- `POST /api/openfold2/predict`: Blocking structure prediction (sequence, optional MSA/template)
+- `GET /api/openfold2/result/{job_id}`: Download result PDB
+
+**Features**:
+- Sequence-only or sequence + optional MSA (a3m) + template (hhr)
+- Max 1000 residues (suggest AlphaFold2 for longer)
+- Same NVCF_RUN_KEY as AlphaFold2/RFdiffusion
+- Pipeline canvas node: `openfold2_node`
+
 ### RFdiffusion Integration Details:
 **Branch**: `feature/rf-diffusion`
 
@@ -160,7 +183,8 @@ src/components/pipeline-canvas/
 │   ├── input_node/node.json
 │   ├── rfdiffusion_node/node.json
 │   ├── proteinmpnn_node/node.json
-│   └── alphafold_node/node.json
+│   ├── alphafold_node/node.json
+│   └── openfold2_node/node.json
 ├── types/index.ts            # TypeScript types
 ├── store/pipelineStore.ts    # Zustand store
 └── utils/
@@ -181,6 +205,7 @@ src/components/pipeline-canvas/
 - `rfdiffusion_node`: De novo backbone design
 - `proteinmpnn_node`: Sequence design
 - `alphafold_node`: Structure prediction
+- `openfold2_node`: OpenFold2 structure prediction (≤1000 residues)
 
 **Usage**:
 ```typescript
@@ -191,7 +216,7 @@ import { PipelineCanvas, usePipelineStore } from './components/pipeline-canvas';
 **New Components Added**:
 - `ErrorDisplay.tsx`: Rich error presentation with expandable details
 - `ErrorDashboard.tsx`: Comprehensive error monitoring and analytics dashboard
-- `errorHandler.ts`: Structured error classification and user-friendly messaging (AlphaFold & RFdiffusion)
+- `errorHandler.ts`: Structured error classification and user-friendly messaging (AlphaFold, RFdiffusion, OpenFold2)
 - `errorLogger.ts`: Advanced error logging, metrics, and monitoring
 
 **Error Architecture Features**:

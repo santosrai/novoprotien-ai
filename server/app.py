@@ -3,7 +3,7 @@ import os
 import traceback
 import time
 import json
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -33,50 +33,66 @@ if api_key:
 else:
     print("Warning: ANTHROPIC_API_KEY not found in environment")
 
-nvidia_key = os.getenv('NVCF_RUN_KEY')
+nvidia_key = (os.getenv('NVCF_RUN_KEY') or "").strip()
 if nvidia_key:
     print(f"NVCF_RUN_KEY loaded: {nvidia_key[:20]}...")
 else:
-    print("Warning: NVCF_RUN_KEY not found in environment")
+    print("Warning: NVCF_RUN_KEY not found or empty (AlphaFold/RFdiffusion will fail)")
 
-from fastapi import FastAPI, Request, UploadFile, File, HTTPException
+from fastapi import FastAPI, Request, UploadFile, File, HTTPException, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from slowapi import Limiter
 from slowapi.util import get_remote_address
 from slowapi.middleware import SlowAPIMiddleware
 from slowapi.errors import RateLimitExceeded
-from fastapi.responses import JSONResponse, FileResponse, StreamingResponse
+from fastapi.responses import JSONResponse, FileResponse
 
 try:
-    from .agents import agents, list_agents
-    from .router_graph import init_router, routerGraph
-    from .runner import run_agent, run_agent_stream
-    from .utils import log_line, spell_fix
-    from .alphafold_handler import alphafold_handler
-    from .rfdiffusion_handler import rfdiffusion_handler
-    from .proteinmpnn_handler import proteinmpnn_handler
-    from .pdb_storage import save_uploaded_pdb, get_uploaded_pdb
-    from .session_file_tracker import associate_file_with_session, get_session_files
+    from .agents.registry import agents, list_agents
+    from .agents.router import init_router, routerGraph
+    from .agents.runner import run_agent
+    from .infrastructure.utils import log_line, spell_fix
+    from .agents.handlers.alphafold import alphafold_handler
+    from .agents.handlers.rfdiffusion import rfdiffusion_handler
+    from .agents.handlers.proteinmpnn import proteinmpnn_handler
+    from .agents.handlers.openfold2 import openfold2_handler
+    from .domain.storage.pdb_storage import save_uploaded_pdb, get_uploaded_pdb
+    from .domain.storage.file_access import list_user_files, verify_file_ownership, get_file_metadata, get_user_file_path
+    from .database.db import get_db
+    from .api.middleware.auth import get_current_user
+    from .api.routes import auth, chat_sessions, chat_messages, pipelines, credits, reports, admin, three_d_canvases, attachments
 except ImportError:
     # When running directly (not as module)
     import sys
     current_dir = os.path.dirname(os.path.abspath(__file__))
     if current_dir not in sys.path:
         sys.path.insert(0, current_dir)
-    from agents import agents, list_agents
-    from router_graph import init_router, routerGraph
-    from runner import run_agent, run_agent_stream
-    from utils import log_line, spell_fix
-    from alphafold_handler import alphafold_handler
-    from rfdiffusion_handler import rfdiffusion_handler
-    from proteinmpnn_handler import proteinmpnn_handler
-    from pdb_storage import save_uploaded_pdb, get_uploaded_pdb
-    from session_file_tracker import associate_file_with_session, get_session_files
+    from agents.registry import agents, list_agents
+    from agents.router import init_router, routerGraph
+    from agents.runner import run_agent
+    from infrastructure.utils import log_line, spell_fix
+    from agents.handlers.alphafold import alphafold_handler
+    from agents.handlers.rfdiffusion import rfdiffusion_handler
+    from agents.handlers.proteinmpnn import proteinmpnn_handler
+    from agents.handlers.openfold2 import openfold2_handler
+    from domain.storage.pdb_storage import save_uploaded_pdb, get_uploaded_pdb
+    from domain.storage.file_access import list_user_files, verify_file_ownership, get_file_metadata, get_user_file_path
+    from database.db import get_db
+    from api.middleware.auth import get_current_user
+    from api.routes import auth, chat_sessions, chat_messages, pipelines, credits, reports, admin, three_d_canvases, attachments
 
 DEBUG_API = os.getenv("DEBUG_API", "0") == "1"
 
+
+def _rate_limit_key(request: Request) -> str:
+    """In debug mode, use unique key per request to avoid localhost rate limit exhaustion."""
+    if DEBUG_API:
+        return f"dev-{id(request)}"
+    return get_remote_address(request)
+
+
 app = FastAPI()
-limiter = Limiter(key_func=get_remote_address)
+limiter = Limiter(key_func=_rate_limit_key)
 app.state.limiter = limiter
 app.add_middleware(SlowAPIMiddleware)
 
@@ -93,6 +109,74 @@ app.add_middleware(
 @app.on_event("startup")
 async def startup():
     await init_router(list(agents.values()))
+    
+    # Suppress harmless Windows asyncio connection reset errors
+    # These occur when clients close connections abruptly (browser refresh, tab close, etc.)
+    import asyncio
+    import logging
+    import sys
+    
+    # Configure logging to filter out Windows connection reset errors
+    class ConnectionResetFilter(logging.Filter):
+        """Filter out harmless Windows connection reset errors."""
+        def filter(self, record):
+            # Suppress ConnectionResetError messages on Windows
+            if sys.platform == 'win32':
+                msg = record.getMessage()
+                if 'ConnectionResetError' in msg or 'WinError 10054' in msg:
+                    if '_call_connection_lost' in msg or '_ProactorBasePipeTransport' in msg:
+                        return False  # Suppress this log
+            return True
+    
+    # Add filter to asyncio logger
+    asyncio_logger = logging.getLogger('asyncio')
+    asyncio_logger.addFilter(ConnectionResetFilter())
+    
+    def handle_exception(loop, context):
+        """Handle asyncio exceptions, suppressing harmless connection reset errors on Windows."""
+        exception = context.get('exception')
+        # Suppress Windows connection reset errors (WinError 10054)
+        # These are harmless and occur when clients close connections abruptly
+        if isinstance(exception, ConnectionResetError):
+            # Check if it's the specific Windows error code
+            if hasattr(exception, 'winerror') and exception.winerror == 10054:
+                # Suppress this specific error - it's harmless
+                return
+            # Also suppress generic ConnectionResetError on Windows
+            if sys.platform == 'win32':
+                return
+        # Log other exceptions normally
+        if loop.default_exception_handler:
+            loop.default_exception_handler(context)
+        else:
+            # Fallback: log to Python logger
+            logging.error(f"Unhandled exception in event loop: {context}")
+    
+    # Set custom exception handler for the event loop
+    try:
+        loop = asyncio.get_running_loop()
+        loop.set_exception_handler(handle_exception)
+    except RuntimeError:
+        # No running loop yet, set it when we get one
+        try:
+            loop = asyncio.get_event_loop()
+            if loop.is_running():
+                loop.set_exception_handler(handle_exception)
+        except Exception:
+            # If we can't set the handler, continue anyway
+            pass
+
+# Register API routers
+app.include_router(auth.router)
+app.include_router(chat_sessions.router)
+app.include_router(chat_messages.router)
+app.include_router(pipelines.router)
+app.include_router(credits.router)
+app.include_router(reports.router)
+app.include_router(admin.router)
+app.include_router(three_d_canvases.router)
+app.include_router(three_d_canvases.user_router)
+app.include_router(attachments.router)
 
 
 @app.get("/api/health")
@@ -102,7 +186,7 @@ def health() -> Dict[str, Any]:
 
 @app.post("/api/logs/error")
 @limiter.limit("100/minute")
-async def log_error(request: Request):
+async def log_error(request: Request, user: Dict[str, Any] = Depends(get_current_user)):
     """Accept error logs from frontend"""
     try:
         body = await request.json()
@@ -119,7 +203,7 @@ def _rate_limit_handler(request: Request, exc: RateLimitExceeded):
 
 
 @app.get("/api/agents")
-def get_agents() -> Dict[str, Any]:
+def get_agents(user: Dict[str, Any] = Depends(get_current_user)) -> Dict[str, Any]:
     return {"agents": list_agents()}
 
 
@@ -159,8 +243,8 @@ def _load_models_config() -> Dict[str, Any]:
 
 
 @app.get("/api/models")
-@limiter.limit("30/minute")
-async def get_models(request: Request) -> Dict[str, Any]:
+@limiter.limit("120/minute")  # Read-only config; allow more for multi-tab/navigation
+async def get_models(request: Request, user: Dict[str, Any] = Depends(get_current_user)) -> Dict[str, Any]:
     """Get available models from configuration file."""
     config = _load_models_config()
     models = config.get("models", [])
@@ -174,7 +258,7 @@ async def get_models(request: Request) -> Dict[str, Any]:
 
 @app.post("/api/agents/invoke")
 @limiter.limit("30/minute")
-async def invoke(request: Request):
+async def invoke(request: Request, user: Dict[str, Any] = Depends(get_current_user)):
     try:
         body = await request.json()
         agent_id = body.get("agentId")
@@ -200,7 +284,7 @@ async def invoke(request: Request):
 
 @app.post("/api/agents/route")
 @limiter.limit("60/minute")
-async def route(request: Request):
+async def route(request: Request, user: Dict[str, Any] = Depends(get_current_user)):
     try:
         body = await request.json()
         input_text = body.get("input")
@@ -211,6 +295,47 @@ async def route(request: Request):
         # Check for manual agent override
         manual_agent_id = body.get("agentId")
         model_override = body.get("model")
+        pipeline_id = body.get("pipeline_id")  # Extract pipeline_id early for router
+        
+        # Fetch pipeline data if pipeline_id is provided and user is authenticated
+        pipeline_data = None
+        if pipeline_id:
+            if user:
+                try:
+                    from .database.db import get_db
+                    import json
+                    with get_db() as conn:
+                        row = conn.execute(
+                            "SELECT * FROM pipelines WHERE id = ? AND user_id = ?",
+                            (pipeline_id, user["id"]),
+                        ).fetchone()
+                        if row:
+                            # Parse pipeline JSON
+                            pipeline_data = json.loads(row["pipeline_json"])
+                            pipeline_data["id"] = row["id"]
+                            pipeline_data["name"] = row["name"]
+                            pipeline_data["description"] = row["description"]
+                            pipeline_data["status"] = row["status"]
+                            pipeline_data["created_at"] = row["created_at"]
+                            pipeline_data["updated_at"] = row["updated_at"]
+                            log_line("agent_route:pipeline_fetched", {
+                                "pipeline_id": pipeline_id,
+                                "pipeline_name": pipeline_data.get("name"),
+                                "node_count": len(pipeline_data.get("nodes", [])),
+                                "has_user": True,
+                            })
+                        else:
+                            log_line("agent_route:pipeline_not_found", {
+                                "pipeline_id": pipeline_id,
+                                "user_id": user["id"],
+                            })
+                except Exception as e:
+                    log_line("agent_route:pipeline_fetch_error", {
+                        "pipeline_id": pipeline_id,
+                        "error": str(e),
+                        "traceback": traceback.format_exc(),
+                    })
+                    # Continue without pipeline data if fetch fails
         
         # Log the input for debugging
         log_line("agent_route_input", {
@@ -218,6 +343,7 @@ async def route(request: Request):
             "input_length": len(input_text),
             "has_selection": bool(body.get("selection")),
             "has_code": bool(body.get("currentCode")),
+            "has_pipeline_id": bool(pipeline_id),
             "manual_agent": manual_agent_id,
             "model_override": model_override
         })
@@ -237,7 +363,7 @@ async def route(request: Request):
                     "selections": body.get("selections"),
                     "currentCode": body.get("currentCode"),
                     "history": body.get("history"),
-                    "uploadedFileId": body.get("uploadedFileId"),
+                    "pipeline_id": pipeline_id,  # Pass pipeline_id to router
                 }
             )
             agent_id = routed.get("routedAgentId")
@@ -261,28 +387,6 @@ async def route(request: Request):
             "model_override": model_override
         })
         
-        # Load uploaded file metadata if uploadedFileId is provided
-        uploaded_file_context = None
-        uploaded_file_id = body.get("uploadedFileId")
-        if uploaded_file_id:
-            try:
-                file_metadata = get_uploaded_pdb(uploaded_file_id)
-                if file_metadata:
-                    uploaded_file_context = {
-                        "file_id": uploaded_file_id,
-                        "filename": file_metadata.get("filename"),
-                        "atoms": file_metadata.get("atoms"),
-                        "chains": file_metadata.get("chains", []),
-                        "file_url": f"/api/upload/pdb/{uploaded_file_id}",
-                    }
-                    log_line("agent_route:uploaded_file", {
-                        "file_id": uploaded_file_id,
-                        "filename": file_metadata.get("filename"),
-                        "atoms": file_metadata.get("atoms"),
-                    })
-            except Exception as e:
-                log_line("agent_route:uploaded_file_error", {"error": str(e), "file_id": uploaded_file_id})
-        
         res = await run_agent(
             agent=agents[agent_id],
             user_text=input_text,
@@ -291,7 +395,9 @@ async def route(request: Request):
             selection=body.get("selection"),
             selections=body.get("selections"),
             current_structure_origin=body.get("currentStructureOrigin"),
-            uploaded_file_context=uploaded_file_context,
+            uploaded_file_context=body.get("uploadedFile"),  # Pass uploaded file context if available
+            pipeline_id=pipeline_id,  # Pass pipeline_id to agent
+            pipeline_data=pipeline_data,  # Pass fetched pipeline data to agent
             model_override=model_override,
         )
         
@@ -312,153 +418,19 @@ async def route(request: Request):
         return JSONResponse(status_code=500, content=content)
 
 
-@app.post("/api/agents/route-stream")
-@limiter.limit("60/minute")
-async def route_stream(request: Request):
-    """Streaming endpoint for thinking models that yields incremental updates."""
-    try:
-        body = await request.json()
-        input_text = body.get("input")
-        if not isinstance(input_text, str):
-            return JSONResponse(status_code=400, content={"error": "invalid_input"})
-        input_text = spell_fix(input_text)
-
-        # Check for manual agent override
-        manual_agent_id = body.get("agentId")
-        model_override = body.get("model")
-        
-        # Log the input for debugging
-        log_line("agent_route_stream_input", {
-            "input": input_text,
-            "input_length": len(input_text),
-            "has_selection": bool(body.get("selection")),
-            "has_code": bool(body.get("currentCode")),
-            "manual_agent": manual_agent_id,
-            "model_override": model_override
-        })
-        
-        # If agentId is provided, skip routing and use specified agent
-        if manual_agent_id:
-            if manual_agent_id not in agents:
-                return JSONResponse(status_code=400, content={"error": "invalid_agent_id", "agentId": manual_agent_id})
-            agent_id = manual_agent_id
-            reason = f"Manually selected: {agents[agent_id].get('name', agent_id)}"
-        else:
-            # Use router to determine agent
-            routed = await routerGraph.ainvoke(
-                {
-                    "input": input_text,
-                    "selection": body.get("selection"),
-                    "selections": body.get("selections"),
-                    "currentCode": body.get("currentCode"),
-                    "history": body.get("history"),
-                    "uploadedFileId": body.get("uploadedFileId"),
-                }
-            )
-            agent_id = routed.get("routedAgentId")
-            reason = routed.get("reason")
-        
-        log_line("agent_route_stream_result", {
-            "input": input_text,
-            "agentId": agent_id,
-            "reason": reason,
-            "manual_override": bool(manual_agent_id)
-        })
-        
-        if not agent_id:
-            return JSONResponse(status_code=400, content={"error": "router_no_decision", "reason": reason})
-        
-        log_line("agent_stream_executing", {
-            "agentId": agent_id,
-            "agent_kind": agents[agent_id].get("kind"),
-            "input": input_text,
-            "model_override": model_override
-        })
-        
-        # Load uploaded file metadata if uploadedFileId is provided
-        uploaded_file_context = None
-        uploaded_file_id = body.get("uploadedFileId")
-        if uploaded_file_id:
-            try:
-                file_metadata = get_uploaded_pdb(uploaded_file_id)
-                if file_metadata:
-                    uploaded_file_context = {
-                        "file_id": uploaded_file_id,
-                        "filename": file_metadata.get("filename"),
-                        "atoms": file_metadata.get("atoms"),
-                        "chains": file_metadata.get("chains", []),
-                        "file_url": f"/api/upload/pdb/{uploaded_file_id}",
-                    }
-                    log_line("agent_route_stream:uploaded_file", {
-                        "file_id": uploaded_file_id,
-                        "filename": file_metadata.get("filename"),
-                        "atoms": file_metadata.get("atoms"),
-                    })
-            except Exception as e:
-                log_line("agent_route_stream:uploaded_file_error", {"error": str(e), "file_id": uploaded_file_id})
-        
-        async def generate_stream():
-            try:
-                async for chunk in run_agent_stream(
-                    agent=agents[agent_id],
-                    user_text=input_text,
-                    current_code=body.get("currentCode"),
-                    history=body.get("history"),
-                    selection=body.get("selection"),
-                    selections=body.get("selections"),
-                    current_structure_origin=body.get("currentStructureOrigin"),
-                    uploaded_file_context=uploaded_file_context,
-                    model_override=model_override,
-                ):
-                    # Format chunk as JSON line
-                    chunk_data = {
-                        "type": chunk["type"],
-                        "data": chunk["data"]
-                    }
-                    # Add agentId and reason to complete message
-                    if chunk["type"] == "complete":
-                        chunk_data["data"]["agentId"] = agent_id
-                        chunk_data["data"]["reason"] = reason
-                    
-                    yield json.dumps(chunk_data) + "\n"
-            except Exception as e:
-                log_line("agent_stream_failed", {"error": str(e), "trace": traceback.format_exc()})
-                error_chunk = {
-                    "type": "error",
-                    "data": {
-                        "error": "agent_stream_failed",
-                        "detail": str(e) if DEBUG_API else None
-                    }
-                }
-                yield json.dumps(error_chunk) + "\n"
-        
-        return StreamingResponse(
-            generate_stream(),
-            media_type="application/x-ndjson"  # Newline-delimited JSON
-        )
-    except Exception as e:
-        log_line("agent_route_stream_failed", {"error": str(e), "trace": traceback.format_exc()})
-        content = {"error": "agent_route_stream_failed"}
-        if DEBUG_API:
-            content["detail"] = str(e)
-        return JSONResponse(status_code=500, content=content)
-
-
 # AlphaFold API endpoints
 @app.post("/api/alphafold/fold")
 @limiter.limit("5/minute")
-async def alphafold_fold(request: Request):
+async def alphafold_fold(request: Request, user: Dict[str, Any] = Depends(get_current_user)):
     try:
         body = await request.json()
         sequence = body.get("sequence")
         parameters = body.get("parameters", {})
         job_id = body.get("jobId")
-        session_id = body.get("sessionId")  # Optional session ID
         
         # Comprehensive logging
         log_line("alphafold_request", {
             "jobId": job_id,
-            "sessionId": session_id,
             "sequence_length": len(sequence) if sequence else 0,
             "sequence_preview": sequence[:50] if sequence else None,
             "parameters": parameters,
@@ -484,7 +456,6 @@ async def alphafold_fold(request: Request):
         # Queue background job and return 202 Accepted immediately
         log_line("alphafold_submitting", {
             "jobId": job_id,
-            "sessionId": session_id,
             "handler": "alphafold_handler.submit_folding_job (background)"
         })
         # Mark job as queued
@@ -499,8 +470,7 @@ async def alphafold_fold(request: Request):
             alphafold_handler.submit_folding_job({
                 "sequence": sequence,
                 "parameters": parameters,
-                "jobId": job_id,
-                "sessionId": session_id,  # Pass session ID to handler
+                "jobId": job_id
             })
         )
 
@@ -529,7 +499,7 @@ async def alphafold_fold(request: Request):
 
 @app.get("/api/alphafold/status/{job_id}")
 @limiter.limit("30/minute")
-async def alphafold_status(request: Request, job_id: str):
+async def alphafold_status(request: Request, job_id: str, user: Dict[str, Any] = Depends(get_current_user)):
     try:
         status = alphafold_handler.get_job_status(job_id)
         return status
@@ -543,7 +513,7 @@ async def alphafold_status(request: Request, job_id: str):
 
 @app.post("/api/alphafold/cancel/{job_id}")
 @limiter.limit("10/minute")
-async def alphafold_cancel(request: Request, job_id: str):
+async def alphafold_cancel(request: Request, job_id: str, user: Dict[str, Any] = Depends(get_current_user)):
     try:
         result = alphafold_handler.cancel_job(job_id)
         return result
@@ -555,39 +525,130 @@ async def alphafold_cancel(request: Request, job_id: str):
         return JSONResponse(status_code=500, content=content)
 
 
+# AlphaFold3 API endpoints
+@app.post("/api/alphafold3/fold")
+@limiter.limit("5/minute")
+async def alphafold3_fold(request: Request, user: Dict[str, Any] = Depends(get_current_user)):
+    try:
+        body = await request.json()
+        entities = body.get("entities", [])
+        msa_files_map = body.get("msaFilesMap", {})
+        job_id = body.get("jobId")
+        
+        log_line("alphafold3_request", {
+            "jobId": job_id,
+            "entity_count": len(entities),
+            "entity_types": [e.get("type") for e in entities],
+            "client_ip": get_remote_address(request)
+        })
+        
+        if not entities or not job_id:
+            log_line("alphafold3_validation_failed", {
+                "missing_entities": not entities,
+                "missing_jobId": not job_id,
+                "jobId": job_id
+            })
+            return JSONResponse(
+                status_code=400,
+                content={
+                    "status": "error",
+                    "error": "Missing entities or jobId",
+                    "errorCode": "MISSING_PARAMETERS",
+                    "userMessage": "Required parameters are missing"
+                }
+            )
+        
+        # Queue background job and return 202 Accepted immediately
+        log_line("alphafold3_submitting", {
+            "jobId": job_id,
+            "handler": "alphafold_handler.submit_alphafold3_job (background)"
+        })
+        
+        try:
+            alphafold_handler.active_jobs[job_id] = "queued"
+        except Exception:
+            pass
+        
+        # Run the folding job asynchronously
+        import asyncio as _asyncio
+        _asyncio.create_task(
+            alphafold_handler.submit_alphafold3_job({
+                "entities": entities,
+                "msaFilesMap": msa_files_map,
+                "jobId": job_id,
+                "sessionId": body.get("sessionId"),
+                "userId": body.get("userId")
+            })
+        )
+        
+        return JSONResponse(
+            status_code=202,
+            content={
+                "status": "accepted",
+                "jobId": job_id,
+                "message": "AlphaFold3 folding job accepted. Poll /api/alphafold3/status/{job_id} for updates."
+            }
+        )
+        
+    except Exception as e:
+        log_line("alphafold3_fold_failed", {"error": str(e), "trace": traceback.format_exc()})
+        return JSONResponse(
+            status_code=500,
+            content={
+                "status": "error",
+                "error": "",
+                "errorCode": "INTERNAL_ERROR",
+                "userMessage": "An unexpected error occurred",
+                "technicalMessage": str(e) if DEBUG_API else "Internal server error"
+            }
+        )
+
+
+@app.get("/api/alphafold3/status/{job_id}")
+@limiter.limit("30/minute")
+async def alphafold3_status(request: Request, job_id: str, user: Dict[str, Any] = Depends(get_current_user)):
+    try:
+        status = alphafold_handler.get_job_status(job_id)
+        return status
+    except Exception as e:
+        log_line("alphafold3_status_failed", {"error": str(e), "trace": traceback.format_exc()})
+        content = {"error": "alphafold3_status_failed"}
+        if DEBUG_API:
+            content["detail"] = str(e)
+        return JSONResponse(status_code=500, content=content)
+
+
+@app.post("/api/alphafold3/cancel/{job_id}")
+@limiter.limit("10/minute")
+async def alphafold3_cancel(request: Request, job_id: str, user: Dict[str, Any] = Depends(get_current_user)):
+    try:
+        result = alphafold_handler.cancel_job(job_id)
+        return result
+    except Exception as e:
+        log_line("alphafold3_cancel_failed", {"error": str(e), "trace": traceback.format_exc()})
+        content = {"error": "alphafold3_cancel_failed"}
+        if DEBUG_API:
+            content["detail"] = str(e)
+        return JSONResponse(status_code=500, content=content)
+
+
 # PDB upload utilities -----------------------------------------------------
 
 
 @app.post("/api/upload/pdb")
 @limiter.limit("20/minute")
-async def upload_pdb(request: Request, file: UploadFile = File(...)):
+async def upload_pdb(
+    request: Request,
+    file: UploadFile = File(...),
+    user: Dict[str, Any] = Depends(get_current_user)
+):
+    _ = request
     try:
-        # Try to get session_id from form data or query params
-        form_data = await request.form()
-        session_id = form_data.get("session_id") or request.query_params.get("session_id")
-        
         contents = await file.read()
-        metadata = save_uploaded_pdb(file.filename, contents)
-        
-        # Associate file with session if session_id provided
-        if session_id:
-            try:
-                associate_file_with_session(
-                    session_id=str(session_id),
-                    file_id=metadata["file_id"],
-                    file_type="upload",
-                    file_path=metadata.get("stored_path", ""),
-                    filename=metadata.get("filename", file.filename),
-                    size=metadata.get("size", len(contents)),
-                    metadata={
-                        "atoms": metadata.get("atoms"),
-                        "chains": metadata.get("chains", []),
-                    },
-                )
-            except Exception as e:
-                # Log but don't fail the upload if association fails
-                log_line("file_association_failed", {"error": str(e), "session_id": session_id})
-        
+        user_id = user.get("id")
+        if not user_id:
+            raise HTTPException(status_code=401, detail="User ID not found")
+        metadata = save_uploaded_pdb(file.filename, contents, user_id)
         log_line(
             "pdb_upload_success",
             {
@@ -595,7 +656,6 @@ async def upload_pdb(request: Request, file: UploadFile = File(...)):
                 "file_id": metadata["file_id"],
                 "size": metadata.get("size"),
                 "chains": metadata.get("chains"),
-                "session_id": session_id,
             },
         )
         return {
@@ -620,9 +680,9 @@ async def upload_pdb(request: Request, file: UploadFile = File(...)):
 
 @app.get("/api/upload/pdb/{file_id}")
 @limiter.limit("30/minute")
-async def download_uploaded_pdb(request: Request, file_id: str):
+async def download_uploaded_pdb(request: Request, file_id: str, user: Dict[str, Any] = Depends(get_current_user)):
     _ = request
-    metadata = get_uploaded_pdb(file_id)
+    metadata = get_uploaded_pdb(file_id, user["id"])
     if not metadata:
         raise HTTPException(status_code=404, detail="Uploaded file not found")
     return FileResponse(
@@ -632,233 +692,217 @@ async def download_uploaded_pdb(request: Request, file_id: str):
     )
 
 
-# Session file management endpoints -----------------------------------------
+# User file management endpoints -----------------------------------------
 
 
-@app.get("/api/sessions/{session_id}/files")
+@app.get("/api/files")
 @limiter.limit("30/minute")
-async def get_session_files_endpoint(request: Request, session_id: str):
-    """List all PDB files associated with a session."""
+async def get_user_files_endpoint(request: Request, user: Dict[str, Any] = Depends(get_current_user)):
+    """List all files for the current user. Files are already user-scoped in the database."""
     _ = request
     try:
-        log_line("session_files_request", {"session_id": session_id})
-        files = get_session_files(session_id)
-        log_line("session_files_loaded", {"session_id": session_id, "file_count": len(files)})
+        log_line("user_files_request", {"user_id": user["id"]})
+        base_dir = Path(__file__).parent
+        all_files = []
         
-        # Enrich file data with download URLs and verify file existence
-        enriched_files = []
-        for file_entry in files:
-            file_type = file_entry.get("type", "")
-            file_id = file_entry.get("file_id", "")
-            file_path = file_entry.get("file_path", "")
+        # Get all user files (already filtered by user_id in list_user_files)
+        user_files = list_user_files(user["id"])
+        log_line("user_files_raw", {"user_id": user["id"], "count": len(user_files)})
+        
+        for file_entry in user_files:
+            file_type = file_entry.get("file_type", "")
+            file_id = file_entry.get("id", "")
+            stored_path_str = file_entry.get("stored_path", "")
+            filename = file_entry.get("original_filename", f"{file_id}")
             
-            # Determine download URL based on file type
-            if file_type == "upload":
-                download_url = f"/api/upload/pdb/{file_id}"
-            elif file_type == "alphafold":
-                # Check if file exists in server/alphafold_results (like proteinmpnn_results)
-                filename = file_entry.get("filename", "")
-                stored_path = file_entry.get("file_path", "")
-                
-                # Files are stored relative to server directory
-                if stored_path and not Path(stored_path).is_absolute():
-                    result_path = Path(__file__).parent / stored_path
-                elif stored_path and Path(stored_path).is_absolute():
-                    result_path = Path(stored_path)
-                else:
-                    # Fallback to standard location
-                    result_path = Path(__file__).parent / "alphafold_results" / filename
-                
-                if result_path.exists():
-                    download_url = f"/api/sessions/{session_id}/files/{file_id}/download"
-                else:
-                    log_line("alphafold_file_not_found", {
-                        "session_id": session_id,
-                        "file_id": file_id,
-                        "filename": filename,
-                        "expected_path": str(result_path),
-                        "stored_path": stored_path
-                    })
-                    continue  # Skip if file doesn't exist
-            elif file_type == "rfdiffusion":
-                # Check if file exists in server/rfdiffusion_results (like proteinmpnn_results)
-                filename = file_entry.get("filename", "")
-                stored_path = file_entry.get("file_path", "")
-                
-                # Files are stored relative to server directory
-                if stored_path and not Path(stored_path).is_absolute():
-                    result_path = Path(__file__).parent / stored_path
-                elif stored_path and Path(stored_path).is_absolute():
-                    result_path = Path(stored_path)
-                else:
-                    # Fallback to standard location
-                    result_path = Path(__file__).parent / "rfdiffusion_results" / filename
-                
-                if result_path.exists():
-                    download_url = f"/api/sessions/{session_id}/files/{file_id}/download"
-                else:
-                    log_line("rfdiffusion_file_not_found", {
-                        "session_id": session_id,
-                        "file_id": file_id,
-                        "filename": filename,
-                        "expected_path": str(result_path),
-                        "stored_path": stored_path
-                    })
-                    continue  # Skip if file doesn't exist
-            else:
-                download_url = f"/api/sessions/{session_id}/files/{file_id}/download"
+            log_line("processing_file", {
+                "file_id": file_id,
+                "file_type": file_type,
+                "stored_path": stored_path_str,
+                "filename": filename
+            })
             
-            enriched_file = {
-                **file_entry,
-                "download_url": download_url,
-            }
-            enriched_files.append(enriched_file)
+            if stored_path_str:
+                file_path = base_dir / stored_path_str
+                file_exists = file_path.exists()
+                log_line("file_path_check", {
+                    "file_id": file_id,
+                    "stored_path": stored_path_str,
+                    "absolute_path": str(file_path),
+                    "exists": file_exists
+                })
+                
+                if file_exists:
+                    # Determine download URL based on file type
+                    if file_type == "upload":
+                        download_url = f"/api/upload/pdb/{file_id}"
+                    elif file_type == "proteinmpnn":
+                        download_url = f"/api/proteinmpnn/result/{file_id}"
+                    elif file_type == "openfold2":
+                        download_url = f"/api/openfold2/result/{file_id}"
+                    else:
+                        # For other types, use generic download endpoint
+                        download_url = f"/api/files/{file_id}/download"
+                    
+                    # Parse metadata if it's a JSON string
+                    metadata = file_entry.get("metadata", {})
+                    if isinstance(metadata, str):
+                        try:
+                            metadata = json.loads(metadata)
+                        except json.JSONDecodeError:
+                            metadata = {}
+                    
+                    file_size = file_entry.get("size", 0)
+                    if file_size == 0:
+                        try:
+                            file_size = file_path.stat().st_size
+                        except OSError:
+                            file_size = 0
+                    
+                    all_files.append({
+                        "file_id": file_id,
+                        "type": file_type,
+                        "filename": filename,
+                        "file_path": stored_path_str,
+                        "size": file_size,
+                        "download_url": download_url,
+                        "metadata": metadata,
+                    })
+                else:
+                    log_line("file_not_found", {
+                        "file_id": file_id,
+                        "expected_path": str(file_path)
+                    })
+        
+        log_line("user_files_loaded", {"user_id": user["id"], "file_count": len(all_files)})
         
         return {
             "status": "success",
-            "files": enriched_files,
+            "files": all_files,
         }
     except Exception as e:
-        log_line("session_files_list_failed", {"error": str(e), "trace": traceback.format_exc(), "session_id": session_id})
-        content = {"error": "Failed to list session files"}
+        log_line("user_files_list_failed", {"error": str(e), "trace": traceback.format_exc(), "user_id": user["id"]})
+        content = {"error": "Failed to list user files"}
         if DEBUG_API:
             content["detail"] = str(e)
         return JSONResponse(status_code=500, content=content)
 
 
-@app.get("/api/sessions/{session_id}/files/{file_id}")
+@app.get("/api/files/{file_id}/download")
 @limiter.limit("30/minute")
-async def get_session_file_content(request: Request, session_id: str, file_id: str):
-    """Get content of a specific file from a session."""
+async def download_user_file(request: Request, file_id: str, user: Dict[str, Any] = Depends(get_current_user)):
+    """Download a user file. Verifies ownership."""
     _ = request
     try:
-        files = get_session_files(session_id)
-        file_entry = next((f for f in files if f.get("file_id") == file_id), None)
+        # Get file path with ownership verification
+        file_path = get_user_file_path(file_id, user["id"])
         
-        if not file_entry:
-            raise HTTPException(status_code=404, detail="File not found in session")
+        # Get file metadata for filename
+        file_metadata = get_file_metadata(file_id, user["id"])
+        filename = file_metadata.get("original_filename", f"{file_id}.pdb") if file_metadata else f"{file_id}.pdb"
         
-        file_type = file_entry.get("type", "")
-        file_path = file_entry.get("file_path", "")
-        filename = file_entry.get("filename", "")
+        # Determine media type based on file extension
+        media_type = "chemical/x-pdb" if filename.lower().endswith(".pdb") else "application/octet-stream"
         
-        # Load file content based on type
-        if file_type == "upload":
-            metadata = get_uploaded_pdb(file_id)
-            if not metadata or not metadata.get("absolute_path"):
-                raise HTTPException(status_code=404, detail="Uploaded file not found")
-            file_path = metadata["absolute_path"]
-        elif file_type == "alphafold":
-            # Files are stored in server/alphafold_results (relative to server directory)
-            stored_path = file_entry.get("file_path", "")
-            if stored_path and not Path(stored_path).is_absolute():
-                result_path = Path(__file__).parent / stored_path
-            elif stored_path and Path(stored_path).is_absolute():
-                result_path = Path(stored_path)
-            else:
-                result_path = Path(__file__).parent / "alphafold_results" / filename
-            
-            if not result_path.exists():
-                raise HTTPException(status_code=404, detail="AlphaFold result file not found")
-            file_path = str(result_path)
-        elif file_type == "rfdiffusion":
-            # Files are stored in server/rfdiffusion_results (relative to server directory)
-            stored_path = file_entry.get("file_path", "")
-            if stored_path and not Path(stored_path).is_absolute():
-                result_path = Path(__file__).parent / stored_path
-            elif stored_path and Path(stored_path).is_absolute():
-                result_path = Path(stored_path)
-            else:
-                result_path = Path(__file__).parent / "rfdiffusion_results" / filename
-            
-            if not result_path.exists():
-                raise HTTPException(status_code=404, detail="RFdiffusion result file not found")
-            file_path = str(result_path)
-        else:
-            raise HTTPException(status_code=400, detail="Unknown file type")
-        
-        # Read and return file content
-        with open(file_path, "r", encoding="utf-8") as f:
-            content = f.read()
-        
-        return {
-            "status": "success",
-            "file_id": file_id,
-            "filename": filename,
-            "type": file_type,
-            "content": content,
-            "size": len(content),
-        }
-    except HTTPException:
-        raise
-    except Exception as e:
-        log_line("session_file_content_failed", {"error": str(e), "trace": traceback.format_exc(), "session_id": session_id, "file_id": file_id})
-        content = {"error": "Failed to get file content"}
-        if DEBUG_API:
-            content["detail"] = str(e)
-        return JSONResponse(status_code=500, content=content)
-
-
-@app.get("/api/sessions/{session_id}/files/{file_id}/download")
-@limiter.limit("30/minute")
-async def download_session_file(request: Request, session_id: str, file_id: str):
-    """Download a file from a session."""
-    _ = request
-    try:
-        files = get_session_files(session_id)
-        file_entry = next((f for f in files if f.get("file_id") == file_id), None)
-        
-        if not file_entry:
-            raise HTTPException(status_code=404, detail="File not found in session")
-        
-        file_type = file_entry.get("type", "")
-        filename = file_entry.get("filename", "")
-        
-        # Determine file path based on type
-        if file_type == "upload":
-            metadata = get_uploaded_pdb(file_id)
-            if not metadata or not metadata.get("absolute_path"):
-                raise HTTPException(status_code=404, detail="Uploaded file not found")
-            file_path = metadata["absolute_path"]
-        elif file_type == "alphafold":
-            # Files are stored in server/alphafold_results (relative to server directory)
-            stored_path = file_entry.get("file_path", "")
-            if stored_path and not Path(stored_path).is_absolute():
-                result_path = Path(__file__).parent / stored_path
-            elif stored_path and Path(stored_path).is_absolute():
-                result_path = Path(stored_path)
-            else:
-                result_path = Path(__file__).parent / "alphafold_results" / filename
-            
-            if not result_path.exists():
-                raise HTTPException(status_code=404, detail="AlphaFold result file not found")
-            file_path = str(result_path)
-        elif file_type == "rfdiffusion":
-            # Files are stored in server/rfdiffusion_results (relative to server directory)
-            stored_path = file_entry.get("file_path", "")
-            if stored_path and not Path(stored_path).is_absolute():
-                result_path = Path(__file__).parent / stored_path
-            elif stored_path and Path(stored_path).is_absolute():
-                result_path = Path(stored_path)
-            else:
-                result_path = Path(__file__).parent / "rfdiffusion_results" / filename
-            
-            if not result_path.exists():
-                raise HTTPException(status_code=404, detail="RFdiffusion result file not found")
-            file_path = str(result_path)
-        else:
-            raise HTTPException(status_code=400, detail="Unknown file type")
+        log_line("file_downloaded", {"file_id": file_id, "user_id": user["id"], "path": str(file_path)})
         
         return FileResponse(
             file_path,
-            media_type="chemical/x-pdb",
+            media_type=media_type,
             filename=filename,
         )
     except HTTPException:
         raise
     except Exception as e:
-        log_line("session_file_download_failed", {"error": str(e), "trace": traceback.format_exc(), "session_id": session_id, "file_id": file_id})
+        log_line("file_download_failed", {"error": str(e), "trace": traceback.format_exc()})
         raise HTTPException(status_code=500, detail="Failed to download file")
+
+
+@app.get("/api/files/{file_id}")
+@limiter.limit("30/minute")
+async def get_user_file_content(request: Request, file_id: str, user: Dict[str, Any] = Depends(get_current_user)):
+    """Get file content as JSON (for editor/viewer). Verifies ownership."""
+    _ = request
+    try:
+        # Get file path with ownership verification
+        file_path = get_user_file_path(file_id, user["id"])
+        
+        # Get file metadata
+        file_metadata = get_file_metadata(file_id, user["id"])
+        if not file_metadata:
+            raise HTTPException(status_code=404, detail="File not found")
+        
+        # Read file content
+        try:
+            content = file_path.read_text(encoding="utf-8")
+        except UnicodeDecodeError:
+            # If text decoding fails, return as base64
+            import base64
+            content = base64.b64encode(file_path.read_bytes()).decode("utf-8")
+            return {
+                "status": "success",
+                "file_id": file_id,
+                "filename": file_metadata.get("original_filename", f"{file_id}.pdb"),
+                "content": content,
+                "encoding": "base64",
+                "type": file_metadata.get("file_type", "unknown")
+            }
+        
+        log_line("file_content_accessed", {"file_id": file_id, "user_id": user["id"], "path": str(file_path)})
+        
+        return {
+            "status": "success",
+            "file_id": file_id,
+            "filename": file_metadata.get("original_filename", f"{file_id}.pdb"),
+            "content": content,
+            "type": file_metadata.get("file_type", "unknown")
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        log_line("file_content_failed", {"error": str(e), "trace": traceback.format_exc()})
+        raise HTTPException(status_code=500, detail="Failed to read file content")
+
+
+@app.delete("/api/files/{file_id}")
+@limiter.limit("10/minute")
+async def delete_user_file(request: Request, file_id: str, user: Dict[str, Any] = Depends(get_current_user)):
+    """Delete a user file. Verifies ownership."""
+    _ = request
+    try:
+        # Verify ownership
+        if not verify_file_ownership(file_id, user["id"]):
+            raise HTTPException(status_code=403, detail="File not found or access denied")
+        
+        # Get file metadata
+        file_metadata = get_file_metadata(file_id, user["id"])
+        if not file_metadata:
+            raise HTTPException(status_code=404, detail="File not found")
+        
+        base_dir = Path(__file__).parent
+        stored_path = file_metadata.get("stored_path")
+        
+        if stored_path:
+            file_path = base_dir / stored_path
+            if file_path.exists():
+                file_path.unlink()
+                log_line("file_deleted", {"file_id": file_id, "user_id": user["id"], "path": str(file_path)})
+        
+        # Delete from database
+        with get_db() as conn:
+            conn.execute("DELETE FROM user_files WHERE id = ? AND user_id = ?", (file_id, user["id"]))
+            # Also remove from session_files associations
+            conn.execute("DELETE FROM session_files WHERE file_id = ? AND user_id = ?", (file_id, user["id"]))
+        
+        return {"status": "success", "message": "File deleted successfully"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        log_line("file_delete_failed", {"error": str(e), "trace": traceback.format_exc(), "file_id": file_id, "user_id": user["id"]})
+        content = {"error": "Failed to delete file"}
+        if DEBUG_API:
+            content["detail"] = str(e)
+        return JSONResponse(status_code=500, content=content)
 
 
 # ProteinMPNN endpoints ---------------------------------------------------
@@ -866,7 +910,7 @@ async def download_session_file(request: Request, session_id: str, file_id: str)
 
 @app.get("/api/proteinmpnn/sources")
 @limiter.limit("30/minute")
-async def proteinmpnn_sources(request: Request):
+async def proteinmpnn_sources(request: Request, user: Dict[str, Any] = Depends(get_current_user)):
     _ = request
     try:
         sources = proteinmpnn_handler.list_available_sources()
@@ -881,7 +925,7 @@ async def proteinmpnn_sources(request: Request):
 
 @app.post("/api/proteinmpnn/design")
 @limiter.limit("5/minute")
-async def proteinmpnn_design(request: Request):
+async def proteinmpnn_design(request: Request, user: Dict[str, Any] = Depends(get_current_user)):
     body = await request.json()
     job_id = body.get("jobId")
 
@@ -953,7 +997,7 @@ async def proteinmpnn_design(request: Request):
 
 @app.get("/api/proteinmpnn/status/{job_id}")
 @limiter.limit("30/minute")
-async def proteinmpnn_status(request: Request, job_id: str):
+async def proteinmpnn_status(request: Request, job_id: str, user: Dict[str, Any] = Depends(get_current_user)):
     try:
         status = proteinmpnn_handler.get_job_status(job_id)
         return status
@@ -967,7 +1011,7 @@ async def proteinmpnn_status(request: Request, job_id: str):
 
 @app.get("/api/proteinmpnn/result/{job_id}")
 @limiter.limit("30/minute")
-async def proteinmpnn_result(request: Request, job_id: str, fmt: str = "json"):
+async def proteinmpnn_result(request: Request, job_id: str, user: Dict[str, Any] = Depends(get_current_user), fmt: str = "json"):
     try:
         result = proteinmpnn_handler.get_job_result(job_id)
         if not result:
@@ -1008,12 +1052,12 @@ async def proteinmpnn_result(request: Request, job_id: str, fmt: str = "json"):
 # RFdiffusion API endpoints
 @app.post("/api/rfdiffusion/design")
 @limiter.limit("5/minute")
-async def rfdiffusion_design(request: Request):
+async def rfdiffusion_design(request: Request, user: Dict[str, Any] = Depends(get_current_user)):
     try:
         body = await request.json()
         parameters = body.get("parameters", {})
         job_id = body.get("jobId")
-        session_id = body.get("sessionId")  # Optional session ID
+        session_id = body.get("sessionId")
         
         if not job_id:
             return JSONResponse(
@@ -1026,10 +1070,18 @@ async def rfdiffusion_design(request: Request):
                 }
             )
         
+        log_line("rfdiffusion_design_request", {
+            "job_id": job_id,
+            "user_id": user["id"],
+            "session_id": session_id,
+            "has_parameters": bool(parameters)
+        })
+        
         result = await rfdiffusion_handler.submit_design_job({
             "parameters": parameters,
             "jobId": job_id,
-            "sessionId": session_id,  # Pass session ID to handler
+            "userId": user["id"],
+            "sessionId": session_id
         })
         
         # Check if result contains an error and return appropriate HTTP status
@@ -1057,23 +1109,13 @@ async def rfdiffusion_design(request: Request):
                     }
                 )
             else:
-                # For validation errors (422), use the detailed error message as userMessage
-                # Check if it's a validation error (contains "Residue" or "not in pdb" or "Validation error")
-                is_validation_error = (
-                    "Validation error" in error_msg or 
-                    "Residue" in error_msg and "not in pdb" in error_msg.lower() or
-                    "422" in error_msg
-                )
-                
-                user_message = error_msg if is_validation_error else "Protein design computation failed"
-                
                 return JSONResponse(
                     status_code=500,
                     content={
                         "status": "error",
                         "error": "",  # Empty for frontend error handling
                         "errorCode": "DESIGN_FAILED",
-                        "userMessage": user_message,
+                        "userMessage": "Protein design computation failed",
                         "technicalMessage": error_msg
                     }
                 )
@@ -1096,7 +1138,7 @@ async def rfdiffusion_design(request: Request):
 
 @app.get("/api/rfdiffusion/status/{job_id}")
 @limiter.limit("30/minute")
-async def rfdiffusion_status(request: Request, job_id: str):
+async def rfdiffusion_status(request: Request, job_id: str, user: Dict[str, Any] = Depends(get_current_user)):
     try:
         status = rfdiffusion_handler.get_job_status(job_id)
         return status
@@ -1110,7 +1152,7 @@ async def rfdiffusion_status(request: Request, job_id: str):
 
 @app.post("/api/rfdiffusion/cancel/{job_id}")
 @limiter.limit("10/minute")
-async def rfdiffusion_cancel(request: Request, job_id: str):
+async def rfdiffusion_cancel(request: Request, job_id: str, user: Dict[str, Any] = Depends(get_current_user)):
     try:
         result = rfdiffusion_handler.cancel_job(job_id)
         return result
@@ -1122,9 +1164,100 @@ async def rfdiffusion_cancel(request: Request, job_id: str):
         return JSONResponse(status_code=500, content=content)
 
 
+# OpenFold2 API endpoints (blocking prediction)
+@app.post("/api/openfold2/predict")
+@limiter.limit("5/minute")
+async def openfold2_predict(request: Request, user: Dict[str, Any] = Depends(get_current_user)):
+    try:
+        body = await request.json()
+        sequence = body.get("sequence")
+        alignments = body.get("alignments")
+        alignments_raw = body.get("alignmentsRaw")  # Raw a3m file content
+        templates = body.get("templates")
+        templates_raw = body.get("templatesRaw")  # Raw hhr file content
+        relax_prediction = body.get("relax_prediction", False)
+        job_id = body.get("jobId")
+        session_id = body.get("sessionId")
+
+        if not sequence:
+            return JSONResponse(
+                status_code=400,
+                content={
+                    "status": "error",
+                    "error": "Missing sequence",
+                    "code": "SEQUENCE_EMPTY",
+                },
+            )
+
+        log_line("openfold2_predict_request", {
+            "job_id": job_id,
+            "user_id": user["id"],
+            "session_id": session_id,
+            "sequence_length": len(sequence) if sequence else 0,
+        })
+
+        result = await openfold2_handler.process_predict_request(
+            sequence=sequence,
+            alignments=alignments,
+            alignments_raw=alignments_raw,
+            templates=templates,
+            templates_raw=templates_raw,
+            relax_prediction=relax_prediction,
+            job_id=job_id,
+            session_id=session_id,
+            user_id=user["id"],
+        )
+
+        if result.get("status") == "error":
+            code = result.get("code", "API_ERROR")
+            log_line("openfold2_predict_error", {"code": code, "error": result.get("error", "")[:500]})
+            if code == "API_KEY_MISSING":
+                return JSONResponse(
+                    status_code=503,
+                    content={
+                        "status": "error",
+                        "error": result.get("error", "OpenFold2 service not available"),
+                        "code": code,
+                    },
+                )
+            return JSONResponse(
+                status_code=400 if code in ("SEQUENCE_EMPTY", "SEQUENCE_TOO_LONG", "SEQUENCE_INVALID", "MSA_FORMAT_INVALID", "TEMPLATE_FORMAT_INVALID") else 502,
+                content=result,
+            )
+
+        return JSONResponse(status_code=200, content=result)
+    except Exception as e:
+        log_line("openfold2_predict_failed", {"error": str(e), "trace": traceback.format_exc()})
+        return JSONResponse(
+            status_code=500,
+            content={
+                "status": "error",
+                "error": str(e) if DEBUG_API else "An unexpected error occurred",
+                "code": "INTERNAL_ERROR",
+            },
+        )
+
+
+@app.get("/api/openfold2/result/{job_id}")
+@limiter.limit("30/minute")
+async def openfold2_result(request: Request, job_id: str, user: Dict[str, Any] = Depends(get_current_user)):
+    try:
+        file_path = get_user_file_path(job_id, user["id"])
+        return FileResponse(
+            file_path,
+            media_type="chemical/x-pdb",
+            filename=f"openfold2_{job_id}.pdb",
+        )
+    except HTTPException as exc:
+        raise exc
+    except Exception as e:
+        log_line("openfold2_result_failed", {"error": str(e), "job_id": job_id})
+        raise HTTPException(status_code=404, detail="OpenFold2 result not found")
+
+
 # Back-compat endpoints
 @app.post("/api/generate")
-async def generate(request: Request):
+async def generate(request: Request, user: Dict[str, Any] = Depends(get_current_user)):
     try:
         body = await request.json()
         prompt = body.get("prompt")
@@ -1147,7 +1280,7 @@ async def generate(request: Request):
 
 
 @app.post("/api/chat")
-async def chat(request: Request):
+async def chat(request: Request, user: Dict[str, Any] = Depends(get_current_user)):
     try:
         body = await request.json()
         prompt = body.get("prompt")
@@ -1173,19 +1306,13 @@ async def chat(request: Request):
 
 @app.post("/api/chat/generate-title")
 @limiter.limit("30/minute")
-async def generate_chat_title(request: Request):
+async def generate_chat_title(request: Request, user: Dict[str, Any] = Depends(get_current_user)):
     """Generate an AI-powered title for a chat session based on messages."""
     try:
         body = await request.json()
         messages = body.get("messages", [])
         
-        log_line("title_generation_request", {
-            "message_count": len(messages) if messages else 0,
-            "has_messages": bool(messages)
-        })
-        
         if not messages or len(messages) < 2:
-            log_line("title_generation_skipped", {"reason": "insufficient_messages"})
             return {"title": "New Chat"}
         
         # Get first user message and first AI response
@@ -1193,7 +1320,6 @@ async def generate_chat_title(request: Request):
         ai_msg = next((m for m in messages if m.get("type") == "ai"), None)
         
         if not user_msg or not ai_msg:
-            log_line("title_generation_skipped", {"reason": "missing_user_or_ai_message"})
             return {"title": "New Chat"}
         
         # Create prompt for title generation
@@ -1208,7 +1334,7 @@ AI: {ai_content}
 Return ONLY the title text, no quotes, no explanation. Make it specific and meaningful."""
 
         # Use a lightweight model for title generation (Haiku is fast and cheap)
-        from .runner import _get_openrouter_api_key, _load_model_map
+        from .agents.runner import _get_openrouter_api_key, _load_model_map
         
         model_map = _load_model_map()
         model_id = model_map.get("anthropic/claude-3-haiku", "anthropic/claude-3-haiku")
@@ -1249,6 +1375,12 @@ Return ONLY the title text, no quotes, no explanation. Make it specific and mean
             log_line("title_generated", {"title": title, "model": model_id})
             return {"title": title or "New Chat"}
             
+    except httpx.HTTPStatusError as e:
+        if e.response.status_code == 429:
+            log_line("title_generation_failed", {"error": "OpenRouter rate limit (429); using fallback title"})
+        else:
+            log_line("title_generation_failed", {"error": str(e)})
+        return {"title": "New Chat"}
     except Exception as e:
         log_line("title_generation_failed", {"error": str(e), "trace": traceback.format_exc()})
         return {"title": "New Chat"}

@@ -90,11 +90,34 @@ The application can load structures from:
 
 ## Development
 
-### AI Code Generation (Claude)
+### Authentication & API Requests
 
-This app can generate Mol* builder code from natural language via a lightweight server that calls the Claude SDK.
+**⚠️ IMPORTANT:** All API endpoints (except auth endpoints) require JWT authentication. When making API requests from the frontend:
 
-1. Create a `.env` file in the project root and set `ANTHROPIC_API_KEY=your_key_here`.
+- **Use `api` instance** for standard requests (automatic auth):
+  ```typescript
+  import { api } from '../utils/api';
+  const response = await api.post('/endpoint', data);
+  ```
+
+- **Use `getAuthHeaders()` for `fetch()` calls** (file uploads, etc.):
+  ```typescript
+  import { getAuthHeaders } from '../utils/api';
+  const headers = getAuthHeaders();
+  const response = await fetch('/api/upload/pdb', {
+    method: 'POST',
+    headers,  // Required for authentication
+    body: formData,
+  });
+  ```
+
+See **[docs/AUTHENTICATION_GUIDE.md](docs/AUTHENTICATION_GUIDE.md)** for complete authentication documentation, common patterns, and troubleshooting.
+
+### AI Code Generation (OpenRouter)
+
+This app can generate Mol* builder code from natural language via a lightweight server that calls the OpenRouter API.
+
+1. Create a `.env` file in the project root and set `OPENROUTER_API_KEY=your_key_here`.
 2. Run both the API server and Vite dev server together:
    ```bash
    npm run dev:all
