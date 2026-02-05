@@ -1,4 +1,4 @@
-export type NodeType = 'input_node' | 'rfdiffusion_node' | 'proteinmpnn_node' | 'alphafold_node' | 'message_input_node' | 'http_request_node';
+export type NodeType = 'input_node' | 'rfdiffusion_node' | 'proteinmpnn_node' | 'alphafold_node' | 'openfold2_node' | 'message_input_node' | 'http_request_node';
 
 export type NodeStatus = 'idle' | 'running' | 'success' | 'completed' | 'error' | 'pending';
 

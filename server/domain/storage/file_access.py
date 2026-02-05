@@ -146,6 +146,8 @@ def save_result_file(
         result_dir = storage_dir / "proteinmpnn_results" / file_id
     elif file_type == "alphafold":
         result_dir = storage_dir / "alphafold_results"
+    elif file_type == "openfold2":
+        result_dir = storage_dir / "openfold2_results"
     else:
         result_dir = storage_dir / "results"
     

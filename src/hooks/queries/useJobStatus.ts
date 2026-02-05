@@ -1,10 +1,12 @@
 import { useQuery } from '@tanstack/react-query';
 import { api } from '../../utils/api';
 import { JobStatus } from '../../utils/jobPoller';
+import { useAuthStore } from '../../stores/authStore';
 
 /**
  * Query hook for polling job status (AlphaFold, RFdiffusion, ProteinMPNN)
  * Uses refetchInterval for automatic polling
+ * Only fetches when user is authenticated
  */
 export function useJobStatus(
   jobId: string | null,
@@ -15,6 +17,7 @@ export function useJobStatus(
     maxPollTime?: number; // Maximum polling time in milliseconds
   }
 ) {
+  const isAuthenticated = useAuthStore((state) => state.isAuthenticated);
   const { enabled = true, refetchInterval = 3000, maxPollTime = 2 * 60 * 60 * 1000 } = options || {};
   
   return useQuery<JobStatus>({
@@ -31,7 +34,7 @@ export function useJobStatus(
       const response = await api.get<JobStatus>(endpoint);
       return response.data;
     },
-    enabled: enabled && !!jobId,
+    enabled: isAuthenticated && enabled && !!jobId, // Only fetch when authenticated
     refetchInterval: (query) => {
       const data = query.state.data;
       

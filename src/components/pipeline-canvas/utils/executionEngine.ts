@@ -54,6 +54,7 @@ interface ExecutionContext {
         rfdiffusion?: string;
         alphafold?: string;
         proteinmpnn?: string;
+        openfold2?: string;
         generic?: string;
       };
     };
@@ -247,6 +248,7 @@ export async function executeNode(
         const endpointMap: Record<string, keyof typeof nodeEndpoints> = {
           'rfdiffusion_node': 'rfdiffusion',
           'alphafold_node': 'alphafold',
+          'openfold2_node': 'openfold2',
           'proteinmpnn_node': 'proteinmpnn',
         };
         
@@ -721,6 +723,12 @@ export async function executeNode(
             // Fallback: use payload as-is if no special flags
             resolvedPayload = payloadResolved;
           }
+      }
+
+      // OpenFold2: add jobId and sessionId before API call
+      if (node.type === 'openfold2_node' && resolvedPayload && typeof resolvedPayload === 'object') {
+        resolvedPayload.jobId = resolvedPayload.jobId || `of2_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+        if (context.sessionId) resolvedPayload.sessionId = context.sessionId;
       }
 
       // Make API call with optional headers

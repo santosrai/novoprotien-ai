@@ -30,8 +30,8 @@ def _load_model_map() -> Dict[str, str]:
     
     _model_map = {}
     
-    # Try to load from models_config.json
-    config_path = Path(__file__).parent / "models_config.json"
+    # Try to load from models_config.json (in server/ root)
+    config_path = Path(__file__).parent.parent / "models_config.json"
     try:
         if config_path.exists():
             with open(config_path, 'r') as f:
@@ -789,6 +789,13 @@ async def run_agent(
         except Exception as e:
             log_line("agent:alphafold:failed", {"error": str(e), "userText": user_text})
             return {"type": "text", "text": f"AlphaFold processing failed: {str(e)}"}
+
+    # Special handling for OpenFold2 agent - open dialog (manual-only, no auto-route)
+    if agent.get("id") == "openfold2-agent":
+        import json
+        result = {"action": "open_openfold2_dialog"}
+        log_line("agent:openfold2:open_dialog", {"userText": user_text[:100]})
+        return {"type": "text", "text": json.dumps(result)}
 
     # Special handling for RFdiffusion agent - use handler instead of LLM
     if agent.get("id") == "rfdiffusion-agent":

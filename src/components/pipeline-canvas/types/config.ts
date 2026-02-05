@@ -57,6 +57,12 @@ export interface NodeEndpoints {
   proteinmpnn?: string;
   
   /**
+   * OpenFold2 node endpoint
+   * Default: '/api/openfold2/predict'
+   */
+  openfold2?: string;
+  
+  /**
    * Generic node execution endpoint (for custom nodes)
    * Can use :nodeType placeholder
    * Example: '/api/nodes/:nodeType/execute'
@@ -152,6 +158,7 @@ export const DEFAULT_CONFIG: Required<PipelineConfig> = {
       rfdiffusion: '/api/rfdiffusion/design',
       alphafold: '/api/alphafold/fold',
       proteinmpnn: '/api/proteinmpnn/design',
+      openfold2: '/api/openfold2/predict',
     },
   },
   responseTransformers: {

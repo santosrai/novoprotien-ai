@@ -77,6 +77,13 @@ api.interceptors.response.use(
             return api(originalRequest);
           }
         }
+        
+        // No auth storage or no refresh token - redirect to signin
+        // (Only redirect if not already on signin/signup pages)
+        if (!window.location.pathname.startsWith('/signin') && !window.location.pathname.startsWith('/signup')) {
+          window.location.href = '/signin';
+        }
+        return Promise.reject(error);
       } catch (refreshError) {
         // Refresh failed, sign out user
         localStorage.removeItem('novoprotein-auth-storage');
@@ -195,25 +202,11 @@ export async function* streamAgentRoute(payload: {
   model?: string;
   uploadedFileId?: string;
 }): AsyncGenerator<StreamChunk, void, unknown> {
-  // Get API key from localStorage
-  let apiKey: string | undefined;
-  try {
-    const storageItem = localStorage.getItem('novoprotein-settings-storage');
-    if (storageItem) {
-      const { state } = JSON.parse(storageItem);
-      apiKey = state?.settings?.api?.key;
-    }
-  } catch (e) {
-    console.warn('Failed to read API key from storage', e);
-  }
-
-  // Build headers
+  // Build headers with auth (required for all API calls)
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
+    ...getAuthHeaders(),
   };
-  if (apiKey) {
-    headers['x-api-key'] = apiKey;
-  }
 
   // Make streaming request
   const response = await fetch(`${baseURL}/agents/route-stream`, {

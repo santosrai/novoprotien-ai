@@ -1,5 +1,6 @@
 import { useQuery } from '@tanstack/react-query';
 import { api } from '../../utils/api';
+import { useAuthStore } from '../../stores/authStore';
 
 export interface FileMetadata {
   file_id: string;
@@ -19,8 +20,11 @@ interface FilesResponse {
 
 /**
  * Query hook for fetching user files
+ * Only fetches when user is authenticated
  */
 export function useFiles() {
+  const isAuthenticated = useAuthStore((state) => state.isAuthenticated);
+  
   return useQuery<FileMetadata[]>({
     queryKey: ['files'],
     queryFn: async () => {
@@ -30,14 +34,18 @@ export function useFiles() {
       }
       return [];
     },
+    enabled: isAuthenticated, // Only fetch when authenticated
     staleTime: 1 * 60 * 1000, // Files can change, cache for 1 minute
   });
 }
 
 /**
  * Query hook for fetching a single file by ID
+ * Only fetches when user is authenticated
  */
 export function useFile(fileId: string | null) {
+  const isAuthenticated = useAuthStore((state) => state.isAuthenticated);
+  
   return useQuery<FileMetadata>({
     queryKey: ['files', fileId],
     queryFn: async () => {
@@ -45,7 +53,7 @@ export function useFile(fileId: string | null) {
       const response = await api.get<{ file: FileMetadata }>(`/files/${fileId}`);
       return response.data.file;
     },
-    enabled: !!fileId,
+    enabled: isAuthenticated && !!fileId, // Only fetch when authenticated and ID provided
     staleTime: 5 * 60 * 1000, // Single file cache for 5 minutes
   });
 }

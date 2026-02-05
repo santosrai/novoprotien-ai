@@ -220,6 +220,22 @@ export const PipelineExecution: React.FC<PipelineExecutionProps> = ({ apiClient 
                   if (result.data) {
                     resultMetadata.data = result.data;
                   }
+                } else if (node.type === 'openfold2_node') {
+                  // OpenFold2 API returns: { status, pdbContent, job_id, filename, pdb_url }
+                  const pdbContent = result.pdbContent;
+                  const jobId = result.job_id;
+                  const filename = result.filename || `openfold2_${jobId || node.id}.pdb`;
+                  const pdbUrl = result.pdb_url;
+                  if (pdbContent) {
+                    resultMetadata.pdbContent = pdbContent;
+                    resultMetadata.output_file = {
+                      type: 'pdb_file',
+                      filename,
+                      file_id: jobId || node.id,
+                      file_url: pdbUrl ? `/api${pdbUrl}` : undefined,
+                    };
+                  }
+                  if (result.data) resultMetadata.data = result.data;
                 } else {
                   // Extract common result fields for other node types
                   if (result.output_file || result.file) {

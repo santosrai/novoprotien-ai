@@ -33,11 +33,11 @@ if api_key:
 else:
     print("Warning: ANTHROPIC_API_KEY not found in environment")
 
-nvidia_key = os.getenv('NVCF_RUN_KEY')
+nvidia_key = (os.getenv('NVCF_RUN_KEY') or "").strip()
 if nvidia_key:
     print(f"NVCF_RUN_KEY loaded: {nvidia_key[:20]}...")
 else:
-    print("Warning: NVCF_RUN_KEY not found in environment")
+    print("Warning: NVCF_RUN_KEY not found or empty (AlphaFold/RFdiffusion will fail)")
 
 from fastapi import FastAPI, Request, UploadFile, File, HTTPException, Depends
 from fastapi.middleware.cors import CORSMiddleware
@@ -55,10 +55,11 @@ try:
     from .agents.handlers.alphafold import alphafold_handler
     from .agents.handlers.rfdiffusion import rfdiffusion_handler
     from .agents.handlers.proteinmpnn import proteinmpnn_handler
+    from .agents.handlers.openfold2 import openfold2_handler
     from .domain.storage.pdb_storage import save_uploaded_pdb, get_uploaded_pdb
     from .domain.storage.file_access import list_user_files, verify_file_ownership, get_file_metadata, get_user_file_path
     from .database.db import get_db
-    from .api.middleware.auth import get_current_user, get_current_user_optional
+    from .api.middleware.auth import get_current_user
     from .api.routes import auth, chat_sessions, chat_messages, pipelines, credits, reports, admin, three_d_canvases, attachments
 except ImportError:
     # When running directly (not as module)
@@ -73,16 +74,25 @@ except ImportError:
     from agents.handlers.alphafold import alphafold_handler
     from agents.handlers.rfdiffusion import rfdiffusion_handler
     from agents.handlers.proteinmpnn import proteinmpnn_handler
+    from agents.handlers.openfold2 import openfold2_handler
     from domain.storage.pdb_storage import save_uploaded_pdb, get_uploaded_pdb
     from domain.storage.file_access import list_user_files, verify_file_ownership, get_file_metadata, get_user_file_path
     from database.db import get_db
-    from api.middleware.auth import get_current_user, get_current_user_optional
+    from api.middleware.auth import get_current_user
     from api.routes import auth, chat_sessions, chat_messages, pipelines, credits, reports, admin, three_d_canvases, attachments
 
 DEBUG_API = os.getenv("DEBUG_API", "0") == "1"
 
+
+def _rate_limit_key(request: Request) -> str:
+    """In debug mode, use unique key per request to avoid localhost rate limit exhaustion."""
+    if DEBUG_API:
+        return f"dev-{id(request)}"
+    return get_remote_address(request)
+
+
 app = FastAPI()
-limiter = Limiter(key_func=get_remote_address)
+limiter = Limiter(key_func=_rate_limit_key)
 app.state.limiter = limiter
 app.add_middleware(SlowAPIMiddleware)
 
@@ -176,7 +186,7 @@ def health() -> Dict[str, Any]:
 
 @app.post("/api/logs/error")
 @limiter.limit("100/minute")
-async def log_error(request: Request):
+async def log_error(request: Request, user: Dict[str, Any] = Depends(get_current_user)):
     """Accept error logs from frontend"""
     try:
         body = await request.json()
@@ -193,7 +203,7 @@ def _rate_limit_handler(request: Request, exc: RateLimitExceeded):
 
 
 @app.get("/api/agents")
-def get_agents() -> Dict[str, Any]:
+def get_agents(user: Dict[str, Any] = Depends(get_current_user)) -> Dict[str, Any]:
     return {"agents": list_agents()}
 
 
@@ -233,8 +243,8 @@ def _load_models_config() -> Dict[str, Any]:
 
 
 @app.get("/api/models")
-@limiter.limit("30/minute")
-async def get_models(request: Request) -> Dict[str, Any]:
+@limiter.limit("120/minute")  # Read-only config; allow more for multi-tab/navigation
+async def get_models(request: Request, user: Dict[str, Any] = Depends(get_current_user)) -> Dict[str, Any]:
     """Get available models from configuration file."""
     config = _load_models_config()
     models = config.get("models", [])
@@ -248,7 +258,7 @@ async def get_models(request: Request) -> Dict[str, Any]:
 
 @app.post("/api/agents/invoke")
 @limiter.limit("30/minute")
-async def invoke(request: Request):
+async def invoke(request: Request, user: Dict[str, Any] = Depends(get_current_user)):
     try:
         body = await request.json()
         agent_id = body.get("agentId")
@@ -274,7 +284,7 @@ async def invoke(request: Request):
 
 @app.post("/api/agents/route")
 @limiter.limit("60/minute")
-async def route(request: Request, user: Optional[Dict[str, Any]] = Depends(get_current_user_optional)):
+async def route(request: Request, user: Dict[str, Any] = Depends(get_current_user)):
     try:
         body = await request.json()
         input_text = body.get("input")
@@ -326,11 +336,6 @@ async def route(request: Request, user: Optional[Dict[str, Any]] = Depends(get_c
                         "traceback": traceback.format_exc(),
                     })
                     # Continue without pipeline data if fetch fails
-            else:
-                log_line("agent_route:pipeline_no_auth", {
-                    "pipeline_id": pipeline_id,
-                    "note": "User not authenticated, pipeline data cannot be fetched",
-                })
         
         # Log the input for debugging
         log_line("agent_route_input", {
@@ -416,7 +421,7 @@ async def route(request: Request, user: Optional[Dict[str, Any]] = Depends(get_c
 # AlphaFold API endpoints
 @app.post("/api/alphafold/fold")
 @limiter.limit("5/minute")
-async def alphafold_fold(request: Request):
+async def alphafold_fold(request: Request, user: Dict[str, Any] = Depends(get_current_user)):
     try:
         body = await request.json()
         sequence = body.get("sequence")
@@ -494,7 +499,7 @@ async def alphafold_fold(request: Request):
 
 @app.get("/api/alphafold/status/{job_id}")
 @limiter.limit("30/minute")
-async def alphafold_status(request: Request, job_id: str):
+async def alphafold_status(request: Request, job_id: str, user: Dict[str, Any] = Depends(get_current_user)):
     try:
         status = alphafold_handler.get_job_status(job_id)
         return status
@@ -508,7 +513,7 @@ async def alphafold_status(request: Request, job_id: str):
 
 @app.post("/api/alphafold/cancel/{job_id}")
 @limiter.limit("10/minute")
-async def alphafold_cancel(request: Request, job_id: str):
+async def alphafold_cancel(request: Request, job_id: str, user: Dict[str, Any] = Depends(get_current_user)):
     try:
         result = alphafold_handler.cancel_job(job_id)
         return result
@@ -523,7 +528,7 @@ async def alphafold_cancel(request: Request, job_id: str):
 # AlphaFold3 API endpoints
 @app.post("/api/alphafold3/fold")
 @limiter.limit("5/minute")
-async def alphafold3_fold(request: Request):
+async def alphafold3_fold(request: Request, user: Dict[str, Any] = Depends(get_current_user)):
     try:
         body = await request.json()
         entities = body.get("entities", [])
@@ -601,7 +606,7 @@ async def alphafold3_fold(request: Request):
 
 @app.get("/api/alphafold3/status/{job_id}")
 @limiter.limit("30/minute")
-async def alphafold3_status(request: Request, job_id: str):
+async def alphafold3_status(request: Request, job_id: str, user: Dict[str, Any] = Depends(get_current_user)):
     try:
         status = alphafold_handler.get_job_status(job_id)
         return status
@@ -615,7 +620,7 @@ async def alphafold3_status(request: Request, job_id: str):
 
 @app.post("/api/alphafold3/cancel/{job_id}")
 @limiter.limit("10/minute")
-async def alphafold3_cancel(request: Request, job_id: str):
+async def alphafold3_cancel(request: Request, job_id: str, user: Dict[str, Any] = Depends(get_current_user)):
     try:
         result = alphafold_handler.cancel_job(job_id)
         return result
@@ -675,9 +680,9 @@ async def upload_pdb(
 
 @app.get("/api/upload/pdb/{file_id}")
 @limiter.limit("30/minute")
-async def download_uploaded_pdb(request: Request, file_id: str):
+async def download_uploaded_pdb(request: Request, file_id: str, user: Dict[str, Any] = Depends(get_current_user)):
     _ = request
-    metadata = get_uploaded_pdb(file_id)
+    metadata = get_uploaded_pdb(file_id, user["id"])
     if not metadata:
         raise HTTPException(status_code=404, detail="Uploaded file not found")
     return FileResponse(
@@ -733,6 +738,8 @@ async def get_user_files_endpoint(request: Request, user: Dict[str, Any] = Depen
                         download_url = f"/api/upload/pdb/{file_id}"
                     elif file_type == "proteinmpnn":
                         download_url = f"/api/proteinmpnn/result/{file_id}"
+                    elif file_type == "openfold2":
+                        download_url = f"/api/openfold2/result/{file_id}"
                     else:
                         # For other types, use generic download endpoint
                         download_url = f"/api/files/{file_id}/download"
@@ -903,7 +910,7 @@ async def delete_user_file(request: Request, file_id: str, user: Dict[str, Any] 
 
 @app.get("/api/proteinmpnn/sources")
 @limiter.limit("30/minute")
-async def proteinmpnn_sources(request: Request):
+async def proteinmpnn_sources(request: Request, user: Dict[str, Any] = Depends(get_current_user)):
     _ = request
     try:
         sources = proteinmpnn_handler.list_available_sources()
@@ -918,7 +925,7 @@ async def proteinmpnn_sources(request: Request):
 
 @app.post("/api/proteinmpnn/design")
 @limiter.limit("5/minute")
-async def proteinmpnn_design(request: Request):
+async def proteinmpnn_design(request: Request, user: Dict[str, Any] = Depends(get_current_user)):
     body = await request.json()
     job_id = body.get("jobId")
 
@@ -990,7 +997,7 @@ async def proteinmpnn_design(request: Request):
 
 @app.get("/api/proteinmpnn/status/{job_id}")
 @limiter.limit("30/minute")
-async def proteinmpnn_status(request: Request, job_id: str):
+async def proteinmpnn_status(request: Request, job_id: str, user: Dict[str, Any] = Depends(get_current_user)):
     try:
         status = proteinmpnn_handler.get_job_status(job_id)
         return status
@@ -1004,7 +1011,7 @@ async def proteinmpnn_status(request: Request, job_id: str):
 
 @app.get("/api/proteinmpnn/result/{job_id}")
 @limiter.limit("30/minute")
-async def proteinmpnn_result(request: Request, job_id: str, fmt: str = "json"):
+async def proteinmpnn_result(request: Request, job_id: str, user: Dict[str, Any] = Depends(get_current_user), fmt: str = "json"):
     try:
         result = proteinmpnn_handler.get_job_result(job_id)
         if not result:
@@ -1131,7 +1138,7 @@ async def rfdiffusion_design(request: Request, user: Dict[str, Any] = Depends(ge
 
 @app.get("/api/rfdiffusion/status/{job_id}")
 @limiter.limit("30/minute")
-async def rfdiffusion_status(request: Request, job_id: str):
+async def rfdiffusion_status(request: Request, job_id: str, user: Dict[str, Any] = Depends(get_current_user)):
     try:
         status = rfdiffusion_handler.get_job_status(job_id)
         return status
@@ -1145,7 +1152,7 @@ async def rfdiffusion_status(request: Request, job_id: str):
 
 @app.post("/api/rfdiffusion/cancel/{job_id}")
 @limiter.limit("10/minute")
-async def rfdiffusion_cancel(request: Request, job_id: str):
+async def rfdiffusion_cancel(request: Request, job_id: str, user: Dict[str, Any] = Depends(get_current_user)):
     try:
         result = rfdiffusion_handler.cancel_job(job_id)
         return result
@@ -1157,9 +1164,100 @@ async def rfdiffusion_cancel(request: Request, job_id: str):
         return JSONResponse(status_code=500, content=content)
 
 
+# OpenFold2 API endpoints (blocking prediction)
+@app.post("/api/openfold2/predict")
+@limiter.limit("5/minute")
+async def openfold2_predict(request: Request, user: Dict[str, Any] = Depends(get_current_user)):
+    try:
+        body = await request.json()
+        sequence = body.get("sequence")
+        alignments = body.get("alignments")
+        alignments_raw = body.get("alignmentsRaw")  # Raw a3m file content
+        templates = body.get("templates")
+        templates_raw = body.get("templatesRaw")  # Raw hhr file content
+        relax_prediction = body.get("relax_prediction", False)
+        job_id = body.get("jobId")
+        session_id = body.get("sessionId")
+
+        if not sequence:
+            return JSONResponse(
+                status_code=400,
+                content={
+                    "status": "error",
+                    "error": "Missing sequence",
+                    "code": "SEQUENCE_EMPTY",
+                },
+            )
+
+        log_line("openfold2_predict_request", {
+            "job_id": job_id,
+            "user_id": user["id"],
+            "session_id": session_id,
+            "sequence_length": len(sequence) if sequence else 0,
+        })
+
+        result = await openfold2_handler.process_predict_request(
+            sequence=sequence,
+            alignments=alignments,
+            alignments_raw=alignments_raw,
+            templates=templates,
+            templates_raw=templates_raw,
+            relax_prediction=relax_prediction,
+            job_id=job_id,
+            session_id=session_id,
+            user_id=user["id"],
+        )
+
+        if result.get("status") == "error":
+            code = result.get("code", "API_ERROR")
+            log_line("openfold2_predict_error", {"code": code, "error": result.get("error", "")[:500]})
+            if code == "API_KEY_MISSING":
+                return JSONResponse(
+                    status_code=503,
+                    content={
+                        "status": "error",
+                        "error": result.get("error", "OpenFold2 service not available"),
+                        "code": code,
+                    },
+                )
+            return JSONResponse(
+                status_code=400 if code in ("SEQUENCE_EMPTY", "SEQUENCE_TOO_LONG", "SEQUENCE_INVALID", "MSA_FORMAT_INVALID", "TEMPLATE_FORMAT_INVALID") else 502,
+                content=result,
+            )
+
+        return JSONResponse(status_code=200, content=result)
+    except Exception as e:
+        log_line("openfold2_predict_failed", {"error": str(e), "trace": traceback.format_exc()})
+        return JSONResponse(
+            status_code=500,
+            content={
+                "status": "error",
+                "error": str(e) if DEBUG_API else "An unexpected error occurred",
+                "code": "INTERNAL_ERROR",
+            },
+        )
+
+
+@app.get("/api/openfold2/result/{job_id}")
+@limiter.limit("30/minute")
+async def openfold2_result(request: Request, job_id: str, user: Dict[str, Any] = Depends(get_current_user)):
+    try:
+        file_path = get_user_file_path(job_id, user["id"])
+        return FileResponse(
+            file_path,
+            media_type="chemical/x-pdb",
+            filename=f"openfold2_{job_id}.pdb",
+        )
+    except HTTPException as exc:
+        raise exc
+    except Exception as e:
+        log_line("openfold2_result_failed", {"error": str(e), "job_id": job_id})
+        raise HTTPException(status_code=404, detail="OpenFold2 result not found")
+
+
 # Back-compat endpoints
 @app.post("/api/generate")
-async def generate(request: Request):
+async def generate(request: Request, user: Dict[str, Any] = Depends(get_current_user)):
     try:
         body = await request.json()
         prompt = body.get("prompt")
@@ -1182,7 +1280,7 @@ async def generate(request: Request):
 
 
 @app.post("/api/chat")
-async def chat(request: Request):
+async def chat(request: Request, user: Dict[str, Any] = Depends(get_current_user)):
     try:
         body = await request.json()
         prompt = body.get("prompt")
@@ -1208,7 +1306,7 @@ async def chat(request: Request):
 
 @app.post("/api/chat/generate-title")
 @limiter.limit("30/minute")
-async def generate_chat_title(request: Request):
+async def generate_chat_title(request: Request, user: Dict[str, Any] = Depends(get_current_user)):
     """Generate an AI-powered title for a chat session based on messages."""
     try:
         body = await request.json()
@@ -1277,6 +1375,12 @@ Return ONLY the title text, no quotes, no explanation. Make it specific and mean
             log_line("title_generated", {"title": title, "model": model_id})
             return {"title": title or "New Chat"}
             
+    except httpx.HTTPStatusError as e:
+        if e.response.status_code == 429:
+            log_line("title_generation_failed", {"error": "OpenRouter rate limit (429); using fallback title"})
+        else:
+            log_line("title_generation_failed", {"error": str(e)})
+        return {"title": "New Chat"}
     except Exception as e:
         log_line("title_generation_failed", {"error": str(e), "trace": traceback.format_exc()})
         return {"title": "New Chat"}

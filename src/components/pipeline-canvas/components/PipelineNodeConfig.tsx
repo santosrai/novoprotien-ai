@@ -1002,6 +1002,154 @@ export const PipelineNodeConfig: React.FC<PipelineNodeConfigProps> = ({
           </div>
         );
 
+      case 'openfold2_node':
+        return (
+          <div className="space-y-4">
+            {/* Sequence Input */}
+            <div>
+              <Label className="text-xs font-medium text-[hsl(var(--pc-text-muted))] mb-2">
+                Protein Sequence
+              </Label>
+              <textarea
+                value={node.config?.sequence || ''}
+                onChange={(e) => handleConfigChange('sequence', e.target.value.toUpperCase())}
+                className={`${inputClassName} font-mono text-xs`}
+                rows={4}
+                placeholder="Enter protein sequence (ACDEFGHIKLMNPQRSTVWY)..."
+              />
+              <div className="flex justify-between items-center mt-1.5">
+                <p className="text-xs text-[hsl(var(--pc-text-muted))]">
+                  {hasInputs && inputData ? 'Optional (using input from connected node)' : 'Required if no input connection'}
+                </p>
+                <span className={`text-xs ${
+                  (node.config?.sequence?.replace(/\s/g, '').length || 0) > 1000 
+                    ? 'text-red-400' 
+                    : (node.config?.sequence?.replace(/\s/g, '').length || 0) >= 20 
+                      ? 'text-green-400' 
+                      : 'text-amber-400'
+                }`}>
+                  {node.config?.sequence?.replace(/\s/g, '').length || 0} residues
+                </span>
+              </div>
+              {(node.config?.sequence?.replace(/\s/g, '').length || 0) > 1000 && (
+                <p className="text-xs text-red-400 mt-1">
+                  Exceeds 1000 residues — consider using AlphaFold2 for longer sequences
+                </p>
+              )}
+            </div>
+
+            {/* Advanced Options Collapsible */}
+            <div className="border-t border-gray-700/30 pt-4">
+              <button
+                type="button"
+                onClick={() => {
+                  const current = node.config?.showAdvanced || false;
+                  handleConfigChange('showAdvanced', !current);
+                }}
+                className="flex items-center gap-2 text-xs text-blue-400 hover:text-blue-300"
+              >
+                <svg
+                  className={`w-3 h-3 transform transition-transform ${node.config?.showAdvanced ? 'rotate-90' : ''}`}
+                  fill="none"
+                  stroke="currentColor"
+                  viewBox="0 0 24 24"
+                >
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+                </svg>
+                {node.config?.showAdvanced ? 'Hide' : 'Show'} Advanced (MSA & Template)
+              </button>
+            </div>
+
+            {node.config?.showAdvanced && (
+              <div className="space-y-4 p-3 bg-[hsl(var(--pc-background)/0.5)] rounded-lg border border-gray-700/30">
+                {/* MSA Input */}
+                <div>
+                  <Label className="text-xs font-medium text-[hsl(var(--pc-text-muted))] mb-2">
+                    MSA (a3m format)
+                  </Label>
+                  <textarea
+                    value={node.config?.alignments_raw || ''}
+                    onChange={(e) => handleConfigChange('alignments_raw', e.target.value)}
+                    className={`${inputClassName} font-mono text-xs`}
+                    rows={4}
+                    placeholder="Paste MSA content in a3m format (optional)..."
+                  />
+                  <div className="flex justify-between items-center mt-1.5">
+                    <p className="text-xs text-[hsl(var(--pc-text-muted))]">
+                      Optional multiple sequence alignment for improved accuracy
+                    </p>
+                    {node.config?.alignments_raw && (
+                      <button
+                        type="button"
+                        onClick={() => handleConfigChange('alignments_raw', '')}
+                        className="text-xs text-red-400 hover:text-red-300"
+                      >
+                        Clear
+                      </button>
+                    )}
+                  </div>
+                </div>
+
+                {/* Template Input */}
+                <div>
+                  <Label className="text-xs font-medium text-[hsl(var(--pc-text-muted))] mb-2">
+                    Template (hhr format)
+                  </Label>
+                  <textarea
+                    value={node.config?.templates_raw || ''}
+                    onChange={(e) => handleConfigChange('templates_raw', e.target.value)}
+                    className={`${inputClassName} font-mono text-xs`}
+                    rows={4}
+                    placeholder="Paste template content in hhr format (optional)..."
+                  />
+                  <div className="flex justify-between items-center mt-1.5">
+                    <p className="text-xs text-[hsl(var(--pc-text-muted))]">
+                      Optional structural template for improved accuracy
+                    </p>
+                    {node.config?.templates_raw && (
+                      <button
+                        type="button"
+                        onClick={() => handleConfigChange('templates_raw', '')}
+                        className="text-xs text-red-400 hover:text-red-300"
+                      >
+                        Clear
+                      </button>
+                    )}
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* Relax Prediction Toggle */}
+            <div className="flex items-center justify-between pt-2">
+              <div>
+                <label className="block text-xs font-medium text-[hsl(var(--pc-text-muted))]">
+                  Relax Prediction
+                </label>
+                <p className="text-xs text-[hsl(var(--pc-text-muted))] mt-0.5">
+                  Apply energy minimization (slower but may improve accuracy)
+                </p>
+              </div>
+              <label className="relative inline-flex items-center cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={node.config?.relax_prediction || false}
+                  onChange={(e) => handleConfigChange('relax_prediction', e.target.checked)}
+                  className="sr-only peer"
+                />
+                <div className="w-11 h-6 bg-[hsl(var(--pc-muted))] peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-amber-600"></div>
+              </label>
+            </div>
+
+            {/* Info Message */}
+            <div className="mt-4 px-3 py-2 bg-amber-900/20 border border-amber-700/30 rounded-lg">
+              <p className="text-xs text-amber-300">
+                OpenFold2 supports sequences up to 1000 residues. For longer sequences, use AlphaFold2.
+              </p>
+            </div>
+          </div>
+        );
+
       case 'message_input_node':
         return (
           <div className="space-y-4">

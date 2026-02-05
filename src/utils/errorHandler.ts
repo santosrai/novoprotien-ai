@@ -804,3 +804,143 @@ export class RFdiffusionErrorHandler {
     }
   }
 }
+
+export class OpenFold2ErrorHandler {
+  private static errorCatalog: Record<string, Partial<ErrorDetails>> = {
+    SEQUENCE_EMPTY: {
+      category: ErrorCategory.VALIDATION,
+      severity: ErrorSeverity.MEDIUM,
+      userMessage: 'No protein sequence provided',
+      technicalMessage: 'Sequence input is empty or contains only whitespace',
+      suggestions: [
+        { action: 'Enter a protein sequence', description: 'Provide a valid amino acid sequence (20-1000 residues)', type: 'fix', priority: 1 },
+      ],
+    },
+    SEQUENCE_TOO_SHORT: {
+      category: ErrorCategory.VALIDATION,
+      severity: ErrorSeverity.MEDIUM,
+      userMessage: 'Protein sequence is too short for folding',
+      technicalMessage: 'Sequence length is below minimum threshold of 20 residues',
+      suggestions: [
+        { action: 'Use longer sequence', description: 'OpenFold2 requires at least 20 amino acids', type: 'fix', priority: 1 },
+      ],
+    },
+    SEQUENCE_TOO_LONG: {
+      category: ErrorCategory.VALIDATION,
+      severity: ErrorSeverity.HIGH,
+      userMessage: 'Sequence exceeds 1000 residues. Use AlphaFold2 for longer sequences.',
+      technicalMessage: 'OpenFold2 supports sequences up to 1000 residues',
+      suggestions: [
+        { action: 'Use AlphaFold2', description: 'AlphaFold2 supports sequences up to 4096 residues', type: 'alternative', priority: 1 },
+        { action: 'Use shorter sequence', description: 'Try folding individual domains', type: 'alternative', priority: 2 },
+      ],
+    },
+    SEQUENCE_INVALID: {
+      category: ErrorCategory.VALIDATION,
+      severity: ErrorSeverity.HIGH,
+      userMessage: 'Sequence contains invalid characters',
+      technicalMessage: 'Non-standard amino acid codes detected',
+      suggestions: [
+        { action: 'Use standard amino acids only', description: 'Valid: ACDEFGHIKLMNPQRSTVWY', type: 'fix', priority: 1 },
+      ],
+    },
+    MSA_FORMAT_INVALID: {
+      category: ErrorCategory.VALIDATION,
+      severity: ErrorSeverity.MEDIUM,
+      userMessage: 'MSA file must be in a3m format',
+      technicalMessage: 'Invalid MSA file format',
+      suggestions: [
+        { action: 'Upload valid a3m file', description: 'a3m is a standard MSA format', type: 'fix', priority: 1 },
+      ],
+    },
+    TEMPLATE_FORMAT_INVALID: {
+      category: ErrorCategory.VALIDATION,
+      severity: ErrorSeverity.MEDIUM,
+      userMessage: 'Template file must be in hhr format',
+      technicalMessage: 'Invalid template file format',
+      suggestions: [
+        { action: 'Upload valid hhr file', description: 'hhr is output by hh-search', type: 'fix', priority: 1 },
+      ],
+    },
+    API_KEY_MISSING: {
+      category: ErrorCategory.AUTH,
+      severity: ErrorSeverity.CRITICAL,
+      userMessage: 'OpenFold2 requires NVIDIA API key',
+      technicalMessage: 'NVCF_RUN_KEY not configured',
+      suggestions: [
+        { action: 'Contact administrator', description: 'API key must be configured on the server', type: 'contact', priority: 1 },
+      ],
+    },
+    API_ERROR: {
+      category: ErrorCategory.API,
+      severity: ErrorSeverity.HIGH,
+      userMessage: 'Structure prediction failed',
+      technicalMessage: 'OpenFold2 API returned an error',
+      suggestions: [
+        { action: 'Try again', description: 'The error might be temporary', type: 'retry', priority: 1 },
+      ],
+    },
+    TIMEOUT: {
+      category: ErrorCategory.TIMEOUT,
+      severity: ErrorSeverity.HIGH,
+      userMessage: 'Prediction timed out; try a shorter sequence',
+      technicalMessage: 'Request exceeded timeout limit',
+      suggestions: [
+        { action: 'Use shorter sequence', description: 'Shorter sequences complete faster', type: 'fix', priority: 1 },
+      ],
+    },
+  };
+
+  static createError(
+    code: string,
+    context: Record<string, any> = {},
+    technicalDetails?: string,
+    stack?: string,
+    requestId?: string
+  ): ErrorDetails {
+    const template = this.errorCatalog[code];
+    if (!template) {
+      return {
+        code: 'UNKNOWN_ERROR',
+        category: ErrorCategory.SYSTEM,
+        severity: ErrorSeverity.HIGH,
+        userMessage: 'An unexpected error occurred',
+        technicalMessage: technicalDetails || 'Unknown error',
+        context,
+        suggestions: [{ action: 'Try again', description: 'The error might be temporary', type: 'retry', priority: 1 }],
+        timestamp: new Date(),
+      };
+    }
+    return {
+      code,
+      category: template.category ?? ErrorCategory.SYSTEM,
+      severity: template.severity ?? ErrorSeverity.HIGH,
+      userMessage: template.userMessage ?? 'An error occurred',
+      technicalMessage: technicalDetails ?? template.technicalMessage ?? '',
+      context,
+      suggestions: template.suggestions ?? [],
+      timestamp: new Date(),
+      requestId,
+      stack,
+    };
+  }
+
+  static handleSequenceValidation(sequence: string, requestId?: string): ErrorDetails | null {
+    const cleanSeq = sequence.replace(/\s/g, '').toUpperCase();
+    if (!cleanSeq) {
+      return this.createError('SEQUENCE_EMPTY', { originalInput: sequence }, undefined, undefined, requestId);
+    }
+    if (cleanSeq.length < 20) {
+      return this.createError('SEQUENCE_TOO_SHORT', { sequenceLength: cleanSeq.length }, undefined, undefined, requestId);
+    }
+    if (cleanSeq.length > 1000) {
+      return this.createError('SEQUENCE_TOO_LONG', { sequenceLength: cleanSeq.length }, undefined, undefined, requestId);
+    }
+    const validAA = /^[ACDEFGHIKLMNPQRSTVWY]+$/;
+    if (!validAA.test(cleanSeq)) {
+      const invalidChars = [...new Set(cleanSeq.split('').filter(c => !/[ACDEFGHIKLMNPQRSTVWY]/.test(c)))];
+      return this.createError('SEQUENCE_INVALID', { invalidCharacters: invalidChars }, undefined, undefined, requestId);
+    }
+    return null;
+  }
+}

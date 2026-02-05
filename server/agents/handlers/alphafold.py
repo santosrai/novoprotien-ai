@@ -382,20 +382,28 @@ class AlphaFoldHandler:
                     }
             else:
                 self.active_jobs[job_id] = "error"
+                err_msg = result.get("error", "Folding failed")
                 api_logger.error(
                     "AlphaFold job %s failed with status=%s error=%s",
                     job_id,
                     result.get("status"),
-                    result.get("error"),
+                    err_msg,
                 )
+                # Surface user-friendly message for auth failures
+                if "authorization" in (err_msg or "").lower() or "header" in (err_msg or "").lower():
+                    err_msg = (
+                        "NVIDIA API authentication failed. Ensure NVCF_RUN_KEY is set in the server "
+                        "environment (.env or system) with a valid key from https://build.nvidia.com/explore/discover. "
+                        f"Original: {err_msg}"
+                    )
                 self.job_results[job_id] = {
-                    "error": result.get("error", "Folding failed"),
+                    "error": err_msg,
                     "status": result.get("status", "error"),
                     "details": result.get("details"),
                 }
                 return {
                     "status": "error",
-                    "error": result.get("error", "Folding failed")
+                    "error": err_msg
                 }
                 
         except Exception as e:

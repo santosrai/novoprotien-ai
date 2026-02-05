@@ -2,7 +2,7 @@ import React from 'react';
 import { usePipelineStore } from '../store/pipelineStore';
 import { NodeType, PipelineNode } from '../types/index';
 import { getDefaultNodeConfig } from '../utils/nodeLoader';
-import { FileInput, Sparkles, Dna, Layers, MessageSquare, Globe } from 'lucide-react';
+import { FileInput, Sparkles, Dna, Layers, Activity, MessageSquare, Globe } from 'lucide-react';
 
 interface NodeTypeInfo {
   type: NodeType;
@@ -40,6 +40,13 @@ const nodeTypes: NodeTypeInfo[] = [
     icon: <Layers className="w-5 h-5" />,
     color: 'bg-orange-500',
     description: 'Structure prediction',
+  },
+  {
+    type: 'openfold2_node',
+    label: 'OpenFold2',
+    icon: <Activity className="w-5 h-5" />,
+    color: 'bg-amber-600',
+    description: 'Structure prediction (sequence + optional MSA)',
   },
   {
     type: 'message_input_node',

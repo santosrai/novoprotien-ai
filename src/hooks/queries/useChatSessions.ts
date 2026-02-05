@@ -1,6 +1,7 @@
 import { useQuery } from '@tanstack/react-query';
 import { api } from '../../utils/api';
 import { ChatSession, Message } from '../../stores/chatHistoryStore';
+import { useAuthStore } from '../../stores/authStore';
 
 interface SessionsResponse {
   status: string;
@@ -32,8 +33,11 @@ interface MessagesResponse {
 
 /**
  * Query hook for fetching user chat sessions
+ * Only fetches when user is authenticated
  */
 export function useChatSessions() {
+  const isAuthenticated = useAuthStore((state) => state.isAuthenticated);
+  
   return useQuery<ChatSession[]>({
     queryKey: ['chatSessions'],
     queryFn: async () => {
@@ -54,14 +58,18 @@ export function useChatSessions() {
         },
       }));
     },
+    enabled: isAuthenticated, // Only fetch when authenticated
     staleTime: 1 * 60 * 1000, // Sessions can change, cache for 1 minute
   });
 }
 
 /**
  * Query hook for fetching messages in a chat session
+ * Only fetches when user is authenticated
  */
 export function useChatSession(sessionId: string | null) {
+  const isAuthenticated = useAuthStore((state) => state.isAuthenticated);
+  
   return useQuery<{ session: ChatSession; messages: Message[] }>({
     queryKey: ['chatSessions', sessionId, 'messages'],
     queryFn: async () => {
@@ -108,7 +116,7 @@ export function useChatSession(sessionId: string | null) {
       
       return { session, messages };
     },
-    enabled: !!sessionId,
+    enabled: isAuthenticated && !!sessionId, // Only fetch when authenticated and ID provided
     staleTime: 30 * 1000, // Messages change frequently, cache for 30 seconds
   });
 }

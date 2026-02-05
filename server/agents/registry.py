@@ -5,6 +5,7 @@ from .prompts.code_builder import CODE_AGENT_SYSTEM_PROMPT
 from .prompts.mvs_builder import MVS_AGENT_SYSTEM_PROMPT_BASE
 from .prompts.bio_chat import BIO_CHAT_SYSTEM_PROMPT
 from .prompts.alphafold import ALPHAFOLD_AGENT_SYSTEM_PROMPT
+from .prompts.openfold2 import OPENFOLD2_AGENT_SYSTEM_PROMPT
 from .prompts.rfdiffusion import RFDIFFUSION_AGENT_SYSTEM_PROMPT
 from .prompts.proteinmpnn import PROTEINMPNN_AGENT_SYSTEM_PROMPT
 from .prompts.pipeline import PIPELINE_AGENT_SYSTEM_PROMPT
@@ -59,6 +60,16 @@ agents = {
         "modelEnv": "CLAUDE_CHAT_MODEL",
         "defaultModel": os.getenv("CLAUDE_CHAT_MODEL", "claude-3-5-sonnet-20241022"),
         "kind": "alphafold",
+        "category": "fold",
+    },
+    "openfold2-agent": {
+        "id": "openfold2-agent",
+        "name": "OpenFold2 Structure Prediction",
+        "description": "Predicts protein 3D structures using OpenFold2 via NVIDIA NIM. Supports sequence-only or sequence with optional MSA (a3m) and template (hhr) uploads. Max 1000 residues. Use for structure prediction when you have pre-computed MSA or want an alternative to AlphaFold2.",
+        "system": OPENFOLD2_AGENT_SYSTEM_PROMPT,
+        "modelEnv": "CLAUDE_CHAT_MODEL",
+        "defaultModel": os.getenv("CLAUDE_CHAT_MODEL", "claude-3-5-sonnet-20241022"),
+        "kind": "openfold2",
         "category": "fold",
     },
     "rfdiffusion-agent": {

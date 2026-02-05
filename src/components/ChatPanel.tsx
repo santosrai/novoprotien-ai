@@ -3,14 +3,16 @@ import { Send, Sparkles, Download, Play, X, Copy, ChevronDown, ChevronUp } from 
 import { useAppStore } from '../stores/appStore';
 import { useChatHistoryStore, useActiveSession, Message } from '../stores/chatHistoryStore';
 import { CodeExecutor } from '../utils/codeExecutor';
-import { api, fetchAgents, fetchModels, Agent, Model, getAuthHeaders } from '../utils/api';
+import { api, getAuthHeaders } from '../utils/api';
+import { useModels, useAgents } from '../hooks/queries';
 import { v4 as uuidv4 } from 'uuid';
 import { AlphaFoldDialog } from './AlphaFoldDialog';
+import { OpenFold2Dialog } from './OpenFold2Dialog';
 import { RFdiffusionDialog } from './RFdiffusionDialog';
 import { ProteinMPNNDialog } from './ProteinMPNNDialog';
 import { ProgressTracker, useAlphaFoldProgress, useProteinMPNNProgress } from './ProgressTracker';
 import { ErrorDisplay } from './ErrorDisplay';
-import { ErrorDetails, AlphaFoldErrorHandler, RFdiffusionErrorHandler, ErrorCategory, ErrorSeverity } from '../utils/errorHandler';
+import { ErrorDetails, AlphaFoldErrorHandler, OpenFold2ErrorHandler, RFdiffusionErrorHandler, ErrorCategory, ErrorSeverity } from '../utils/errorHandler';
 import { logAlphaFoldError } from '../utils/errorLogger';
 import { AgentSelector } from './AgentSelector';
 import { ModelSelector } from './ModelSelector';
@@ -32,6 +34,12 @@ interface ExtendedMessage extends Message {
     sequence?: string;
     parameters?: any;
     metadata?: any;
+  };
+  openfold2Result?: {
+    pdbContent?: string;
+    filename?: string;
+    job_id?: string;
+    message?: string;
   };
   proteinmpnnResult?: {
     jobId: string;
@@ -447,28 +455,11 @@ export const ChatPanel: React.FC = () => {
     previousSessionIdRef.current = activeSessionId;
   }, [activeSessionId, getVisualizationCode, saveVisualizationCode, getViewerVisibility, saveViewerVisibility, setCurrentCode, setViewerVisible]);
 
-  // Fetch agents and models on mount
-  useEffect(() => {
-    const loadAgentsAndModels = async () => {
-      try {
-        console.log('[ChatPanel] Loading agents and models...');
-        const [agentsData, modelsData] = await Promise.all([
-          fetchAgents(),
-          fetchModels(),
-        ]);
-        console.log('[ChatPanel] Agents loaded:', agentsData.length);
-        console.log('[ChatPanel] Models loaded:', modelsData.length);
-        setAgents(agentsData);
-        setModels(modelsData);
-      } catch (error) {
-        console.error('[ChatPanel] Failed to load agents or models:', error);
-        // Set empty arrays on error so components still render
-        setAgents([]);
-        setModels([]);
-      }
-    };
-    loadAgentsAndModels();
-  }, []);
+  // Use React Query for agents/models - deduplicates requests, avoids Strict Mode double-fetch
+  const { data: agentsData } = useAgents();
+  const { data: modelsData } = useModels();
+  const agents = agentsData ?? [];
+  const models = modelsData ?? [];
 
   // Get messages from active session
   const rawMessages = activeSession?.messages || [];
@@ -484,13 +475,12 @@ export const ChatPanel: React.FC = () => {
   const [proteinmpnnData, setProteinmpnnData] = useState<any>(null);
   const proteinmpnnProgress = useProteinMPNNProgress();
 
+  // OpenFold2 state
+  const [showOpenFold2Dialog, setShowOpenFold2Dialog] = useState(false);
+
   // RFdiffusion state
   const [showRFdiffusionDialog, setShowRFdiffusionDialog] = useState(false);
   const [rfdiffusionData, setRfdiffusionData] = useState<any>(null);
-
-  // Agent and model selection state
-  const [agents, setAgents] = useState<Agent[]>([]);
-  const [models, setModels] = useState<Model[]>([]);
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -888,6 +878,68 @@ try {
     );
   };
 
+  const renderOpenFold2Result = (result: ExtendedMessage['openfold2Result']) => {
+    if (!result?.pdbContent) return null;
+    const downloadPDB = () => {
+      const blob = new Blob([result.pdbContent!], { type: 'text/plain' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = result.filename || 'openfold2_result.pdb';
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    };
+    const loadInViewer = async () => {
+      if (!result.pdbContent || !plugin) return;
+      try {
+        setIsExecuting(true);
+        const executor = new CodeExecutor(plugin);
+        const pdbBlob = new Blob([result.pdbContent], { type: 'text/plain' });
+        const blobUrl = URL.createObjectURL(pdbBlob);
+        await executor.executeCode(`await builder.clearStructure(); await builder.loadStructure('${blobUrl}');`);
+        URL.revokeObjectURL(blobUrl);
+        setViewerVisibleAndSave(true);
+        setActivePane('viewer');
+      } catch (err) {
+        console.error('Failed to load OpenFold2 result in viewer:', err);
+      } finally {
+        setIsExecuting(false);
+      }
+    };
+    return (
+      <div className="mt-3 p-4 bg-gradient-to-r from-amber-50 to-orange-50 border border-amber-200 rounded-lg">
+        <div className="flex items-center space-x-2 mb-3">
+          <div className="w-8 h-8 bg-amber-600 rounded-full flex items-center justify-center">
+            <span className="text-white text-sm font-bold">OF2</span>
+          </div>
+          <div>
+            <h4 className="font-medium text-gray-900">OpenFold2 Structure Prediction</h4>
+            <p className="text-xs text-gray-600">Structure predicted successfully</p>
+          </div>
+        </div>
+        <div className="flex space-x-2">
+          <button
+            onClick={downloadPDB}
+            className="flex items-center space-x-1 px-3 py-2 bg-amber-600 text-white rounded-md hover:bg-amber-700 text-sm"
+          >
+            <Download className="w-4 h-4" />
+            <span>Download PDB</span>
+          </button>
+          <button
+            onClick={loadInViewer}
+            disabled={!plugin}
+            className="flex items-center space-x-1 px-3 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed text-sm"
+          >
+            <Play className="w-4 h-4" />
+            <span>View 3D</span>
+          </button>
+        </div>
+      </div>
+    );
+  };
+
   const isLikelyVisualization = (text: string): boolean => {
     const p = String(text || '').toLowerCase();
     const keywords = [
@@ -966,11 +1018,14 @@ try {
               addMessage(aiMessage);
               alphafoldProgress.completeProgress();
               return true;
-            } else if (st === 'error') {
+            } else if (st === 'error' || st === 'not_found') {
+              const errorMsg = st === 'not_found'
+                ? 'Job not found. The server may have been restarted. Please try submitting again.'
+                : statusResp.data?.error || 'Folding computation failed';
               const apiError = AlphaFoldErrorHandler.createError(
                 'FOLDING_FAILED',
                 { jobId, sequenceLength: sequence.length, parameters },
-                statusResp.data?.error || 'Folding computation failed',
+                errorMsg,
                 undefined,
                 jobId
               );
@@ -993,7 +1048,32 @@ try {
               alphafoldProgress.updateProgress(`Processing... (${Math.round(elapsed)}s)`, pct);
               return false;
             }
-          } catch (e) {
+          } catch (e: unknown) {
+            const status = (e as { response?: { status?: number } })?.response?.status;
+            const terminalStatuses = [400, 401, 403, 404, 410];
+            if (typeof status === 'number' && terminalStatuses.includes(status)) {
+              const errorMsg = status === 404
+                ? 'Job not found. The folding job may have expired or the server was restarted.'
+                : `Request failed (HTTP ${status}). Please try submitting again.`;
+              const apiError = AlphaFoldErrorHandler.createError(
+                'FOLDING_FAILED',
+                { jobId, sequenceLength: sequence.length, parameters },
+                errorMsg,
+                undefined,
+                jobId
+              );
+              logAlphaFoldError(apiError, { httpStatus: status, sequence: sequence.slice(0, 100), parameters });
+              const errorMessage: ExtendedMessage = {
+                id: (Date.now() + 1).toString(),
+                content: apiError.userMessage,
+                type: 'ai',
+                timestamp: new Date(),
+                error: apiError
+              };
+              addMessage(errorMessage);
+              alphafoldProgress.errorProgress(apiError.userMessage);
+              return true;
+            }
             console.warn('⚠️ [AlphaFold] Polling failed, will retry...', e);
             return false;
           }
@@ -1104,6 +1184,72 @@ try {
       
       addMessage(errorMessage);
       alphafoldProgress.errorProgress(structuredError.userMessage);
+    }
+  };
+
+  const handleOpenFold2Confirm = async (sequence: string, parameters: { alignmentsRaw?: string; templatesRaw?: string; relax_prediction: boolean }) => {
+    setShowOpenFold2Dialog(false);
+    const jobId = `of2_${Date.now()}`;
+    const validationError = OpenFold2ErrorHandler.handleSequenceValidation(sequence, jobId);
+    if (validationError) {
+      addMessage({
+        id: (Date.now() + 1).toString(),
+        content: validationError.userMessage,
+        type: 'ai',
+        timestamp: new Date(),
+        error: validationError,
+      });
+      return;
+    }
+    addMessage({
+      id: (Date.now()).toString(),
+      content: 'OpenFold2 structure prediction in progress...',
+      type: 'ai',
+      timestamp: new Date(),
+    });
+    try {
+      const response = await api.post('/openfold2/predict', {
+        sequence,
+        alignmentsRaw: parameters.alignmentsRaw,
+        templatesRaw: parameters.templatesRaw,
+        relax_prediction: parameters.relax_prediction ?? false,
+        jobId,
+        sessionId: activeSessionId ?? undefined,
+      });
+      const data = response.data;
+      if (data.status === 'completed' && data.pdbContent) {
+        const aiMessage: ExtendedMessage = {
+          id: (Date.now() + 1).toString(),
+          content: 'OpenFold2 structure prediction completed successfully! The structure is ready for visualization.',
+          type: 'ai',
+          timestamp: new Date(),
+          openfold2Result: {
+            pdbContent: data.pdbContent,
+            filename: data.filename || `openfold2_${jobId}.pdb`,
+            job_id: data.job_id,
+            message: data.message,
+          },
+        };
+        addMessage(aiMessage);
+      } else {
+        const err = OpenFold2ErrorHandler.createError(data.code || 'API_ERROR', { jobId }, data.error);
+        addMessage({
+          id: (Date.now() + 1).toString(),
+          content: err.userMessage,
+          type: 'ai',
+          timestamp: new Date(),
+          error: err,
+        });
+      }
+    } catch (error: any) {
+      const err = OpenFold2ErrorHandler.createError('API_ERROR', { jobId }, error?.response?.data?.error || error?.message);
+      addMessage({
+        id: (Date.now() + 1).toString(),
+        content: err.userMessage,
+        type: 'ai',
+        timestamp: new Date(),
+        error: err,
+      });
     }
   };
 
@@ -1447,6 +1593,11 @@ try {
         console.log('[ProteinMPNN] Design confirmation detected');
         setProteinmpnnData(data);
         setShowProteinMPNNDialog(true);
+        return true;
+      }
+
+      if (data.action === 'open_openfold2_dialog') {
+        setShowOpenFold2Dialog(true);
         return true;
       }
     } catch (e) {
@@ -1794,6 +1945,14 @@ try {
               message: 'Ready to run ProteinMPNN. Please confirm backbone source and parameters.'
             };
             handleAlphaFoldResponse(JSON.stringify(fallbackData));
+            return;
+          }
+
+          if (agentId === 'openfold2-agent') {
+            if (handleAlphaFoldResponse(aiText)) {
+              return;
+            }
+            setShowOpenFold2Dialog(true);
             return;
           }
 
@@ -2190,6 +2349,7 @@ try {
                     return null;
                   })()}
                   {renderAlphaFoldResult(message.alphafoldResult)}
+                  {renderOpenFold2Result(message.openfold2Result)}
                   {renderProteinMPNNResult(message.proteinmpnnResult)}
                   {message.error && (
                     <div className="mt-3">
@@ -2546,6 +2706,13 @@ try {
                 </button>
               ))}
               <button
+                onClick={() => setShowOpenFold2Dialog(true)}
+                className="px-4 py-2 bg-amber-50 hover:bg-amber-100 text-amber-800 rounded-lg border border-amber-200 text-sm font-medium transition-colors"
+                title="OpenFold2 structure prediction"
+              >
+                OpenFold2
+              </button>
+              <button
                 onClick={() => {}}
                 className="px-4 py-2 bg-white hover:bg-gray-50 text-gray-700 rounded-lg border border-gray-200 text-sm font-medium transition-colors"
               >
@@ -2577,6 +2744,12 @@ try {
         onClose={() => setShowProteinMPNNDialog(false)}
         onConfirm={handleProteinMPNNConfirm}
         initialData={proteinmpnnData}
+      />
+
+      <OpenFold2Dialog
+        isOpen={showOpenFold2Dialog}
+        onClose={() => setShowOpenFold2Dialog(false)}
+        onConfirm={handleOpenFold2Confirm}
       />
 
       {/* Pipeline Selection Modal */}

@@ -131,9 +131,13 @@ if (!fileResponse.ok) {
 All endpoints under `/api/` require authentication except:
 - `/api/auth/signup` - Public registration
 - `/api/auth/signin` - Public login
+- `/api/auth/refresh` - Token refresh (uses refresh token in body)
+- `/api/auth/signout` - Sign out (lenient, allows clearing session)
 - `/api/health` - Health check (public)
 
 **Examples of protected endpoints:**
+- `/api/agents` - List agents (requires auth)
+- `/api/models` - List models (requires auth)
 - `/api/upload/pdb` - File upload (requires auth)
 - `/api/files` - List user files (requires auth)
 - `/api/upload/pdb/{file_id}` - Download file (requires auth)

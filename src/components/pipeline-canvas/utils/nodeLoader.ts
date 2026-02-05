@@ -123,7 +123,7 @@ function validateNodeConfig(config: any, expectedType: NodeType): void {
  * Loads all node configurations
  */
 export async function loadAllNodeConfigs(): Promise<Map<NodeType, NodeDefinition>> {
-  const nodeTypes: NodeType[] = ['input_node', 'rfdiffusion_node', 'proteinmpnn_node', 'alphafold_node', 'message_input_node'];
+  const nodeTypes: NodeType[] = ['input_node', 'rfdiffusion_node', 'proteinmpnn_node', 'alphafold_node', 'openfold2_node', 'message_input_node'];
   
   const configs = await Promise.all(
     nodeTypes.map(async (type) => {

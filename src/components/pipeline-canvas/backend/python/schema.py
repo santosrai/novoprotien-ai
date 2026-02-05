@@ -12,6 +12,7 @@ NodeType = Literal[
     "rfdiffusion_node",
     "proteinmpnn_node",
     "alphafold_node",
+    "openfold2_node",
     "message_input_node",
     "http_request_node"
 ]
@@ -134,6 +135,17 @@ NODE_DEFINITIONS: Dict[NodeType, NodeDefinition] = {
             "num_relax": NodeSchemaField(type="number", required=False, default=0, label="Number of Relax Steps", min=0, max=10)
         },
         default_config={"recycle_count": 3, "num_relax": 0}
+    ),
+    "openfold2_node": NodeDefinition(
+        type="openfold2_node",
+        label="OpenFold2",
+        description="Structure prediction (sequence + optional MSA/template)",
+        inputs=[NodeHandle(id="target", type="target", position="left", dataType="sequence")],
+        outputs=[NodeHandle(id="source", type="source", position="right", dataType="pdb_file")],
+        config_schema={
+            "relax_prediction": NodeSchemaField(type="boolean", required=False, default=False, label="Relax Prediction")
+        },
+        default_config={"relax_prediction": False}
     ),
     "message_input_node": NodeDefinition(
         type="message_input_node",

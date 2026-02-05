@@ -54,9 +54,13 @@ class NIMSClient:
     """Client for NVIDIA NIMS AlphaFold2 API"""
     
     def __init__(self, api_key: Optional[str] = None):
-        self.api_key = api_key or os.getenv("NVCF_RUN_KEY")
+        raw_key = api_key or os.getenv("NVCF_RUN_KEY") or ""
+        self.api_key = raw_key.strip()
         if not self.api_key:
-            raise ValueError("NVCF_RUN_KEY environment variable or api_key parameter required")
+            raise ValueError(
+                "NVCF_RUN_KEY environment variable or api_key parameter required. "
+                "Get your key at https://build.nvidia.com/explore/discover"
+            )
         
         # Use the correct NVIDIA Health API endpoints (same as the reference script)
         # Handle empty env vars by using defaults

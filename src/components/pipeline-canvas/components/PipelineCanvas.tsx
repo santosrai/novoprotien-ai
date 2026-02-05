@@ -39,6 +39,7 @@ import {
   RFdiffusionNode,
   ProteinMPNNNode,
   AlphaFoldNode,
+  OpenFold2Node,
   MessageInputNode,
   HttpRequestNode,
 } from './nodes';
@@ -52,6 +53,7 @@ const nodeTypes = Object.freeze({
   rfdiffusion_node: RFdiffusionNode,
   proteinmpnn_node: ProteinMPNNNode,
   alphafold_node: AlphaFoldNode,
+  openfold2_node: OpenFold2Node,
   message_input_node: MessageInputNode,
   http_request_node: HttpRequestNode,
 });

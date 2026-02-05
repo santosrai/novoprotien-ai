@@ -11,7 +11,8 @@ import {
   FileInput,
   Sparkles,
   Dna,
-  Atom
+  Atom,
+  Layers
 } from 'lucide-react';
 
 // Get icon for node type
@@ -25,6 +26,8 @@ const getNodeIcon = (type: string) => {
       return <Dna className="w-4 h-4" />;
     case 'alphafold_node':
       return <Atom className="w-4 h-4" />;
+    case 'openfold2_node':
+      return <Layers className="w-4 h-4" />;
     default:
       return <div className="w-4 h-4 rounded bg-gray-600" />;
   }
@@ -41,6 +44,8 @@ const getNodeColor = (type: string) => {
       return 'text-green-400';
     case 'alphafold_node':
       return 'text-orange-400';
+    case 'openfold2_node':
+      return 'text-amber-400';
     default:
       return 'text-gray-400';
   }

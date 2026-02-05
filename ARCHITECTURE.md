@@ -6,7 +6,7 @@ NovoProtein AI is a web-based molecular visualization and protein design platfor
 - **Natural Language Interface**: Users interact via chat to control protein visualization and design
 - **3D Molecular Visualization**: Powered by Molstar for interactive protein structure viewing
 - **AI-Powered Code Generation**: AI models via OpenRouter generate visualization code from natural language
-- **Protein Design Workflows**: AlphaFold2 (structure prediction), RFdiffusion (de novo design), and ProteinMPNN (sequence design) via NVIDIA NIMS API
+- **Protein Design Workflows**: AlphaFold2, OpenFold2 (structure prediction), RFdiffusion (de novo design), and ProteinMPNN (sequence design) via NVIDIA NIMS API
 
 ## High-Level Architecture
 
@@ -42,8 +42,9 @@ NovoProtein AI is a web-based molecular visualization and protein design platfor
 │  ┌──────────────▼──────────────┐  ┌──────────▼──────────┐
 │  │  Specialized Handlers        │  │  External Services  │
 │  │  - alphafold_handler.py      │  │  - Claude API       │
-│  │  - rfdiffusion_handler.py    │  │  - NVIDIA NIMS      │
-│  │  - proteinmpnn_handler.py    │  │  - UniProt          │
+│  │  - openfold2_handler.py      │  │  - NVIDIA NIMS      │
+│  │  - rfdiffusion_handler.py    │  │  - UniProt          │
+│  │  - proteinmpnn_handler.py    │  │                      │
 │  └──────────────────────────────┘  └─────────────────────┘
 └──────────────────────────────────────────────────────────────┘
 ```
@@ -72,7 +73,7 @@ NovoProtein AI is a web-based molecular visualization and protein design platfor
   - Sends user messages to backend `/api/agents/route` or `/api/agents/route-stream` (for streaming)
   - Receives agent responses (code, text, or structured data)
   - Supports streaming responses with thinking process display
-  - Handles AlphaFold, RFdiffusion, and ProteinMPNN workflows
+  - Handles AlphaFold, OpenFold2, RFdiffusion, and ProteinMPNN workflows
   - Manages chat history via `chatHistoryStore`
   - Displays progress tracking for long-running jobs
   - Error handling and display
@@ -93,6 +94,7 @@ NovoProtein AI is a web-based molecular visualization and protein design platfor
 
 #### 4. **Specialized Dialogs**
 - **AlphaFoldDialog**: Confirmation and parameter input for folding jobs
+- **OpenFold2Dialog**: Structure prediction with optional MSA/template upload
 - **RFdiffusionDialog**: Design request confirmation and parameters
 - **ProteinMPNNDialog**: Sequence design configuration
 - **ProgressTracker**: Job status polling and display
@@ -284,6 +286,11 @@ A standalone, reusable library for visual DAG workflow design:
   5. Returns PDB content for visualization
 - **Status Management**: Tracks active jobs in `active_jobs` dict
 
+##### **openfold2_handler.py**
+- **Purpose**: Handles OpenFold2 structure prediction (blocking, optional MSA/template)
+- **API**: NVIDIA OpenFold2 NIM (`predict-structure-from-msa-and-template`)
+- **Flow**: Validate sequence (≤1000), call NIM, store result in `openfold2_results/`
+
 ##### **rfdiffusion_handler.py**
 - **Purpose**: Handles RFdiffusion protein design requests
 - **Flow**:
@@ -323,6 +330,10 @@ A standalone, reusable library for visual DAG workflow design:
 - `POST /api/alphafold/fold`: Submit folding job (returns 202 Accepted)
 - `GET /api/alphafold/status/{job_id}`: Poll job status
 - `POST /api/alphafold/cancel/{job_id}`: Cancel job
+
+#### OpenFold2 Endpoints
+- `POST /api/openfold2/predict`: Submit prediction (blocking; returns result or error)
+- `GET /api/openfold2/result/{job_id}`: Download result PDB
 
 #### RFdiffusion Endpoints
 - `POST /api/rfdiffusion/design`: Submit design job

@@ -1,6 +1,7 @@
 import { useQuery } from '@tanstack/react-query';
 import { api } from '../../utils/api';
 import { Pipeline } from '../../components/pipeline-canvas/types';
+import { useAuthStore } from '../../stores/authStore';
 
 interface PipelinesResponse {
   status: string;
@@ -26,8 +27,11 @@ interface PipelineResponse {
 
 /**
  * Query hook for fetching user pipelines
+ * Only fetches when user is authenticated
  */
 export function usePipelines(conversationId?: string) {
+  const isAuthenticated = useAuthStore((state) => state.isAuthenticated);
+  
   return useQuery<Pipeline[]>({
     queryKey: ['pipelines', conversationId],
     queryFn: async () => {
@@ -59,14 +63,18 @@ export function usePipelines(conversationId?: string) {
       const pipelines = await Promise.all(pipelinePromises);
       return pipelines.filter((p): p is Pipeline => p !== null);
     },
+    enabled: isAuthenticated, // Only fetch when authenticated
     staleTime: 2 * 60 * 1000, // Pipelines can change, cache for 2 minutes
   });
 }
 
 /**
  * Query hook for fetching a single pipeline by ID
+ * Only fetches when user is authenticated
  */
 export function usePipeline(pipelineId: string | null) {
+  const isAuthenticated = useAuthStore((state) => state.isAuthenticated);
+  
   return useQuery<Pipeline>({
     queryKey: ['pipelines', pipelineId],
     queryFn: async () => {
@@ -84,7 +92,7 @@ export function usePipeline(pipelineId: string | null) {
       
       return pipeline as Pipeline;
     },
-    enabled: !!pipelineId,
+    enabled: isAuthenticated && !!pipelineId, // Only fetch when authenticated and ID provided
     staleTime: 2 * 60 * 1000, // Single pipeline cache for 2 minutes
   });
 }
