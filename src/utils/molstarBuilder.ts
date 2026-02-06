@@ -277,7 +277,7 @@ export const createMolstarBuilder = (
           currentStructure,
           {
             type: 'cartoon' as const,
-            color: 'element' as const,
+            color: 'element-symbol' as const,
           }
         );
       }
