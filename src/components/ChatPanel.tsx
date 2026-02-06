@@ -1916,6 +1916,8 @@ try {
           agentId: agentSettings.selectedAgentId || undefined, // Only send if manually selected
           model: agentSettings.selectedModel || undefined, // Only send if manually selected
           pipeline_id: pipelineIdToSend || undefined, // Pass pipeline ID to backend
+          uploadedFile: uploadedFileInfo || undefined, // Pass uploaded file context for validation
+          pdb_content: undefined as string | undefined, // TODO: populate when viewer exposes raw PDB content
         };
         console.log('[AI] route:request', payload);
         console.log('[DEBUG] currentCode length:', currentCode?.length || 0);

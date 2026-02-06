@@ -756,6 +756,7 @@ async def run_agent(
     pipeline_id: Optional[str] = None,
     pipeline_data: Optional[Dict[str, Any]] = None,
     model_override: Optional[str] = None,
+    pdb_content: Optional[str] = None,
 ) -> Dict[str, Any]:
     # Use model_override if provided, otherwise fall back to agent's default
     if model_override:
@@ -856,7 +857,7 @@ async def run_agent(
             result = await validation_handler.process_validation_request(
                 user_text,
                 context={
-                    "current_pdb_content": current_code,
+                    "current_pdb_content": pdb_content,
                     "uploaded_file_context": uploaded_file_context,
                     "file_id": uploaded_file_context.get("file_id") if uploaded_file_context else None,
                     "session_id": None,

@@ -387,6 +387,8 @@ async def route(request: Request, user: Dict[str, Any] = Depends(get_current_use
             "model_override": model_override
         })
         
+        pdb_content = body.get("pdb_content")
+
         res = await run_agent(
             agent=agents[agent_id],
             user_text=input_text,
@@ -399,6 +401,7 @@ async def route(request: Request, user: Dict[str, Any] = Depends(get_current_use
             pipeline_id=pipeline_id,  # Pass pipeline_id to agent
             pipeline_data=pipeline_data,  # Pass fetched pipeline data to agent
             model_override=model_override,
+            pdb_content=pdb_content,
         )
         
         log_line("agent_completed", {
