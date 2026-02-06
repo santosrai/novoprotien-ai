@@ -105,7 +105,7 @@ class ValidationReport:
     # Summary
     total_residues: int = 0
     chains: List[str] = field(default_factory=list)
-    suggestions: List[str] = field(default_factory=list)
+    suggestions: List[Dict[str, Any]] = field(default_factory=list)
     residue_metrics: List[Dict[str, Any]] = field(default_factory=list)
 
     def to_dict(self) -> Dict[str, Any]:
@@ -187,6 +187,16 @@ def _compress_residue_ranges(residue_ids: List[Tuple[str, int]]) -> str:
     return "; ".join(parts)
 
 
+def _residues_to_dicts(
+    residue_ids: List[Tuple[str, int]],
+) -> List[Dict[str, Any]]:
+    """Convert (chain_id, resnum) tuples to dicts for the frontend."""
+    return [
+        {"chain_id": chain, "residue_number": resnum}
+        for chain, resnum in residue_ids
+    ]
+
+
 def _generate_suggestions(
     plddt_scores: List[float],
     rama_outlier_pct: float,
@@ -194,71 +204,118 @@ def _generate_suggestions(
     low_plddt_residues: List[Tuple[str, int]],
     rama_outlier_residues: List[Tuple[str, int]],
     clash_residues: List[Tuple[str, int]],
-) -> List[str]:
+) -> List[Dict[str, Any]]:
     """
     Produce actionable redesign suggestions based on validation metrics.
 
-    Suggestions reference concrete tools in the NovoProtein pipeline
-    (RFdiffusion, ProteinMPNN) so that users know what to do next.
+    Each suggestion is a dict with keys:
+      type, severity, message, detail, action, residues
+    matching the frontend ``ValidationSuggestion`` interface.
     """
-    suggestions: List[str] = []
+    suggestions: List[Dict[str, Any]] = []
 
     # --- pLDDT-based suggestions ---
     if low_plddt_residues:
         region_str = _compress_residue_ranges(low_plddt_residues)
-        suggestions.append(
-            f"Low confidence regions detected at residues [{region_str}]. "
-            "Consider redesigning these regions with RFdiffusion (partial diffusion "
-            "mode) to improve backbone geometry."
-        )
+        suggestions.append({
+            "type": "confidence",
+            "severity": "high",
+            "message": f"Low confidence regions at [{region_str}]",
+            "detail": (
+                "These residues have pLDDT < 50, indicating the model is uncertain "
+                "about their conformation."
+            ),
+            "action": "Redesign with RFdiffusion (partial diffusion)",
+            "residues": _residues_to_dicts(low_plddt_residues),
+        })
     if plddt_scores:
         mean_plddt = sum(plddt_scores) / len(plddt_scores)
         if mean_plddt < 50:
-            suggestions.append(
-                "Overall pLDDT is very low (<50). The structure may need significant "
-                "redesign. Try generating a new backbone with RFdiffusion and then "
-                "redesigning the sequence with ProteinMPNN."
-            )
+            suggestions.append({
+                "type": "confidence",
+                "severity": "critical",
+                "message": "Overall pLDDT is very low (<50)",
+                "detail": (
+                    "The structure may need significant redesign. Try generating "
+                    "a new backbone with RFdiffusion and redesigning the sequence "
+                    "with ProteinMPNN."
+                ),
+                "action": "Generate new backbone with RFdiffusion",
+                "residues": [],
+            })
         elif mean_plddt < 70:
-            suggestions.append(
-                "Mean pLDDT is moderate (<70). Running ProteinMPNN sequence design "
-                "on the current backbone may improve predicted confidence."
-            )
+            suggestions.append({
+                "type": "confidence",
+                "severity": "medium",
+                "message": "Mean pLDDT is moderate (<70)",
+                "detail": (
+                    "Running ProteinMPNN sequence design on the current backbone "
+                    "may improve predicted confidence."
+                ),
+                "action": "Run ProteinMPNN sequence design",
+                "residues": [],
+            })
 
     # --- Ramachandran suggestions ---
     if rama_outlier_pct > 5.0:
         region_str = _compress_residue_ranges(rama_outlier_residues)
-        suggestions.append(
-            f"Ramachandran outliers ({rama_outlier_pct:.1f}%) detected at [{region_str}]. "
-            "Use RFdiffusion partial diffusion on these regions to fix backbone "
-            "dihedral angles, then re-run ProteinMPNN."
-        )
+        suggestions.append({
+            "type": "geometry",
+            "severity": "high",
+            "message": f"Ramachandran outliers ({rama_outlier_pct:.1f}%) at [{region_str}]",
+            "detail": (
+                "Use RFdiffusion partial diffusion on these regions to fix "
+                "backbone dihedral angles, then re-run ProteinMPNN."
+            ),
+            "action": "Fix with RFdiffusion partial diffusion",
+            "residues": _residues_to_dicts(rama_outlier_residues),
+        })
     elif rama_outlier_pct > 2.0:
-        suggestions.append(
-            f"Ramachandran outliers at {rama_outlier_pct:.1f}%. Minor backbone "
-            "adjustments via energy minimization or short RFdiffusion refinement "
-            "may resolve these."
-        )
+        suggestions.append({
+            "type": "geometry",
+            "severity": "medium",
+            "message": f"Ramachandran outliers at {rama_outlier_pct:.1f}%",
+            "detail": (
+                "Minor backbone adjustments via energy minimization or short "
+                "RFdiffusion refinement may resolve these."
+            ),
+            "action": "Apply energy minimization",
+            "residues": _residues_to_dicts(rama_outlier_residues),
+        })
 
     # --- Clash suggestions ---
     if clash_count > 10:
         region_str = _compress_residue_ranges(clash_residues)
-        suggestions.append(
-            f"Significant steric clashes ({clash_count}) detected near [{region_str}]. "
-            "Run ProteinMPNN to redesign side-chains in these regions, or apply "
-            "energy minimization to relieve clashes."
-        )
+        suggestions.append({
+            "type": "clashes",
+            "severity": "high",
+            "message": f"Significant steric clashes ({clash_count}) near [{region_str}]",
+            "detail": (
+                "Run ProteinMPNN to redesign side-chains in these regions, "
+                "or apply energy minimization to relieve clashes."
+            ),
+            "action": "Redesign side-chains with ProteinMPNN",
+            "residues": _residues_to_dicts(clash_residues),
+        })
     elif clash_count > 0:
-        suggestions.append(
-            f"{clash_count} steric clash(es) found. A short energy minimization "
-            "step should resolve these."
-        )
+        suggestions.append({
+            "type": "clashes",
+            "severity": "low",
+            "message": f"{clash_count} steric clash(es) found",
+            "detail": "A short energy minimization step should resolve these.",
+            "action": "Apply energy minimization",
+            "residues": _residues_to_dicts(clash_residues),
+        })
 
     if not suggestions:
-        suggestions.append(
-            "Structure passes all quality checks. Ready for downstream analysis "
-            "or experimental validation."
-        )
+        suggestions.append({
+            "type": "success",
+            "severity": "low",
+            "message": "Structure passes all quality checks",
+            "detail": "Ready for downstream analysis or experimental validation.",
+            "action": "",
+            "residues": [],
+        })
 
     return suggestions
 
@@ -370,7 +427,7 @@ def validate_structure(pdb_content: str) -> ValidationReport:
 
     plddt_per_residue = [
         {
-            "chain": rm.chain_id,
+            "chain_id": rm.chain_id,
             "residue_number": rm.residue_number,
             "residue_name": rm.residue_name,
             "plddt": rm.plddt,
@@ -422,8 +479,9 @@ def validate_structure(pdb_content: str) -> ValidationReport:
 
             rama_data.append(
                 {
-                    "chain": chain_id,
+                    "chain_id": chain_id,
                     "residue_number": resnum,
+                    "residue_name": residue.resname.strip(),
                     "phi": phi_deg,
                     "psi": psi_deg,
                     "region": classification,
@@ -535,21 +593,7 @@ def validate_structure(pdb_content: str) -> ValidationReport:
     # ------------------------------------------------------------------
     # Build residue_metrics list
     # ------------------------------------------------------------------
-    residue_metrics_list = [
-        {
-            "chain_id": rm.chain_id,
-            "residue_number": rm.residue_number,
-            "residue_name": rm.residue_name,
-            "plddt": rm.plddt,
-            "phi": rm.phi,
-            "psi": rm.psi,
-            "rama_region": rm.rama_region,
-            "clashes": rm.clashes,
-        }
-        for rm in residue_map.values()
-    ]
-
-    # Update per-residue clash counts
+    # Update per-residue clash counts first
     for chain_id, resnum in clash_residues:
         key = (chain_id, resnum)
         if key in residue_map:

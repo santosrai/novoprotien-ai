@@ -198,7 +198,7 @@ class SimpleRouterGraph:
             return {"routedAgentId": "rfdiffusion-agent", "reason": "rule:rfdiffusion-design"}
 
         # Validation agent keywords
-        validation_keywords = ["validate", "validation", "quality", "check quality", "assess", "plddt", "ramachandran", "clashes", "quality report", "check structure"]
+        validation_keywords = ["validate", "validation", "check quality", "assess structure", "assess quality", "plddt", "ramachandran", "clashes", "quality report", "check structure"]
         if any(k in low for k in validation_keywords):
             return {"routedAgentId": "validation-agent", "reason": "rule:validation-keywords"}
 

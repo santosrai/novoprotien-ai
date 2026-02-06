@@ -231,7 +231,7 @@ export default function ValidationPanel({
           <div className="flex items-center gap-2">
             <span className="text-sm font-medium">pLDDT Confidence</span>
             <span className="text-xs text-gray-400">
-              Mean: {report.plddt_mean.toFixed(1)} | High conf: {(report.plddt_high_confidence * 100).toFixed(1)}%
+              Mean: {report.plddt_mean.toFixed(1)} | High conf: {report.total_residues > 0 ? ((report.plddt_high_confidence / report.total_residues) * 100).toFixed(1) : '0.0'}%
             </span>
           </div>
           {expandedSection === 'plddt' ? (

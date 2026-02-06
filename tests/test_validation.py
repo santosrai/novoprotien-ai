@@ -68,14 +68,21 @@ def test_whitespace_only_pdb_raises_value_error():
 
 
 def test_suggestions_generated():
-    """Suggestions are generated as a list of strings based on metrics."""
+    """Suggestions are generated as a list of structured dicts based on metrics."""
     report = validate_structure(SAMPLE_PDB)
     assert isinstance(report.suggestions, list)
     assert len(report.suggestions) > 0, "Expected at least one suggestion"
     for s in report.suggestions:
-        assert isinstance(s, str), f"Expected suggestion to be a string, got {type(s)}"
-        assert len(s) > 0, "Expected non-empty suggestion string"
-    print(f"Suggestions ({len(report.suggestions)}): {report.suggestions}")
+        assert isinstance(s, dict), f"Expected suggestion to be a dict, got {type(s)}"
+        assert "type" in s, "Expected 'type' key in suggestion"
+        assert "severity" in s, "Expected 'severity' key in suggestion"
+        assert "message" in s, "Expected 'message' key in suggestion"
+        assert "detail" in s, "Expected 'detail' key in suggestion"
+        assert "action" in s, "Expected 'action' key in suggestion"
+        assert "residues" in s, "Expected 'residues' key in suggestion"
+        assert s["type"] in ("confidence", "geometry", "clashes", "success", "error")
+        assert s["severity"] in ("low", "medium", "high", "critical")
+    print(f"Suggestions ({len(report.suggestions)}): {[s['message'] for s in report.suggestions]}")
 
 
 def test_plddt_statistics():

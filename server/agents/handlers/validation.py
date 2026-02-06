@@ -62,10 +62,12 @@ class ValidationHandler:
         # Priority 1: explicit file_id with user ownership check
         file_id = context.get("file_id")
         user_id = context.get("user_id")
+        source_label = "unknown"
         if file_id and user_id:
             try:
                 file_path = get_user_file_path(file_id, user_id)
                 pdb_content = file_path.read_text()
+                source_label = f"uploaded file ({file_id})"
                 logger.info("Validation: loaded PDB from file_id=%s", file_id)
             except Exception as exc:
                 logger.warning("Failed to load file_id=%s: %s", file_id, exc)
@@ -74,6 +76,7 @@ class ValidationHandler:
         if not pdb_content:
             pdb_content = context.get("current_pdb_content")
             if pdb_content:
+                source_label = "current viewer structure"
                 logger.info("Validation: using current_pdb_content from viewer")
 
         # Priority 3: uploaded file context
@@ -82,6 +85,7 @@ class ValidationHandler:
             if uploaded and isinstance(uploaded, dict):
                 pdb_content = uploaded.get("pdb_content") or uploaded.get("content")
                 if pdb_content:
+                    source_label = uploaded.get("filename", "uploaded file")
                     logger.info("Validation: using uploaded_file_context")
 
         if not pdb_content:
@@ -98,6 +102,7 @@ class ValidationHandler:
             report = validate_structure(pdb_content)
             result = report.to_dict()
             result["action"] = "validation_result"
+            result["source"] = source_label
             logger.info(
                 "Validation complete: grade=%s score=%.1f",
                 result.get("grade"),

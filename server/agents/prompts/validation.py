@@ -15,12 +15,4 @@ Output format (JSON only):
   "file_id": "optional file ID",
   "message": "brief description of what will be validated"
 }
-
-If the user asks to compare two structures, output:
-{
-  "action": "compare_structures",
-  "source1": "pdb_id or file_id",
-  "source2": "pdb_id or file_id",
-  "message": "brief description of comparison"
-}
 """
