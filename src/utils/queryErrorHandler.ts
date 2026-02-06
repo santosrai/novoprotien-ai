@@ -1,9 +1,12 @@
 import { AxiosError } from 'axios';
-import { useAuthStore } from '../stores/authStore';
 
 /**
  * Global error handler for React Query
- * Handles common HTTP errors and integrates with existing error system
+ * Handles common HTTP errors and integrates with existing error system.
+ *
+ * IMPORTANT: 401 token refresh is handled exclusively by the axios response
+ * interceptor in api.ts (with deduplication). Do NOT duplicate that logic here
+ * — doing so creates competing refresh attempts that can freeze the browser.
  */
 export function handleQueryError(error: unknown): void {
   if (error instanceof AxiosError) {
@@ -12,20 +15,9 @@ export function handleQueryError(error: unknown): void {
 
     switch (status) {
       case 401:
-        // Unauthorized - try to refresh token or sign out
-        const authStore = useAuthStore.getState();
-        if (authStore.refreshToken) {
-          // Try to refresh token
-          authStore.refreshAccessToken().catch(() => {
-            // Refresh failed, sign out
-            authStore.signout();
-            window.location.href = '/signin';
-          });
-        } else {
-          // No refresh token, sign out immediately
-          authStore.signout();
-          window.location.href = '/signin';
-        }
+        // Token refresh + redirect is handled by the axios interceptor in api.ts.
+        // Nothing to do here — just log for debugging.
+        console.warn('[QueryError] 401 Unauthorized (handled by interceptor)');
         break;
 
       case 402:
@@ -54,7 +46,9 @@ export function handleQueryError(error: unknown): void {
 
       default:
         // Other errors
-        console.error('[QueryError] Request failed:', status, data);
+        if (status) {
+          console.error('[QueryError] Request failed:', status, data);
+        }
     }
   } else if (error instanceof Error) {
     // Network errors or other errors

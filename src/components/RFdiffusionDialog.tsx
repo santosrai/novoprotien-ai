@@ -5,6 +5,7 @@ import { AttachmentMenu } from './AttachmentMenu';
 import { useAppStore } from '../stores/appStore';
 import { useChatHistoryStore } from '../stores/chatHistoryStore';
 import { getAuthHeaders } from '../utils/api';
+import { CodeExecutor } from '../utils/codeExecutor';
 
 interface RFdiffusionParameters {
   pdb_id?: string;
@@ -14,6 +15,7 @@ interface RFdiffusionParameters {
   hotspot_res: string[];
   diffusion_steps: number;
   design_mode: 'unconditional' | 'motif_scaffolding' | 'partial_diffusion';
+  max_atoms?: number;
 }
 
 interface RFdiffusionDialogProps {
@@ -48,13 +50,20 @@ export const RFdiffusionDialog: React.FC<RFdiffusionDialogProps> = ({
 }) => {
   const lastLoadedPdb = useAppStore(state => state.lastLoadedPdb);
   const currentCode = useAppStore(state => state.currentCode);
-  const { activeSessionId } = useChatHistoryStore();
+  const plugin = useAppStore(state => state.plugin);
+  const setCurrentCode = useAppStore(state => state.setCurrentCode);
+  const setIsExecuting = useAppStore(state => state.setIsExecuting);
+  const setViewerVisible = useAppStore(state => state.setViewerVisible);
+  const setActivePane = useAppStore(state => state.setActivePane);
+  const setCurrentStructureOrigin = useAppStore(state => state.setCurrentStructureOrigin);
+  const { activeSessionId, saveVisualizationCode } = useChatHistoryStore();
   
   const [parameters, setParameters] = useState<RFdiffusionParameters>({
     contigs: 'A50-150',
     hotspot_res: [],
     diffusion_steps: 15,
-    design_mode: 'unconditional'
+    design_mode: 'unconditional',
+    max_atoms: 400
   });
 
   const [showAdvanced, setShowAdvanced] = useState(false);
@@ -277,6 +286,58 @@ export const RFdiffusionDialog: React.FC<RFdiffusionDialogProps> = ({
           filename: result.file_info.filename,
           file_id: result.file_info.file_id,
         });
+
+        // Auto-load the uploaded PDB file in MolStar viewer
+        if (plugin) {
+          try {
+            setIsExecuting(true);
+            const executor = new CodeExecutor(plugin);
+            // Clear existing structure first
+            await executor.executeCode('try { await builder.clearStructure(); } catch(e) { console.warn("Clear failed:", e); }');
+
+            // Fetch the uploaded file content and load it
+            const fileUrl = result.file_info.file_url || `/api/upload/pdb/${result.file_info.file_id}`;
+            const fileResponse = await fetch(fileUrl, { headers: getAuthHeaders() });
+            if (fileResponse.ok) {
+              const fileContent = await fileResponse.text();
+              const pdbBlob = new Blob([fileContent], { type: 'text/plain' });
+              const blobUrl = URL.createObjectURL(pdbBlob);
+
+              const loadCode = `
+try {
+  await builder.loadStructure('${blobUrl}');
+  await builder.addCartoonRepresentation({ color: 'secondary-structure' });
+  builder.focusView();
+  console.log('RFdiffusion uploaded file loaded successfully');
+} catch (e) { 
+  console.error('Failed to load uploaded file:', e); 
+}`;
+              setCurrentCode(loadCode);
+              setCurrentStructureOrigin({
+                type: 'upload',
+                filename: result.file_info.filename,
+                metadata: {
+                  file_id: result.file_info.file_id,
+                  file_url: blobUrl,
+                },
+              });
+
+              await executor.executeCode(loadCode);
+              setViewerVisible(true);
+              setActivePane('viewer');
+
+              // Persist the visualization code to the active session
+              if (activeSessionId) {
+                saveVisualizationCode(activeSessionId, loadCode);
+              }
+              console.log('[RFdiffusionDialog] Uploaded PDB loaded in viewer');
+            }
+          } catch (viewerError) {
+            console.error('[RFdiffusionDialog] Failed to auto-load uploaded file in viewer:', viewerError);
+          } finally {
+            setIsExecuting(false);
+          }
+        }
       }
     } catch (error: any) {
       console.error('[RFdiffusionDialog] File upload failed:', error);
@@ -653,6 +714,49 @@ export const RFdiffusionDialog: React.FC<RFdiffusionDialogProps> = ({
               />
               <p className="text-xs text-gray-600 mt-1">
                 Override PDB ID with raw ATOM records
+              </p>
+            </div>
+
+            {/* Max ATOM Lines */}
+            <div>
+              <label className="block text-xs text-gray-700 mb-1">
+                Max ATOM Lines
+              </label>
+              <div className="flex items-center space-x-2 mb-2">
+                {[
+                  { label: '400', value: 400 },
+                  { label: '1500', value: 1500 },
+                  { label: '3000', value: 3000 },
+                  { label: 'All', value: 0 },
+                ].map((preset) => (
+                  <button
+                    key={preset.value}
+                    type="button"
+                    onClick={() => handleParameterChange('max_atoms', preset.value)}
+                    className={`px-2 py-1 text-xs rounded border ${
+                      parameters.max_atoms === preset.value
+                        ? 'border-blue-500 bg-blue-50 text-blue-700 font-medium'
+                        : 'border-gray-300 text-gray-600 hover:border-gray-400'
+                    }`}
+                  >
+                    {preset.label}
+                  </button>
+                ))}
+                <input
+                  type="number"
+                  min="0"
+                  max="10000"
+                  value={parameters.max_atoms ?? 400}
+                  onChange={(e) => {
+                    const val = parseInt(e.target.value);
+                    handleParameterChange('max_atoms', isNaN(val) ? 400 : val);
+                  }}
+                  className="w-20 p-1 border border-gray-300 rounded text-xs"
+                  placeholder="400"
+                />
+              </div>
+              <p className="text-xs text-gray-600">
+                Controls how many ATOM lines from the PDB are sent to the API. Larger values preserve more of the structure but increase payload size. Set to 0 for no limit. Increase this if you get "Residue not in pdb file" errors.
               </p>
             </div>
           </div>

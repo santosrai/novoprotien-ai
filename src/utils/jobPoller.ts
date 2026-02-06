@@ -9,6 +9,10 @@ export interface JobStatus {
   progress_message?: string;
   data?: any;
   error?: string;
+  errorCode?: string;
+  originalError?: string;
+  aiSummary?: string;
+  parameters?: Record<string, any>;
 }
 
 export interface JobPollerOptions {

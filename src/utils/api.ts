@@ -44,60 +44,86 @@ api.interceptors.request.use((config) => {
   return config;
 });
 
+// --- Deduplication for token refresh ---
+// Ensures only ONE refresh request is in-flight at a time.
+// All concurrent 401 responses queue behind the same promise.
+let refreshPromise: Promise<string | null> | null = null;
+let hasRedirected = false;
+
+function redirectToSignin() {
+  if (hasRedirected) return;
+  hasRedirected = true;
+  // Clear auth storage
+  try { localStorage.removeItem('novoprotein-auth-storage'); } catch (_) { /* ignore */ }
+  // Only redirect if not already on auth pages
+  if (!window.location.pathname.startsWith('/signin') && !window.location.pathname.startsWith('/signup')) {
+    window.location.href = '/signin';
+  }
+}
+
+function doRefreshToken(): Promise<string | null> {
+  if (refreshPromise) return refreshPromise;
+
+  refreshPromise = (async () => {
+    try {
+      const authStorage = localStorage.getItem('novoprotein-auth-storage');
+      if (!authStorage) return null;
+
+      const { state } = JSON.parse(authStorage);
+      const refreshToken = state?.refreshToken;
+      if (!refreshToken) return null;
+
+      // Use raw axios (NOT the intercepted `api` instance) to avoid loops
+      const response = await axios.post(`${baseURL}/auth/refresh`, {
+        refresh_token: refreshToken,
+      });
+
+      const { access_token } = response.data;
+      if (!access_token) return null;
+
+      // Update stored token
+      const updatedState = { ...state, accessToken: access_token };
+      localStorage.setItem('novoprotein-auth-storage', JSON.stringify({ state: updatedState }));
+      return access_token;
+    } catch (_) {
+      return null;
+    } finally {
+      refreshPromise = null;
+    }
+  })();
+
+  return refreshPromise;
+}
+
 // Add response interceptor to handle auth errors
 api.interceptors.response.use(
   (response) => response,
   async (error) => {
     const originalRequest = error.config;
-    
-    // Handle 401 Unauthorized - try to refresh token
+
+    // Handle 401 Unauthorized - try to refresh token ONCE
     if (error.response?.status === 401 && !originalRequest._retry) {
       originalRequest._retry = true;
-      
-      try {
-        const authStorage = localStorage.getItem('novoprotein-auth-storage');
-        if (authStorage) {
-          const { state } = JSON.parse(authStorage);
-          const refreshToken = state?.refreshToken;
-          
-          if (refreshToken) {
-            // Try to refresh access token
-            const response = await axios.post(`${baseURL}/auth/refresh`, {
-              refresh_token: refreshToken
-            });
-            
-            const { access_token } = response.data;
-            
-            // Update stored token
-            const updatedState = { ...state, accessToken: access_token };
-            localStorage.setItem('novoprotein-auth-storage', JSON.stringify({ state: updatedState }));
-            
-            // Retry original request with new token
-            originalRequest.headers['Authorization'] = `Bearer ${access_token}`;
-            return api(originalRequest);
-          }
-        }
-        
-        // No auth storage or no refresh token - redirect to signin
-        // (Only redirect if not already on signin/signup pages)
-        if (!window.location.pathname.startsWith('/signin') && !window.location.pathname.startsWith('/signup')) {
-          window.location.href = '/signin';
-        }
-        return Promise.reject(error);
-      } catch (refreshError) {
-        // Refresh failed, sign out user
-        localStorage.removeItem('novoprotein-auth-storage');
-        window.location.href = '/signin';
-        return Promise.reject(refreshError);
+
+      const newToken = await doRefreshToken();
+
+      if (newToken) {
+        // Retry original request with the fresh token
+        originalRequest.headers['Authorization'] = `Bearer ${newToken}`;
+        return api(originalRequest);
       }
+
+      // Refresh failed or no refresh token — redirect once
+      redirectToSignin();
+      return Promise.reject(error);
     }
-    
+
     // Handle 402 Payment Required (insufficient credits)
     if (error.response?.status === 402) {
       // This will be handled by the component
       return Promise.reject(error);
     }
-    
+
     return Promise.reject(error);
   }
 );

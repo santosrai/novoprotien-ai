@@ -5,10 +5,18 @@ import { useJobStatus } from '../hooks/queries/useJobStatus';
 import { useAlphaFoldCancel,  } from '../hooks/mutations/useAlphaFold';
 import { useRFdiffusionCancel as useRFdiffusionCancelHook } from '../hooks/mutations/useRFdiffusion';
 
+export interface JobErrorData {
+  error: string;
+  errorCode?: string;
+  originalError?: string;
+  aiSummary?: string;
+  parameters?: Record<string, any>;
+}
+
 interface JobLoadingPillProps {
   message: Message;
   onJobComplete: (pdbData: any) => void;
-  onJobError: (error: string) => void;
+  onJobError: (error: string, errorData?: JobErrorData) => void;
   onCancel?: () => void;
 }
 
@@ -56,9 +64,18 @@ export const JobLoadingPill: React.FC<JobLoadingPillProps> = ({
       const errorMessage = jobStatus?.status === 'not_found' 
         ? 'Job not found. The server may have been restarted. Please try submitting the job again.'
         : jobStatus?.error || jobError?.message || 'Job failed';
-      onJobError(errorMessage);
+      
+      // Pass full error data including AI summary from server
+      const errorData: JobErrorData = {
+        error: errorMessage,
+        errorCode: jobStatus?.errorCode,
+        originalError: jobStatus?.originalError,
+        aiSummary: jobStatus?.aiSummary,
+        parameters: jobStatus?.parameters,
+      };
+      onJobError(errorMessage, errorData);
     }
-  }, [jobStatus?.status, jobStatus?.error, jobError, onJobError]);
+  }, [jobStatus?.status, jobStatus?.error, jobStatus?.aiSummary, jobError, onJobError]);
 
   // Elapsed time counter
   useEffect(() => {

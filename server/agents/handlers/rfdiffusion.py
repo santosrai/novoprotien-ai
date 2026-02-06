@@ -370,9 +370,19 @@ class RFdiffusionHandler:
             elif design_mode != "unconditional":
                 # For non-unconditional designs, PDB is required
                 logger.warning(f"No PDB content resolved for job {job_id}, design_mode: {design_mode}")
+                pdb_error = {
+                    "error": "PDB template is required for motif_scaffolding and partial_diffusion modes. Please provide a PDB ID, upload a file, or use unconditional design mode.",
+                    "errorCode": "MISSING_PDB_TEMPLATE",
+                    "originalError": f"No PDB content resolved for design_mode={design_mode}",
+                    "parameters": parameters,
+                }
+                self.active_jobs[job_id] = "error"
+                self.job_results[job_id] = pdb_error
                 return {
                     "status": "error",
-                    "error": "PDB template is required for motif_scaffolding and partial_diffusion modes. Please provide a PDB ID, upload a file, or use unconditional design mode."
+                    "error": pdb_error["error"],
+                    "errorCode": "MISSING_PDB_TEMPLATE",
+                    "originalError": pdb_error["originalError"],
                 }
             else:
                 # For unconditional design without PDB, ensure all PDB-related params are removed
@@ -406,9 +416,18 @@ class RFdiffusionHandler:
             except Exception as e:
                 logger.error(f"Error in submit_design_request for job {job_id}: {e}", exc_info=True)
                 self.active_jobs[job_id] = "error"
+                submit_error = {
+                    "error": f"Failed to submit design request: {str(e)}",
+                    "errorCode": "SUBMIT_FAILED",
+                    "originalError": str(e),
+                    "parameters": parameters,
+                }
+                self.job_results[job_id] = submit_error
                 return {
                     "status": "error",
-                    "error": f"Failed to submit design request: {str(e)}"
+                    "error": submit_error["error"],
+                    "errorCode": "SUBMIT_FAILED",
+                    "originalError": str(e),
                 }
             
             # Check for various error statuses
@@ -417,43 +436,52 @@ class RFdiffusionHandler:
                 error_msg = result.get("error", "Design failed")
                 error_details = result.get("details", "")
                 
+                logger.error(f"RFdiffusion API returned error status: {error_msg}")
+                if error_details:
+                    logger.error(f"Error details: {error_details}")
+                
                 # Parse HTTP error responses for better user messages
+                original_error = error_msg  # Preserve the raw API error
+                user_friendly_error = error_msg
+                error_code = "DESIGN_FAILED"
+                
                 if "HTTP 422" in error_msg or "422" in error_msg:
+                    error_code = "VALIDATION_ERROR"
                     # Extract detail from JSON response if available
-                    import json
                     try:
-                        # Try to extract the detail message from the error
                         if "detail" in error_msg.lower():
-                            # Look for JSON in the error message
                             json_start = error_msg.find("{")
                             if json_start != -1:
                                 json_str = error_msg[json_start:]
                                 error_data = json.loads(json_str)
                                 detail = error_data.get("detail", error_msg)
+                                original_error = detail
                                 logger.error(f"RFdiffusion API validation error: {detail}")
-                                return {
-                                    "status": "error",
-                                    "error": f"Validation error: {detail}. Please check that your hotspot residues exist in the PDB file and that the PDB file contains the expected chains and residues."
-                                }
-                    except:
+                    except Exception:
                         pass
-                
-                logger.error(f"RFdiffusion API returned error status: {error_msg}")
-                if error_details:
-                    logger.error(f"Error details: {error_details}")
-                
-                # Provide user-friendly error message
-                user_friendly_error = error_msg
-                if "422" in error_msg:
-                    user_friendly_error = "The RFdiffusion API rejected the request due to invalid parameters. Please check that hotspot residues exist in the PDB file."
+                    # Keep the original error in the message for clarity
+                    user_friendly_error = f"Validation error: {original_error}. Please check that your hotspot residues exist in the PDB file and that the PDB file contains the expected chains and residues."
                 elif "401" in error_msg or "403" in error_msg:
+                    error_code = "AUTH_ERROR"
                     user_friendly_error = "Authentication failed. Please check your NVIDIA API key configuration."
                 elif "500" in error_msg or "502" in error_msg or "503" in error_msg:
+                    error_code = "SERVICE_UNAVAILABLE"
                     user_friendly_error = "The RFdiffusion service is temporarily unavailable. Please try again later."
+                
+                # Store error in job_results so status endpoint can return it
+                error_result = {
+                    "error": user_friendly_error,
+                    "errorCode": error_code,
+                    "originalError": original_error,
+                    "parameters": parameters,
+                }
+                self.job_results[job_id] = error_result
                 
                 return {
                     "status": "error",
-                    "error": user_friendly_error
+                    "error": user_friendly_error,
+                    "errorCode": error_code,
+                    "originalError": original_error,
                 }
             
             if result.get("status") == "completed":
@@ -532,23 +560,48 @@ class RFdiffusionHandler:
                     }
                 else:
                     self.active_jobs[job_id] = "error"
+                    no_pdb_error = {
+                        "error": "No PDB content in API response. The design may have succeeded but the result could not be parsed.",
+                        "errorCode": "NO_PDB_CONTENT",
+                        "originalError": "No PDB content in API response",
+                        "parameters": parameters,
+                    }
+                    self.job_results[job_id] = no_pdb_error
                     return {
                         "status": "error",
-                        "error": "No PDB content in API response"
+                        "error": no_pdb_error["error"],
+                        "errorCode": "NO_PDB_CONTENT",
                     }
             else:
                 self.active_jobs[job_id] = "error"
+                fallback_error = result.get("error", "Design failed")
+                error_result = {
+                    "error": fallback_error,
+                    "errorCode": "DESIGN_FAILED",
+                    "originalError": fallback_error,
+                    "parameters": parameters,
+                }
+                self.job_results[job_id] = error_result
                 return {
                     "status": "error",
-                    "error": result.get("error", "Design failed")
+                    "error": fallback_error,
+                    "errorCode": "DESIGN_FAILED",
                 }
                 
         except Exception as e:
             logger.error(f"RFdiffusion job {job_id} failed: {e}")
             self.active_jobs[job_id] = "error"
+            exception_error = {
+                "error": str(e),
+                "errorCode": "INTERNAL_ERROR",
+                "originalError": str(e),
+                "parameters": parameters,
+            }
+            self.job_results[job_id] = exception_error
             return {
                 "status": "error",
-                "error": str(e)
+                "error": str(e),
+                "errorCode": "INTERNAL_ERROR",
             }
     
     def get_job_status(self, job_id: str) -> Dict[str, Any]:
@@ -563,9 +616,13 @@ class RFdiffusionHandler:
         if status == "completed" and job_id in self.job_results:
             response["data"] = self.job_results[job_id]
         elif status == "error":
-            # Include error message if available
+            # Include full error details if available
             if job_id in self.job_results:
-                response["error"] = self.job_results[job_id].get("error", "Job failed")
+                error_data = self.job_results[job_id]
+                response["error"] = error_data.get("error", "Job failed")
+                response["errorCode"] = error_data.get("errorCode", "UNKNOWN_ERROR")
+                response["originalError"] = error_data.get("originalError", "")
+                response["parameters"] = error_data.get("parameters", {})
         elif status == "not_found":
             # Check if result file exists in storage (job may have completed before restart)
             try:

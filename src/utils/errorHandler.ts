@@ -32,6 +32,8 @@ export interface ErrorDetails {
   timestamp: Date;
   requestId?: string;
   stack?: string;
+  aiSummary?: string;
+  originalError?: string;
 }
 
 export interface ErrorSuggestion {
@@ -743,7 +745,9 @@ export class RFdiffusionErrorHandler {
       suggestions: template.suggestions!,
       timestamp: new Date(),
       requestId,
-      stack
+      stack,
+      aiSummary: context?.aiSummary,
+      originalError: context?.originalError || technicalDetails,
     };
   }
 
@@ -755,16 +759,54 @@ export class RFdiffusionErrorHandler {
     return this.createError('NETWORK_ERROR', context, message);
   }
 
+  /**
+   * Extract a structured error from various error formats:
+   * - Axios error objects (error.response.data contains server response)
+   * - Server error response objects ({ errorCode, userMessage, technicalMessage, aiSummary })
+   * - Plain objects ({ error: "message" })
+   * - Error instances (error.message)
+   * - Strings
+   */
   static handleError(error: any, context: Record<string, any> = {}): ErrorDetails {
+    // 1. Extract server response from Axios errors
+    const serverData = error?.response?.data;
+    if (serverData) {
+      return this._handleServerResponse(serverData, context, error);
+    }
+
+    // 2. Handle server response objects directly (e.g., from non-throwing API calls)
+    if (error?.errorCode || error?.userMessage || error?.aiSummary) {
+      return this._handleServerResponse(error, context);
+    }
+
+    // 3. Handle known error codes from our catalog
     if (error?.code && this.errorCatalog[error.code]) {
       return this.createError(error.code, { ...context, originalError: error }, error.message);
     }
 
-    // Try to categorize unknown errors
-    const errorMessage = error?.message || error?.toString() || 'Unknown error';
+    // 4. Extract error message from various object shapes
+    let errorMessage = '';
+    if (typeof error === 'string') {
+      errorMessage = error;
+    } else if (error?.error && typeof error.error === 'string') {
+      // Handle { error: "message" } format (from onJobError callback)
+      errorMessage = error.error;
+    } else if (error?.message && typeof error.message === 'string') {
+      errorMessage = error.message;
+    } else if (error != null) {
+      try {
+        errorMessage = JSON.stringify(error);
+      } catch {
+        errorMessage = String(error);
+      }
+    } else {
+      errorMessage = 'Unknown error';
+    }
+
     const lowerMessage = errorMessage.toLowerCase();
 
-    if (lowerMessage.includes('network') || lowerMessage.includes('connection')) {
+    // 5. Categorize by error message content
+    if (lowerMessage.includes('network') || lowerMessage.includes('connection') || lowerMessage.includes('econnrefused')) {
       return this.createNetworkError(errorMessage, context);
     }
 
@@ -772,7 +814,7 @@ export class RFdiffusionErrorHandler {
       return this.createError('DESIGN_TIMEOUT', context, errorMessage);
     }
 
-    if (lowerMessage.includes('api key') || lowerMessage.includes('unauthorized')) {
+    if (lowerMessage.includes('api key') || lowerMessage.includes('unauthorized') || lowerMessage.includes('401')) {
       return this.createError('RFDIFFUSION_API_NOT_CONFIGURED', context, errorMessage);
     }
 
@@ -780,8 +822,66 @@ export class RFdiffusionErrorHandler {
       return this.createError('CONTIGS_INVALID', context, errorMessage);
     }
 
-    // Generic error fallback
+    if (lowerMessage.includes('residue') || lowerMessage.includes('422') || lowerMessage.includes('validation')) {
+      const result = this.createError('DESIGN_FAILED', context, errorMessage, error?.stack);
+      result.userMessage = errorMessage; // Use the specific error message
+      result.originalError = errorMessage;
+      return result;
+    }
+
+    // 6. Generic error fallback
     return this.createError('UNKNOWN_ERROR', context, errorMessage, error?.stack);
+  }
+
+  /**
+   * Handle structured error responses from the server API.
+   */
+  private static _handleServerResponse(
+    data: any,
+    context: Record<string, any>,
+    _axiosError?: any
+  ): ErrorDetails {
+    const errorCode = data.errorCode || 'UNKNOWN_ERROR';
+    const userMessage = data.userMessage || data.error || 'An unexpected error occurred';
+    const technicalMessage = data.technicalMessage || data.originalError || userMessage;
+    const aiSummary = data.aiSummary || '';
+    const originalError = data.originalError || technicalMessage;
+
+    // Try matching against our error catalog
+    const catalogEntry = this.errorCatalog[errorCode];
+    
+    const result: ErrorDetails = {
+      code: errorCode,
+      category: catalogEntry?.category || ErrorCategory.SYSTEM,
+      severity: catalogEntry?.severity || ErrorSeverity.HIGH,
+      userMessage: userMessage,
+      technicalMessage: technicalMessage,
+      context: { ...context, originalError: originalError },
+      suggestions: catalogEntry?.suggestions || [
+        {
+          action: 'Try again',
+          description: 'The error might be temporary',
+          type: 'retry' as const,
+          priority: 1
+        },
+        {
+          action: 'Contact support',
+          description: 'Report this issue with the error details',
+          type: 'contact' as const,
+          priority: 2
+        }
+      ],
+      timestamp: new Date(),
+      aiSummary,
+      originalError,
+    };
+
+    // If server provided suggestions, use those
+    if (data.suggestions && Array.isArray(data.suggestions)) {
+      result.suggestions = data.suggestions;
+    }
+
+    return result;
   }
 
   static getSeverityColor(severity: ErrorSeverity): string {

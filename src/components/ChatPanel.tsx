@@ -1496,12 +1496,15 @@ try {
           }
         }
       } else {
-        // Handle API error response
+        // Handle API error response (non-error HTTP status but status !== 'success')
         const apiError = RFdiffusionErrorHandler.handleError(response.data, {
           jobId,
           parameters,
           feature: 'RFdiffusion'
         });
+        
+        // Use AI summary as the primary chat message if available
+        const displayContent = apiError.aiSummary || apiError.userMessage;
         
         // Update the pending message with error
         if (activeSession) {
@@ -1511,7 +1514,7 @@ try {
             const updatedMessages = [...messages];
             updatedMessages[messageIndex] = {
               ...updatedMessages[messageIndex],
-              content: apiError.userMessage,
+              content: displayContent,
               error: apiError,
               jobId: undefined,
               jobType: undefined
@@ -1523,12 +1526,15 @@ try {
     } catch (error: any) {
       console.error('RFdiffusion request failed:', error);
       
-      // Handle different types of errors
+      // Handle different types of errors (Axios throws on 4xx/5xx)
       const structuredError = RFdiffusionErrorHandler.handleError(error, {
         jobId,
         parameters,
         feature: 'RFdiffusion'
       });
+      
+      // Use AI summary as the primary chat message if available
+      const displayContent = structuredError.aiSummary || structuredError.userMessage;
       
       // Update the pending message with error
       if (activeSession) {
@@ -1538,7 +1544,7 @@ try {
           const updatedMessages = [...messages];
           updatedMessages[messageIndex] = {
             ...updatedMessages[messageIndex],
-            content: structuredError.userMessage,
+            content: displayContent,
             error: structuredError,
             jobId: undefined,
             jobType: undefined
@@ -2265,17 +2271,25 @@ try {
                           }
                         }
                       }}
-                      onJobError={(error: string) => {
-                        // Update message with error
+                      onJobError={(error: string, errorData?: any) => {
+                        // Update message with error and AI summary
                         if (activeSession) {
                           const messages = activeSession.messages || [];
                           const messageIndex = messages.findIndex(m => m.id === message.id);
                           if (messageIndex !== -1) {
+                            // Use server error data if available for proper error handling
+                            const structuredError = errorData?.errorCode
+                              ? RFdiffusionErrorHandler.handleError(errorData, { jobId: message.jobId, feature: 'RFdiffusion' })
+                              : RFdiffusionErrorHandler.handleError(error, { jobId: message.jobId, feature: 'RFdiffusion' });
+                            
+                            // Use AI summary as the chat message content if available
+                            const displayContent = errorData?.aiSummary || structuredError.userMessage || error;
+                            
                             const updatedMessages = [...messages];
                             updatedMessages[messageIndex] = {
                               ...updatedMessages[messageIndex],
-                              content: error,
-                              error: RFdiffusionErrorHandler.handleError({ error }, { jobId: message.jobId, feature: 'RFdiffusion' }),
+                              content: displayContent,
+                              error: structuredError,
                               jobId: undefined,
                               jobType: undefined
                             };

@@ -65,7 +65,7 @@ class RFdiffusionClient:
         
         Args:
             pdb_content: Raw PDB file content
-            max_atoms: Maximum number of ATOM lines to include
+            max_atoms: Maximum number of ATOM lines to include (0 = no limit)
             
         Returns:
             Processed PDB content with only ATOM records
@@ -74,10 +74,12 @@ class RFdiffusionClient:
             lines = pdb_content.split('\n')
             atom_lines = [line for line in lines if line.startswith('ATOM')]
             
-            # Limit the number of atoms to prevent API limits
-            if len(atom_lines) > max_atoms:
+            # Limit the number of atoms to prevent API limits (0 means no limit)
+            if max_atoms > 0 and len(atom_lines) > max_atoms:
                 atom_lines = atom_lines[:max_atoms]
-                logger.info(f"Reduced PDB from {len(lines)} to {len(atom_lines)} ATOM lines")
+                logger.info(f"Reduced PDB from {len(lines)} to {len(atom_lines)} ATOM lines (max_atoms={max_atoms})")
+            else:
+                logger.info(f"Using all {len(atom_lines)} ATOM lines (max_atoms={max_atoms})")
             
             return '\n'.join(atom_lines)
             
@@ -120,9 +122,13 @@ class RFdiffusionClient:
         if not is_valid:
             raise ValueError(f"Invalid parameters: {'; '.join(errors)}")
         
+        # Extract max_atoms (not an NVIDIA API parameter, used locally for PDB processing)
+        max_atoms = int(params.pop("max_atoms", 400) or 400)
+        default_params.pop("max_atoms", None)
+        
         # Get design mode to determine if PDB is required
         design_mode = params.get("design_mode", "motif_scaffolding")
-        logger.debug(f"create_request_payload: design_mode={design_mode}, params keys={list(params.keys())}")
+        logger.debug(f"create_request_payload: design_mode={design_mode}, max_atoms={max_atoms}, params keys={list(params.keys())}")
         
         # Handle input PDB - get values and check if they're actually present (not empty strings)
         input_pdb = params.get("input_pdb")
@@ -157,10 +163,10 @@ class RFdiffusionClient:
         if has_pdb_id and not has_input_pdb:
             # Fetch PDB from ID
             raw_pdb = self.fetch_pdb_from_id(pdb_id)
-            input_pdb = self.process_input_pdb(raw_pdb)
+            input_pdb = self.process_input_pdb(raw_pdb, max_atoms=max_atoms)
         elif has_input_pdb:
             # Process provided PDB content
-            input_pdb = self.process_input_pdb(input_pdb)
+            input_pdb = self.process_input_pdb(input_pdb, max_atoms=max_atoms)
         else:
             raise ValueError(f"Either input_pdb content or pdb_id must be provided (or use unconditional design_mode). Current design_mode: {design_mode}, has_pdb: {has_pdb}")
         

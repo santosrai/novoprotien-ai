@@ -162,12 +162,18 @@ export const useAuthStore = create<AuthState>()(
       },
 
       refreshAccessToken: async () => {
+        // NOTE: Token refresh is primarily handled by the axios interceptor
+        // in api.ts with deduplication. This method is kept for backward
+        // compatibility but should rarely be called directly.
         const { refreshToken } = get();
         if (!refreshToken) {
           throw new Error('No refresh token available');
         }
         try {
-          const response = await api.post('/auth/refresh', { refresh_token: refreshToken });
+          // Use raw axios to avoid triggering the interceptor loop
+          const { default: axios } = await import('axios');
+          const baseURL = api.defaults.baseURL;
+          const response = await axios.post(`${baseURL}/auth/refresh`, { refresh_token: refreshToken });
           const { access_token } = response.data;
           set({ accessToken: access_token });
         } catch (error) {

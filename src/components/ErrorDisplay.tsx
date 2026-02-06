@@ -111,6 +111,25 @@ export const ErrorDisplay: React.FC<ErrorDisplayProps> = ({
     // Other actions would be handled by parent components
   };
 
+  // Safe display of context - filter out large/complex objects
+  const getDisplayContext = () => {
+    if (!error.context || typeof error.context !== 'object') return {};
+    const display: Record<string, string> = {};
+    for (const [key, value] of Object.entries(error.context)) {
+      // Skip internal/large fields
+      if (key === 'originalError' || key === 'parameters' || key === 'input_pdb') continue;
+      if (typeof value === 'string') {
+        display[key] = value.length > 120 ? value.slice(0, 120) + '...' : value;
+      } else if (typeof value === 'number' || typeof value === 'boolean') {
+        display[key] = String(value);
+      }
+    }
+    return display;
+  };
+
+  const displayContext = getDisplayContext();
+  const hasOriginalError = error.originalError && error.originalError !== error.userMessage;
+
   return (
     <div className={`rounded-lg border p-4 ${getSeverityColor(error.severity)} ${className}`}>
       {/* Error Header */}
@@ -140,9 +159,19 @@ export const ErrorDisplay: React.FC<ErrorDisplayProps> = ({
             )}
           </div>
           
-          <p className={`text-sm mb-3 ${getSeverityTextColor(error.severity)}`}>
+          {/* User-friendly message */}
+          <p className={`text-sm mb-2 ${getSeverityTextColor(error.severity)}`}>
             {error.userMessage}
           </p>
+          
+          {/* Original API error (if different from user message) */}
+          {hasOriginalError && (
+            <div className="mb-3 px-3 py-2 bg-white/40 rounded border border-gray-200/50">
+              <p className="text-xs text-gray-700 font-mono">
+                API: {error.originalError}
+              </p>
+            </div>
+          )}
 
           {/* Primary Suggestions */}
           {error.suggestions.length > 0 && (
@@ -202,17 +231,17 @@ export const ErrorDisplay: React.FC<ErrorDisplayProps> = ({
           )}
 
           {/* Context Information */}
-          {Object.keys(error.context).length > 0 && (
+          {Object.keys(displayContext).length > 0 && (
             <div>
               <h5 className="text-xs font-medium text-gray-700 mb-2">Context Information</h5>
               <div className="bg-white bg-opacity-50 rounded p-2 text-xs">
-                {Object.entries(error.context).map(([key, value]) => (
+                {Object.entries(displayContext).map(([key, value]) => (
                   <div key={key} className="flex justify-between py-1">
                     <span className="font-medium text-gray-600 capitalize">
-                      {key.replace(/([A-Z])/g, ' $1').toLowerCase()}:
+                      {key.replace(/([A-Z])/g, ' $1').replace(/_/g, ' ').toLowerCase()}:
                     </span>
-                    <span className="text-gray-800 ml-2 font-mono">
-                      {typeof value === 'object' ? JSON.stringify(value) : String(value)}
+                    <span className="text-gray-800 ml-2 font-mono truncate max-w-[60%]">
+                      {value}
                     </span>
                   </div>
                 ))}
@@ -245,7 +274,11 @@ export const ErrorDisplay: React.FC<ErrorDisplayProps> = ({
                   
                   <div>
                     <span className="font-medium text-gray-600">Timestamp:</span>
-                    <span className="ml-2 text-gray-800">{error.timestamp.toLocaleString()}</span>
+                    <span className="ml-2 text-gray-800">
+                      {error.timestamp instanceof Date 
+                        ? error.timestamp.toLocaleString() 
+                        : new Date(error.timestamp).toLocaleString()}
+                    </span>
                   </div>
                   
                   {error.requestId && (
@@ -257,8 +290,10 @@ export const ErrorDisplay: React.FC<ErrorDisplayProps> = ({
                   
                   <div>
                     <span className="font-medium text-gray-600">Technical Message:</span>
-                    <div className="mt-1 p-2 bg-gray-100 rounded text-gray-800 font-mono text-xs">
-                      {error.technicalMessage}
+                    <div className="mt-1 p-2 bg-gray-100 rounded text-gray-800 font-mono text-xs break-words">
+                      {typeof error.technicalMessage === 'string' 
+                        ? error.technicalMessage 
+                        : JSON.stringify(error.technicalMessage, null, 2)}
                     </div>
                   </div>
                   

@@ -159,6 +159,15 @@
       "min": 1,
       "max": 10,
       "label": "Number of Designs"
+    },
+    "max_atoms": {
+      "type": "number",
+      "required": false,
+      "default": 400,
+      "min": 0,
+      "max": 10000,
+      "label": "Max ATOM Lines",
+      "helpText": "Maximum number of ATOM lines from the PDB to send to the API. Increase for large structures or set to 0 for no limit. Prevents 'Residue not in pdb file' errors."
     }
   },
   "handles": {
@@ -201,7 +210,8 @@
         "hotspot_res": "{{config.hotspot_res}}",
         "diffusion_steps": "{{config.diffusion_steps}}",
         "design_mode": "{{config.design_mode}}",
-        "num_designs": "{{config.num_designs}}"
+        "num_designs": "{{config.num_designs}}",
+        "max_atoms": "{{config.max_atoms}}"
       }
     }
   },
@@ -216,13 +226,14 @@
     "send_body": true,
     "body_content_type": "json",
     "body_specify": "json",
-    "body_json": "{\"pdb_file\": \"{{input.target}}\", \"pdb_id\": \"{{config.pdb_id}}\", \"contigs\": \"{{config.contigs}}\", \"hotspot_res\": \"{{config.hotspot_res}}\", \"diffusion_steps\": \"{{config.diffusion_steps}}\", \"design_mode\": \"{{config.design_mode}}\", \"num_designs\": \"{{config.num_designs}}\"}",
+    "body_json": "{\"pdb_file\": \"{{input.target}}\", \"pdb_id\": \"{{config.pdb_id}}\", \"contigs\": \"{{config.contigs}}\", \"hotspot_res\": \"{{config.hotspot_res}}\", \"diffusion_steps\": \"{{config.diffusion_steps}}\", \"design_mode\": \"{{config.design_mode}}\", \"num_designs\": \"{{config.num_designs}}\", \"max_atoms\": \"{{config.max_atoms}}\"}",
     "design_mode": "unconditional",
     "contigs": "A50-150",
     "hotspot_res": "",
     "diffusion_steps": 15,
     "pdb_id": "",
-    "num_designs": 1
+    "num_designs": 1,
+    "max_atoms": 400
   }
 }
 
