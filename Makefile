@@ -24,7 +24,19 @@ dev:
 lint:
 	npm run lint
 
-# Run Python tests (uses venv if present)
-test:
-	@if [ -x ./.venv/bin/pytest ]; then ./.venv/bin/pytest -q; else pytest -q; fi
+# Run all tests (frontend + backend)
+test: test-frontend test-backend
+
+# Run frontend unit tests (Vitest)
+test-frontend:
+	npx vitest run
+
+# Run backend unit tests (pytest)
+test-backend:
+	cd server && python3 -m pytest tests/ -v
+
+# Run all tests with coverage
+test-coverage:
+	npx vitest run --coverage
+	cd server && python3 -m pytest tests/ -v --cov=server --cov-report=term-missing
 
