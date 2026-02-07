@@ -18,11 +18,17 @@ interface AuthState {
   accessToken: string | null;
   refreshToken: string | null;
   isAuthenticated: boolean;
+  /** True after AuthBootstrap has validated session (or determined no token). Not persisted. */
+  authResolved: boolean;
   signin: (email: string, password: string) => Promise<void>;
   signup: (email: string, username: string, password: string) => Promise<void>;
   signout: () => void;
   refreshAccessToken: () => Promise<void>;
   updateUser: (user: User) => void;
+  /** Called by AuthBootstrap: set auth state after validation (or clear on failure). */
+  setAuthFromBootstrap: (data: { user: User | null; accessToken: string | null; refreshToken: string | null; isAuthenticated: boolean }) => void;
+  /** Called by AuthBootstrap: mark bootstrap as complete. */
+  setAuthResolved: (value: boolean) => void;
 }
 
 export const useAuthStore = create<AuthState>()(
@@ -32,6 +38,20 @@ export const useAuthStore = create<AuthState>()(
       accessToken: null,
       refreshToken: null,
       isAuthenticated: false,
+      authResolved: false,
+
+      setAuthFromBootstrap: (data) => {
+        set({
+          user: data.user,
+          accessToken: data.accessToken,
+          refreshToken: data.refreshToken,
+          isAuthenticated: data.isAuthenticated,
+        });
+      },
+
+      setAuthResolved: (value) => {
+        set({ authResolved: value });
+      },
 
       signin: async (email: string, password: string) => {
         try {
@@ -190,6 +210,13 @@ export const useAuthStore = create<AuthState>()(
     {
       name: 'novoprotein-auth-storage',
       storage: createJSONStorage(() => localStorage),
+      partialize: (state) => ({
+        user: state.user,
+        accessToken: state.accessToken,
+        refreshToken: state.refreshToken,
+        isAuthenticated: state.isAuthenticated,
+        // authResolved is NOT persisted - always starts false on load
+      }),
     }
   )
 );

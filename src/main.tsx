@@ -11,6 +11,7 @@ import { SignInForm } from './components/auth/SignInForm'
 import { SignUpForm } from './components/auth/SignUpForm'
 import { AdminDashboard } from './pages/AdminDashboard'
 import { AuthGuard } from './components/auth/AuthGuard'
+import { AuthBootstrap } from './components/auth/AuthBootstrap'
 import { ErrorBoundary } from './components/ErrorBoundary'
 import { ThemeProvider } from './contexts/ThemeContext'
 import './index.css'
@@ -28,89 +29,91 @@ ReactDOM.createRoot(rootElement).render(
     <QueryClientProvider client={queryClient}>
       <ThemeProvider>
         <ErrorBoundary>
-          <BrowserRouter>
-            <Routes>
-              {/* Public Landing Page */}
-              <Route path="/" element={<LandingPage />} />
-              <Route path="/pricing" element={<PricingPage />} />
-              <Route path="/signin" element={<SignInForm />} />
-              <Route path="/signup" element={<SignUpForm />} />
-              
-              {/* Authenticated App Routes */}
-              <Route
-                path="/app"
-                element={
-                  <AuthGuard>
-                    <App />
-                  </AuthGuard>
-                }
-              />
-              <Route
-                path="/pipeline"
-                element={
-                  <AuthGuard>
-                    <PipelinePage />
-                  </AuthGuard>
-                }
-              />
-              <Route
-                path="/admin"
-                element={
-                  <AuthGuard requireRole="admin">
-                    <AdminDashboard />
-                  </AuthGuard>
-                }
-              />
-              <Route
-                path="/admin/users/:userId"
-                element={
-                  <AuthGuard requireRole="admin">
-                    <AdminDashboard />
-                  </AuthGuard>
-                }
-              />
-              <Route
-                path="/admin/users/:userId/chat"
-                element={
-                  <AuthGuard requireRole="admin">
-                    <AdminDashboard />
-                  </AuthGuard>
-                }
-              />
-              <Route
-                path="/admin/users/:userId/tokens"
-                element={
-                  <AuthGuard requireRole="admin">
-                    <AdminDashboard />
-                  </AuthGuard>
-                }
-              />
-              <Route
-                path="/admin/chat"
-                element={
-                  <AuthGuard requireRole="admin">
-                    <AdminDashboard />
-                  </AuthGuard>
-                }
-              />
-              <Route
-                path="/admin/tokens"
-                element={
-                  <AuthGuard requireRole="admin">
-                    <AdminDashboard />
-                  </AuthGuard>
-                }
-              />
-              <Route
-                path="/admin/audit"
-                element={
-                  <AuthGuard requireRole="admin">
-                    <AdminDashboard />
-                  </AuthGuard>
-                }
-              />
-            </Routes>
-          </BrowserRouter>
+          <AuthBootstrap>
+            <BrowserRouter>
+              <Routes>
+                {/* Public Landing Page */}
+                <Route path="/" element={<LandingPage />} />
+                <Route path="/pricing" element={<PricingPage />} />
+                <Route path="/signin" element={<SignInForm />} />
+                <Route path="/signup" element={<SignUpForm />} />
+                
+                {/* Authenticated App Routes */}
+                <Route
+                  path="/app"
+                  element={
+                    <AuthGuard>
+                      <App />
+                    </AuthGuard>
+                  }
+                />
+                <Route
+                  path="/pipeline"
+                  element={
+                    <AuthGuard>
+                      <PipelinePage />
+                    </AuthGuard>
+                  }
+                />
+                <Route
+                  path="/admin"
+                  element={
+                    <AuthGuard requireRole="admin">
+                      <AdminDashboard />
+                    </AuthGuard>
+                  }
+                />
+                <Route
+                  path="/admin/users/:userId"
+                  element={
+                    <AuthGuard requireRole="admin">
+                      <AdminDashboard />
+                    </AuthGuard>
+                  }
+                />
+                <Route
+                  path="/admin/users/:userId/chat"
+                  element={
+                    <AuthGuard requireRole="admin">
+                      <AdminDashboard />
+                    </AuthGuard>
+                  }
+                />
+                <Route
+                  path="/admin/users/:userId/tokens"
+                  element={
+                    <AuthGuard requireRole="admin">
+                      <AdminDashboard />
+                    </AuthGuard>
+                  }
+                />
+                <Route
+                  path="/admin/chat"
+                  element={
+                    <AuthGuard requireRole="admin">
+                      <AdminDashboard />
+                    </AuthGuard>
+                  }
+                />
+                <Route
+                  path="/admin/tokens"
+                  element={
+                    <AuthGuard requireRole="admin">
+                      <AdminDashboard />
+                    </AuthGuard>
+                  }
+                />
+                <Route
+                  path="/admin/audit"
+                  element={
+                    <AuthGuard requireRole="admin">
+                      <AdminDashboard />
+                    </AuthGuard>
+                  }
+                />
+              </Routes>
+            </BrowserRouter>
+          </AuthBootstrap>
         </ErrorBoundary>
       </ThemeProvider>
     </QueryClientProvider>

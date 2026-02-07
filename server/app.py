@@ -27,11 +27,11 @@ if os.path.exists(server_env_path):
     print(f"Also loaded .env from: {server_env_path}")
 
 # Debug: Check if key environment variables are loaded
-api_key = os.getenv('ANTHROPIC_API_KEY')
+api_key = os.getenv('OPENROUTER_API_KEY')
 if api_key:
-    print(f"ANTHROPIC_API_KEY loaded: {api_key[:20]}...")
+    print(f"OPENROUTER_API_KEY loaded: {api_key[:20]}...")
 else:
-    print("Warning: ANTHROPIC_API_KEY not found in environment")
+    print("Warning: OPENROUTER_API_KEY not found in environment")
 
 nvidia_key = (os.getenv('NVCF_RUN_KEY') or "").strip()
 if nvidia_key:
