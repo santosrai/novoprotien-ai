@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState } from 'react';
 import { usePipelineStore } from '../store/pipelineStore';
 import { usePipelineContext } from '../context/PipelineContext';
 import { Pipeline } from '../types/index';
@@ -18,21 +18,12 @@ interface PipelineManagerProps {
 }
 
 export const PipelineManager: React.FC<PipelineManagerProps> = ({ isOpen, onClose }) => {
-  const { savedPipelines, loadPipeline, deletePipeline, syncPipelines } = usePipelineStore();
+  const { savedPipelines, loadPipeline, deletePipeline } = usePipelineStore();
   const { authState, apiClient } = usePipelineContext();
-  const user = authState?.user;
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editName, setEditName] = useState('');
 
-  // Sync pipelines from backend when modal opens and user is authenticated
-  useEffect(() => {
-    if (isOpen && user && apiClient) {
-      console.log('[PipelineManager] Syncing pipelines from backend...');
-      syncPipelines({ apiClient, authState }).catch((error) => {
-        console.error('[PipelineManager] Failed to sync pipelines:', error);
-      });
-    }
-  }, [isOpen, user, apiClient, authState, syncPipelines]);
+  // Sync is centralized in PipelineProvider - savedPipelines already populated
 
   const handleLoad = (pipeline: Pipeline) => {
     loadPipeline(pipeline.id);

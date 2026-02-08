@@ -1,25 +1,19 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { PipelineCanvas, PipelineManager, PipelineExecution, PipelineThemeWrapper, PipelineProvider } from '../components/pipeline-canvas';
-import { usePipelineStore } from '../components/pipeline-canvas/store/pipelineStore';
 import { useAuthStore } from '../stores/authStore';
 import { api, getAuthHeaders } from '../utils/api';
 import { useTheme } from '../contexts/ThemeContext';
 
 export function PipelinePage() {
   const [isPipelineManagerOpen, setIsPipelineManagerOpen] = useState(false);
-  const { syncPipelines } = usePipelineStore();
   const user = useAuthStore((state) => state.user);
   const { theme } = useTheme();
 
-  // Sync pipelines from backend when component mounts and user is authenticated
-  useEffect(() => {
-    if (user) {
-      console.log('[PipelinePage] Syncing pipelines from backend...');
-      syncPipelines().catch((error) => {
-        console.error('[PipelinePage] Failed to sync pipelines:', error);
-      });
-    }
-  }, [user, syncPipelines]);
+  // Memoize authState to prevent PipelineProvider from re-syncing on every render
+  const authState = useMemo(
+    () => ({ user: user ?? null, isAuthenticated: !!user }),
+    [user?.id]
+  );
 
   // Listen for pipeline manager open event
   useEffect(() => {
@@ -46,7 +40,7 @@ export function PipelinePage() {
       {/* Full-screen pipeline canvas with provider for API/auth and sync */}
       <PipelineProvider
         apiClient={api}
-        authState={{ user: user ?? null, isAuthenticated: !!user }}
+        authState={authState}
         getAuthHeaders={getAuthHeaders}
       >
         <div className="flex-1 min-h-0">

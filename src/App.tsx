@@ -15,7 +15,7 @@ import { useTheme } from './contexts/ThemeContext';
 import { useAppStore } from './stores/appStore';
 import { useSettingsStore } from './stores/settingsStore';
 import { useChatHistoryStore } from './stores/chatHistoryStore';
-import { useEffect, useState, Suspense, lazy } from 'react';
+import { useEffect, useState, Suspense, lazy, useMemo } from 'react';
 
 // Lazy load MolstarViewer - only load when viewer is visible
 const MolstarViewer = lazy(() => import('./components/MolstarViewer').then(module => ({ default: module.MolstarViewer })));
@@ -86,6 +86,12 @@ function App() {
     setActivePane('viewer');
   };
 
+  // Memoize authState to prevent PipelineProvider from re-syncing on every render
+  const authState = useMemo(
+    () => ({ user: user ?? null, isAuthenticated: !!user }),
+    [user?.id]
+  );
+
   // Mark App as ready for test detection
   useEffect(() => {
     const timer = setTimeout(() => {
@@ -97,7 +103,7 @@ function App() {
   return (
     <PipelineProvider
       apiClient={api}
-      authState={{ user: user ?? null, isAuthenticated: !!user }}
+      authState={authState}
       getAuthHeaders={getAuthHeaders}
     >
       <div className="h-screen flex flex-col bg-app text-app" data-testid="app-container" data-app-ready="true">

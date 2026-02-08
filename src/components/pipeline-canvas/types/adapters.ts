@@ -52,6 +52,11 @@ export interface ListFilters {
    * Offset for pagination
    */
   offset?: number;
+  /**
+   * When true, request full pipeline data (nodes, edges) in list response.
+   * Avoids N+1 fetches when syncing.
+   */
+  full?: boolean;
 }
 
 /**
@@ -203,11 +208,17 @@ export class NovoProteinAdapter implements PipelinePersistenceAdapter {
   }
 
   async list(filters?: ListFilters): Promise<Pipeline[]> {
-    const response = await this.apiClient.get('/pipelines');
-    
+    const searchParams = new URLSearchParams();
+    if (filters?.conversationId) searchParams.set('conversation_id', filters.conversationId);
+    if (filters?.full) searchParams.set('full', 'true');
+    const query = searchParams.toString();
+    const url = query ? `/pipelines?${query}` : '/pipelines';
+
+    const response = await this.apiClient.get(url);
+
     // Handle NovoProtein response format: { pipelines: [...] }
     let backendPipelines = response.data?.pipelines || response.data || [];
-    
+
     // Apply filters if provided
     if (filters?.status) {
       backendPipelines = backendPipelines.filter((p: any) => p.status === filters.status);
@@ -215,19 +226,19 @@ export class NovoProteinAdapter implements PipelinePersistenceAdapter {
     if (filters?.messageId) {
       backendPipelines = backendPipelines.filter((p: any) => p.message_id === filters.messageId);
     }
-    if (filters?.conversationId) {
-      backendPipelines = backendPipelines.filter((p: any) => p.conversation_id === filters.conversationId);
-    }
-    
-    // Convert date strings to Date objects
+
+    // Convert date strings to Date objects (handle both created_at and createdAt)
     return backendPipelines.map((p: any) => {
-      if (p.createdAt && typeof p.createdAt === 'string') {
-        p.createdAt = new Date(p.createdAt);
-      }
-      if (p.updatedAt && typeof p.updatedAt === 'string') {
-        p.updatedAt = new Date(p.updatedAt);
-      }
-      return p;
+      const createdAt = p.createdAt ?? p.created_at;
+      const updatedAt = p.updatedAt ?? p.updated_at;
+      const result = { ...p };
+      result.createdAt = createdAt
+        ? (typeof createdAt === 'string' ? new Date(createdAt) : createdAt)
+        : (p.createdAt ?? new Date());
+      result.updatedAt = updatedAt
+        ? (typeof updatedAt === 'string' ? new Date(updatedAt) : updatedAt)
+        : (p.updatedAt ?? new Date());
+      return result;
     });
   }
 
@@ -243,21 +254,24 @@ export class NovoProteinAdapter implements PipelinePersistenceAdapter {
   }
 
   async sync(): Promise<Pipeline[]> {
-    // Load full pipeline data for each pipeline in the list
-    const pipelines = await this.list();
-    
-    // Fetch full data for each pipeline (NovoProtein may return summaries)
-    const fullPipelines = await Promise.all(
-      pipelines.map(async (p) => {
-        try {
-          return await this.load(p.id);
-        } catch (error) {
-          console.error(`Failed to load full pipeline ${p.id}:`, error);
-          return p; // Return summary if full load fails
-        }
-      })
-    );
-    
-    return fullPipelines;
+    // Use full=true to get all pipeline data in one request (avoids N+1)
+    const pipelines = await this.list({ full: true });
+
+    // If backend returned summaries (no nodes), fall back to per-pipeline loads
+    const needsFullLoad = pipelines.some((p: any) => !p.nodes && !p.edges);
+    if (needsFullLoad) {
+      return Promise.all(
+        pipelines.map(async (p) => {
+          try {
+            return await this.load(p.id);
+          } catch (error) {
+            console.error(`Failed to load full pipeline ${p.id}:`, error);
+            return p;
+          }
+        })
+      );
+    }
+
+    return pipelines;
   }
 }

@@ -129,8 +129,10 @@ async def create_pipeline(
 async def list_pipelines(
     user: Dict[str, Any] = Depends(get_current_user),
     conversation_id: Optional[str] = None,
+    full: bool = False,
 ) -> Dict[str, Any]:
-    """List all pipelines for the current user. Optionally filter by conversation_id."""
+    """List all pipelines for the current user. Optionally filter by conversation_id.
+    When full=true, returns full pipeline data (nodes, edges) in one request to avoid N+1 fetches."""
     with get_db() as conn:
         if conversation_id:
             # Verify conversation ownership
@@ -163,22 +165,37 @@ async def list_pipelines(
                        ORDER BY updated_at DESC"""
             params = (user["id"],)
         
+        if full:
+            query = query.replace(
+                "id, name, description, status, message_id, conversation_id, created_at, updated_at",
+                "*",
+            )
+        
         rows = conn.execute(query, params).fetchall()
         
         pipelines = []
         for row in rows:
-            # Convert sqlite3.Row to dict for easier access with .get()
             row_dict = dict(row)
-            pipelines.append({
-                "id": row_dict["id"],
-                "name": row_dict.get("name"),
-                "description": row_dict.get("description"),
-                "status": row_dict.get("status", "draft"),
-                "message_id": row_dict.get("message_id"),
-                "conversation_id": row_dict.get("conversation_id"),
-                "created_at": row_dict.get("created_at"),
-                "updated_at": row_dict.get("updated_at"),
-            })
+            if full and "pipeline_json" in row_dict:
+                pipeline_data = json.loads(row_dict["pipeline_json"])
+                pipeline_data["id"] = row_dict["id"]
+                pipeline_data["name"] = row_dict.get("name")
+                pipeline_data["description"] = row_dict.get("description")
+                pipeline_data["status"] = row_dict.get("status", "draft")
+                pipeline_data["created_at"] = row_dict.get("created_at")
+                pipeline_data["updated_at"] = row_dict.get("updated_at")
+                pipelines.append(pipeline_data)
+            else:
+                pipelines.append({
+                    "id": row_dict["id"],
+                    "name": row_dict.get("name"),
+                    "description": row_dict.get("description"),
+                    "status": row_dict.get("status", "draft"),
+                    "message_id": row_dict.get("message_id"),
+                    "conversation_id": row_dict.get("conversation_id"),
+                    "created_at": row_dict.get("created_at"),
+                    "updated_at": row_dict.get("updated_at"),
+                })
         
         return {
             "status": "success",
