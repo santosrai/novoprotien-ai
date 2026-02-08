@@ -2,6 +2,7 @@ import { PluginUIContext } from 'molstar/lib/mol-plugin-ui/context';
 import { createMolstarBuilder, MolstarBuilder } from './molstarBuilder';
 import { useAppStore } from '../stores/appStore';
 import { SandboxExecutor } from './codeExecutorSandbox';
+import { api } from './api';
 
 // Cache a single builder per plugin instance so that the currentStructure
 // is preserved across multiple executions (e.g., when AI code modifies
@@ -63,6 +64,25 @@ export class CodeExecutor {
 
   async executeCode(code: string): Promise<ExecutionResult> {
     try {
+      // Resolve /api/upload/pdb/{file_id} to data URL before execution (Molstar fetch won't include JWT)
+      const apiUrlMatch = code.match(/loadStructure\s*\(\s*['"]([^'"]*\/api\/upload\/pdb\/([a-f0-9]+))['"]/);
+      if (apiUrlMatch) {
+        try {
+          const fileId = apiUrlMatch[2];
+          const response = await api.get(`/upload/pdb/${fileId}`, { responseType: 'blob' });
+          const blob = new Blob([response.data], { type: 'chemical/x-pdb' });
+          const dataUrl = await new Promise<string>((resolve, reject) => {
+            const reader = new FileReader();
+            reader.onload = () => resolve(reader.result as string);
+            reader.onerror = reject;
+            reader.readAsDataURL(blob);
+          });
+          code = code.replace(apiUrlMatch[1], dataUrl);
+        } catch (e) {
+          console.warn('[CodeExecutor] Failed to resolve API URL for execution:', e);
+        }
+      }
+
       // Extract structure info from code for AI context
       const structureInfo = this.extractStructureInfo(code);
       const setLastLoadedPdb = useAppStore.getState?.().setLastLoadedPdb;

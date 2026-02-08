@@ -231,8 +231,10 @@ const createProgressHook = ({
 }: ProgressHookConfig) => () => {
   const [isVisible, setIsVisible] = useState(false);
   const [currentJobId, setCurrentJobId] = useState<string | null>(null);
+  const cancelledRef = React.useRef(false);
 
   const startProgress = (jobId: string, initialMessage?: string) => {
+    cancelledRef.current = false;
     setCurrentJobId(jobId);
     setIsVisible(true);
     sendProgressUpdate({
@@ -259,6 +261,7 @@ const createProgressHook = ({
   };
 
   const cancelProgress = () => {
+    cancelledRef.current = true;
     if (currentJobId) {
       sendProgressUpdate({ 
         message: cancelMessage, 
@@ -270,6 +273,8 @@ const createProgressHook = ({
     }
   };
 
+  const isCancelled = () => cancelledRef.current;
+
   return {
     isVisible,
     currentJobId,
@@ -278,6 +283,7 @@ const createProgressHook = ({
     completeProgress,
     errorProgress,
     cancelProgress,
+    isCancelled,
     eventName,
     title
   };

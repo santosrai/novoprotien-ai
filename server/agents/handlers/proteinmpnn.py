@@ -19,10 +19,12 @@ try:
     from ...infrastructure.utils import log_line
     from ...tools.nvidia.proteinmpnn import get_proteinmpnn_client, ProteinMPNNClient
     from ...domain.storage.pdb_storage import get_uploaded_pdb, list_uploaded_pdbs
+    from ...domain.storage.file_access import list_user_files, get_file_metadata
 except ImportError:
     from infrastructure.utils import log_line
     from tools.nvidia.proteinmpnn import get_proteinmpnn_client, ProteinMPNNClient
     from domain.storage.pdb_storage import get_uploaded_pdb, list_uploaded_pdbs
+    from domain.storage.file_access import list_user_files, get_file_metadata
 
 logger = logging.getLogger(__name__)
 
@@ -44,23 +46,38 @@ class ProteinMPNNHandler:
 
     def _resolve_rfdiffusion_path(self, source_job_id: str, user_id: Optional[str] = None) -> Path:
         safe_id = source_job_id.replace("..", "").replace("/", "").strip()
+        # First try database lookup (user-scoped, from user_files)
         if user_id:
+            meta = get_file_metadata(safe_id, user_id=user_id)
+            if meta and meta.get("file_type") == "rfdiffusion":
+                stored = meta.get("stored_path")
+                if stored:
+                    path = self._base_dir / stored
+                    if path.exists():
+                        return path
+            # Then try direct path
             base = self._base_dir / "storage" / user_id / "rfdiffusion_results"
-        else:
-            # Fallback to old location for backward compatibility
-            base = Path(__file__).parent / "rfdiffusion_results"
-        candidate = base / f"rfdiffusion_{safe_id}.pdb"
-        if not candidate.exists():
-            raise FileNotFoundError(f"RFdiffusion result for job {source_job_id} not found")
-        return candidate
+            candidate = base / f"rfdiffusion_{safe_id}.pdb"
+            if candidate.exists():
+                return candidate
+        # Fallback: legacy global rfdiffusion_results directory
+        for base in [
+            Path(__file__).parent.parent / "rfdiffusion_results",
+            Path(__file__).parent / "rfdiffusion_results",
+            self._base_dir / "rfdiffusion_results",
+        ]:
+            candidate = base / f"rfdiffusion_{safe_id}.pdb"
+            if candidate.exists():
+                return candidate
+        raise FileNotFoundError(f"RFdiffusion result for job {source_job_id} not found")
 
-    def _resolve_uploaded_path(self, upload_id: str) -> Path:
-        metadata = get_uploaded_pdb(upload_id)
+    def _resolve_uploaded_path(self, upload_id: str, user_id: Optional[str] = None) -> Path:
+        metadata = get_uploaded_pdb(upload_id, user_id=user_id)
         if not metadata:
             raise FileNotFoundError(f"Uploaded PDB {upload_id} not found")
         return Path(metadata["absolute_path"])
 
-    def _load_pdb_content(self, job_data: Dict[str, Any]) -> Tuple[str, Dict[str, Any]]:
+    def _load_pdb_content(self, job_data: Dict[str, Any], user_id: Optional[str] = None) -> Tuple[str, Dict[str, Any]]:
         """Load PDB text and return with source metadata."""
         source_type = job_data.get("pdbSource") or job_data.get("source", {}).get("type")
         source_meta: Dict[str, Any] = {}
@@ -69,7 +86,7 @@ class ProteinMPNNHandler:
             source_job_id = job_data.get("sourceJobId") or job_data.get("source", {}).get("jobId")
             if not source_job_id:
                 raise ValueError("sourceJobId required for RFdiffusion source")
-            path = self._resolve_rfdiffusion_path(source_job_id)
+            path = self._resolve_rfdiffusion_path(source_job_id, user_id=user_id)
             pdb_text = path.read_text()
             source_meta = {
                 "type": "rfdiffusion",
@@ -81,7 +98,7 @@ class ProteinMPNNHandler:
             upload_id = job_data.get("uploadId") or job_data.get("source", {}).get("uploadId")
             if not upload_id:
                 raise ValueError("uploadId required for upload source")
-            path = self._resolve_uploaded_path(upload_id)
+            path = self._resolve_uploaded_path(upload_id, user_id=user_id)
             pdb_text = path.read_text()
             source_meta = {
                 "type": "upload",
@@ -108,21 +125,24 @@ class ProteinMPNNHandler:
 
         return pdb_text, source_meta
 
-    def validate_job(self, job_data: Dict[str, Any]) -> None:
+    def validate_job(self, job_data: Dict[str, Any], user_id: Optional[str] = None) -> None:
         """Ensure the provided job request has a readable PDB source."""
-        self._load_pdb_content(job_data)
+        uid = user_id or job_data.get("userId")
+        self._load_pdb_content(job_data, user_id=uid)
 
-    def get_job_status(self, job_id: str) -> Dict[str, Any]:
+    def get_job_status(self, job_id: str, user_id: Optional[str] = None) -> Dict[str, Any]:
         # First check in-memory status (for active/running jobs)
         status = self.active_jobs.get(job_id, "not_found")
         
         # If not found in memory, check file system (for completed jobs after server restart)
         if status == "not_found":
-            # Check multiple locations for result files
-            search_paths = [
+            search_paths = []
+            if user_id:
+                search_paths.append(self._base_dir / "storage" / user_id / "proteinmpnn_results" / job_id)
+            search_paths.extend([
                 self._base_dir / "storage" / "system" / "proteinmpnn_results" / job_id,
                 self._base_dir / "proteinmpnn_results" / job_id,  # Old location
-            ]
+            ])
             
             for result_dir in search_paths:
                 result_file = result_dir / "result.json"
@@ -181,29 +201,84 @@ class ProteinMPNNHandler:
         logger.warning(f"[ProteinMPNN] Result not found for {job_id} in any of {len(search_paths)} locations")
         return None
 
+    def get_result_dir(self, job_id: str, user_id: Optional[str] = None) -> Optional[Path]:
+        """Return the result directory path if it exists."""
+        candidates = []
+        if user_id:
+            candidates.append(self._base_dir / "storage" / user_id / "proteinmpnn_results" / job_id)
+        candidates.append(self._base_dir / "storage" / "system" / "proteinmpnn_results" / job_id)
+        candidates.append(self._base_dir / "proteinmpnn_results" / job_id)
+        for p in candidates:
+            if p.exists():
+                return p
+        return None
+
     def list_available_sources(self, user_id: Optional[str] = None) -> Dict[str, Any]:
-        rfdiffusion_dir = Path(__file__).parent / "rfdiffusion_results"
         rfdiffusion_entries = []
-        if rfdiffusion_dir.exists():
-            for pdb_file in sorted(rfdiffusion_dir.glob("rfdiffusion_*.pdb"), reverse=True):
-                try:
-                    job_id = pdb_file.stem.replace("rfdiffusion_", "", 1)
-                    stat = pdb_file.stat()
-                    rfdiffusion_entries.append(
-                        {
+        # Prefer user-scoped RFdiffusion results from user_files (storage/{user_id}/rfdiffusion_results)
+        if user_id:
+            rf_files = list_user_files(user_id, file_type="rfdiffusion")
+            for f in rf_files:
+                if not f.get("exists", True):
+                    continue
+                # job_id is stored as file id for RFdiffusion
+                job_id = f.get("job_id") or f.get("id", "")
+                if not job_id and f.get("original_filename", "").startswith("rfdiffusion_"):
+                    job_id = f["original_filename"].replace("rfdiffusion_", "").replace(".pdb", "")
+                if job_id:
+                    stored_path = f.get("stored_path", "")
+                    abs_path = self._base_dir / stored_path if stored_path else Path()
+                    try:
+                        size = f.get("size") or (abs_path.stat().st_size if abs_path.exists() else 0)
+                    except OSError:
+                        size = 0
+                    rfdiffusion_entries.append({
+                        "jobId": job_id,
+                        "filename": f.get("original_filename", f"rfdiffusion_{job_id}.pdb"),
+                        "path": str(self._base_dir / stored_path) if stored_path else "",
+                        "size": size,
+                        "modified": f.get("modified", 0),
+                    })
+        # Fallback: legacy global rfdiffusion_results directory
+        if not rfdiffusion_entries:
+            for candidate in [
+                self._base_dir / "rfdiffusion_results",
+                Path(__file__).parent.parent / "rfdiffusion_results",
+                Path(__file__).parent / "rfdiffusion_results",
+            ]:
+                if candidate.exists():
+                    rfdiffusion_dir = candidate
+                    break
+            else:
+                rfdiffusion_dir = None
+            if rfdiffusion_dir:
+                for pdb_file in sorted(rfdiffusion_dir.glob("rfdiffusion_*.pdb"), reverse=True):
+                    try:
+                        job_id = pdb_file.stem.replace("rfdiffusion_", "", 1)
+                        stat = pdb_file.stat()
+                        rfdiffusion_entries.append({
                             "jobId": job_id,
                             "filename": pdb_file.name,
                             "path": str(pdb_file),
                             "size": stat.st_size,
                             "modified": stat.st_mtime,
-                        }
-                    )
-                except OSError:
-                    continue
+                        })
+                    except OSError:
+                        continue
 
-        # If user_id is provided, list user-specific uploads; otherwise return empty list
+        # List user-specific uploads
         if user_id:
-            uploads = list_uploaded_pdbs(user_id)
+            uploads_raw = list_uploaded_pdbs(user_id)
+            uploads = []
+            for u in uploads_raw:
+                uploads.append({
+                    "file_id": u.get("id") or u.get("file_id"),
+                    "filename": u.get("original_filename") or u.get("filename", "structure.pdb"),
+                    "stored_path": u.get("stored_path", ""),
+                    "size": u.get("size", 0),
+                    "atoms": u.get("atoms"),
+                    "chains": u.get("chains", []),
+                })
         else:
             uploads = []
         return {
@@ -333,7 +408,8 @@ class ProteinMPNNHandler:
         log_line("proteinmpnn_job_start", {"jobId": job_id, "data": {k: v for k, v in job_data.items() if k != "pdbContent"}})
 
         try:
-            pdb_text, source_meta = self._load_pdb_content(job_data)
+            user_id = job_data.get("userId", "system")
+            pdb_text, source_meta = self._load_pdb_content(job_data, user_id=user_id)
             parameters = job_data.get("parameters", {})
             client = self._get_client()
 

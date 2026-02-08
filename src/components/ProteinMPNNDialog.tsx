@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { Loader2, AlertCircle, UploadCloud, FileText } from 'lucide-react';
-import { api } from '../utils/api';
+import { Loader2, AlertCircle, UploadCloud, FileText, X } from 'lucide-react';
+import { api, getAuthHeaders } from '../utils/api';
 import { AttachmentMenu } from './AttachmentMenu';
 import { useChatHistoryStore } from '../stores/chatHistoryStore';
 
@@ -74,6 +74,7 @@ export const ProteinMPNNDialog: React.FC<ProteinMPNNDialogProps> = ({
       : null
   );
   const [uploadError, setUploadError] = useState<string | null>(null);
+  const [uploading, setUploading] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
 
   const [numDesigns, setNumDesigns] = useState<number>(initialData?.parameters?.numDesigns || 5);
@@ -135,9 +136,38 @@ export const ProteinMPNNDialog: React.FC<ProteinMPNNDialogProps> = ({
       setSelectedUpload({
         file_id: result.file_info.file_id,
         filename: result.file_info.filename,
-        stored_path: result.file_info.file_path || ''
+        stored_path: result.file_info.file_path || result.file_info.stored_path || ''
       });
       setUploadError(null);
+    }
+  };
+
+  const handleFileSelected = async (file: File) => {
+    setUploadError(null);
+    setUploading(true);
+    try {
+      const formData = new FormData();
+      formData.append('file', file);
+      if (activeSessionId) {
+        formData.append('session_id', activeSessionId);
+      }
+      const headers = getAuthHeaders();
+      const response = await fetch('/api/upload/pdb', {
+        method: 'POST',
+        headers,
+        body: formData,
+      });
+      if (!response.ok) {
+        const errData = await response.json().catch(() => ({}));
+        throw new Error(errData.detail || 'Upload failed');
+      }
+      const result = await response.json();
+      handleFileUploaded(result);
+      await fetchSources();
+    } catch (err: any) {
+      setUploadError(err?.message || 'Upload failed');
+    } finally {
+      setUploading(false);
     }
   };
 
@@ -298,6 +328,7 @@ export const ProteinMPNNDialog: React.FC<ProteinMPNNDialogProps> = ({
                 <div className="space-y-4">
                   <div className="flex items-center space-x-3">
                     <AttachmentMenu
+                      onFileSelected={handleFileSelected}
                       onFileUploaded={handleFileUploaded}
                       onError={setUploadError}
                       currentFile={selectedUpload ? {
@@ -307,10 +338,33 @@ export const ProteinMPNNDialog: React.FC<ProteinMPNNDialogProps> = ({
                       } : null}
                       sessionId={activeSessionId}
                     />
-                    <div className="text-xs text-gray-600">
+                    <div className="text-xs text-gray-600 flex-1">
                       <p>Upload a PDB file (max 10 MB). Designed sequences will respect this backbone.</p>
+                      {uploading && (
+                        <span className="inline-flex items-center mt-2 text-amber-600">
+                          <Loader2 className="w-3 h-3 mr-1 animate-spin" />
+                          Uploading...
+                        </span>
+                      )}
                     </div>
                   </div>
+
+                  {selectedUpload && (
+                    <div className="flex items-center justify-between gap-2 px-3 py-2 bg-purple-50 border border-purple-200 rounded-lg">
+                      <span className="text-sm text-purple-800 truncate" title={selectedUpload.filename}>
+                        <FileText className="w-4 h-4 inline-block mr-2 text-purple-600" />
+                        {selectedUpload.filename}
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => setSelectedUpload(null)}
+                        className="p-1 text-purple-600 hover:text-purple-800 hover:bg-purple-100 rounded"
+                        aria-label="Clear selection"
+                      >
+                        <X className="w-4 h-4" />
+                      </button>
+                    </div>
+                  )}
 
                   {uploadError && (
                     <div className="text-xs text-red-600 flex items-center space-x-2">

@@ -42,6 +42,12 @@ interface ExtendedMessage extends Message {
     job_id?: string;
     message?: string;
   };
+  rfdiffusionResult?: {
+    pdbContent?: string;
+    filename?: string;
+    parameters?: any;
+    metadata?: any;
+  };
   proteinmpnnResult?: {
     jobId: string;
     sequences: Array<{
@@ -275,7 +281,7 @@ export const ChatPanel: React.FC = () => {
   const { setGhostBlueprint } = usePipelineStore();
 
   // Chat history store
-  const { createSession, activeSessionId, saveVisualizationCode, getVisualizationCode, saveViewerVisibility, getViewerVisibility } = useChatHistoryStore();
+  const { createSession, activeSessionId, saveVisualizationCode, getVisualizationCode, getLastCanvasCodeFromSession, saveViewerVisibility, getViewerVisibility } = useChatHistoryStore();
   const isViewerVisible = useAppStore(state => state.isViewerVisible);
   
   // Helper function to set viewer visibility and save to session
@@ -427,36 +433,43 @@ export const ChatPanel: React.FC = () => {
       setActivePane(null); // Reset active pane to hide all panes
       console.log('[ChatPanel] Hiding all panes for new session:', activeSessionId);
     } else {
-      // Only restore code for existing sessions with messages
-      getVisualizationCode(activeSessionId).then((savedCode) => {
-        const hasValidCode = savedCode && 
-          savedCode.trim() && 
-          !savedCode.includes('blob:http://') && 
-          !savedCode.includes('blob:https://');
-        
-        if (hasValidCode) {
-          console.log('[ChatPanel] Restoring visualization code for session:', activeSessionId);
-          setCurrentCode(savedCode);
-          // Show viewer if code exists (respect saved visibility preference if available)
-          const savedVisibility = getViewerVisibility(activeSessionId);
-          setViewerVisible(savedVisibility !== undefined ? savedVisibility : true);
-        } else {
-          // Clear code if session has no saved visualization or code is invalid
-          if (currentCodeRef.current && currentCodeRef.current.trim()) {
-            console.log('[ChatPanel] Clearing code for session without valid visualization:', activeSessionId);
-            setCurrentCode('');
+      // Prefer session messages (in-memory) - runs synchronously when messages are loaded
+      const sessionCode = getLastCanvasCodeFromSession(activeSessionId);
+      if (sessionCode) {
+        console.log('[ChatPanel] Restoring visualization code from session messages:', activeSessionId);
+        setCurrentCode(sessionCode);
+        const savedVisibility = getViewerVisibility(activeSessionId);
+        setViewerVisible(savedVisibility !== undefined ? savedVisibility : true);
+      } else {
+        // Fall back to async getVisualizationCode (localStorage, session API, user-scoped)
+        getVisualizationCode(activeSessionId).then((savedCode) => {
+          const hasValidCode = savedCode &&
+            savedCode.trim() &&
+            !savedCode.includes('blob:http://') &&
+            !savedCode.includes('blob:https://');
+
+          if (hasValidCode) {
+            console.log('[ChatPanel] Restoring visualization code for session:', activeSessionId);
+            setCurrentCode(savedCode);
+            const savedVisibility = getViewerVisibility(activeSessionId);
+            setViewerVisible(savedVisibility !== undefined ? savedVisibility : true);
+          } else {
+            if (currentCodeRef.current && currentCodeRef.current.trim()) {
+              console.log('[ChatPanel] Clearing code for session without valid visualization:', activeSessionId);
+              setCurrentCode('');
+            }
+            setViewerVisible(false);
           }
-          setViewerVisible(false); // Hide viewer if no valid code
-        }
-      }).catch((error) => {
-        console.error('[ChatPanel] Failed to restore visualization code:', error);
-        setViewerVisible(false); // Hide viewer on error
-      });
+        }).catch((error) => {
+          console.error('[ChatPanel] Failed to restore visualization code:', error);
+          setViewerVisible(false);
+        });
+      }
     }
-    
+
     // Update previous session ID
     previousSessionIdRef.current = activeSessionId;
-  }, [activeSessionId, getVisualizationCode, saveVisualizationCode, getViewerVisibility, saveViewerVisibility, setCurrentCode, setViewerVisible]);
+  }, [activeSessionId, activeSession, getVisualizationCode, getLastCanvasCodeFromSession, saveVisualizationCode, getViewerVisibility, saveViewerVisibility, setCurrentCode, setViewerVisible]);
 
   // Use React Query for agents/models - deduplicates requests, avoids Strict Mode double-fetch
   const { data: agentsData } = useAgents();
@@ -781,7 +794,7 @@ try {
     );
   };
 
-  const renderAlphaFoldResult = (result: ExtendedMessage['alphafoldResult']) => {
+  const renderAlphaFoldResult = (result: ExtendedMessage['alphafoldResult'], message?: ExtendedMessage) => {
     if (!result) return null;
 
     const downloadPDB = () => {
@@ -804,9 +817,19 @@ try {
       try {
         setIsExecuting(true);
         const executor = new CodeExecutor(plugin);
-        const pdbBlob = new Blob([result.pdbContent], { type: 'text/plain' });
-        const blobUrl = URL.createObjectURL(pdbBlob);
-        const loadCode = `
+        // Store PDB on server for clean API URL (avoids long data URLs in code editor)
+        const storeRes = await api.post('/upload/pdb/from-content', {
+          pdbContent: result.pdbContent,
+          filename: result.filename || 'alphafold_result.pdb',
+        });
+        const fileId = storeRes.data?.file_info?.file_id;
+        const apiUrl = fileId ? `/api/upload/pdb/${fileId}` : null;
+        if (!apiUrl) throw new Error('Failed to store PDB');
+        // Fetch with auth for execution (Molstar fetch won't include JWT)
+        const blobRes = await api.get(`/upload/pdb/${fileId}`, { responseType: 'blob' });
+        const blob = new Blob([blobRes.data], { type: 'chemical/x-pdb' });
+        const blobUrl = URL.createObjectURL(blob);
+        const execCode = `
 try {
   await builder.clearStructure();
   await builder.loadStructure('${blobUrl}');
@@ -815,11 +838,22 @@ try {
 } catch (e) { 
   console.error('Failed to load AlphaFold result:', e); 
 }`;
-        await executor.executeCode(loadCode);
+        const savedCode = `
+try {
+  await builder.clearStructure();
+  await builder.loadStructure('${apiUrl}');
+  await builder.addCartoonRepresentation({ color: 'secondary-structure' });
+  builder.focusView();
+} catch (e) { 
+  console.error('Failed to load AlphaFold result:', e); 
+}`;
+        await executor.executeCode(execCode);
+        setTimeout(() => URL.revokeObjectURL(blobUrl), 5000);
+        setCurrentCode(savedCode);
+        if (activeSessionId) saveVisualizationCode(activeSessionId, savedCode, message?.id);
         setViewerVisibleAndSave(true);
         setActivePane('viewer');
         setCurrentStructureOrigin({ type: 'alphafold', filename: result.filename || 'alphafold_result.pdb' });
-        setTimeout(() => URL.revokeObjectURL(blobUrl), 5000);
       } catch (err) {
         console.error('Failed to load AlphaFold result in viewer:', err);
       } finally {
@@ -876,7 +910,7 @@ try {
     );
   };
 
-  const renderOpenFold2Result = (result: ExtendedMessage['openfold2Result']) => {
+  const renderOpenFold2Result = (result: ExtendedMessage['openfold2Result'], message?: ExtendedMessage) => {
     if (!result?.pdbContent) return null;
     const downloadPDB = () => {
       const blob = new Blob([result.pdbContent!], { type: 'text/plain' });
@@ -894,20 +928,37 @@ try {
       try {
         setIsExecuting(true);
         const executor = new CodeExecutor(plugin);
-        const pdbBlob = new Blob([result.pdbContent], { type: 'text/plain' });
-        const blobUrl = URL.createObjectURL(pdbBlob);
-        const loadCode = `
+        const storeRes = await api.post('/upload/pdb/from-content', {
+          pdbContent: result.pdbContent,
+          filename: result.filename || 'openfold2_result.pdb',
+        });
+        const fileId = storeRes.data?.file_info?.file_id;
+        const apiUrl = fileId ? `/api/upload/pdb/${fileId}` : null;
+        if (!apiUrl) throw new Error('Failed to store PDB');
+        const blobRes = await api.get(`/upload/pdb/${fileId}`, { responseType: 'blob' });
+        const blob = new Blob([blobRes.data], { type: 'chemical/x-pdb' });
+        const blobUrl = URL.createObjectURL(blob);
+        const execCode = `
 try {
   await builder.clearStructure();
   await builder.loadStructure('${blobUrl}');
   await builder.addCartoonRepresentation({ color: 'secondary-structure' });
   builder.focusView();
 } catch (e) { console.error('Failed to load OpenFold2 result:', e); }`;
-        await executor.executeCode(loadCode);
+        const savedCode = `
+try {
+  await builder.clearStructure();
+  await builder.loadStructure('${apiUrl}');
+  await builder.addCartoonRepresentation({ color: 'secondary-structure' });
+  builder.focusView();
+} catch (e) { console.error('Failed to load OpenFold2 result:', e); }`;
+        await executor.executeCode(execCode);
+        setTimeout(() => URL.revokeObjectURL(blobUrl), 5000);
+        setCurrentCode(savedCode);
+        if (activeSessionId) saveVisualizationCode(activeSessionId, savedCode, message?.id);
         setViewerVisibleAndSave(true);
         setActivePane('viewer');
         setCurrentStructureOrigin({ type: 'alphafold', filename: result.filename || 'openfold2_result.pdb' });
-        setTimeout(() => URL.revokeObjectURL(blobUrl), 5000);
       } catch (err) {
         console.error('Failed to load OpenFold2 result in viewer:', err);
       } finally {
@@ -929,6 +980,93 @@ try {
           <button
             onClick={downloadPDB}
             className="flex items-center space-x-1 px-3 py-2 bg-amber-600 text-white rounded-md hover:bg-amber-700 text-sm"
+          >
+            <Download className="w-4 h-4" />
+            <span>Download PDB</span>
+          </button>
+          <button
+            onClick={loadInViewer}
+            disabled={!plugin}
+            className="flex items-center space-x-1 px-3 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed text-sm"
+          >
+            <Play className="w-4 h-4" />
+            <span>View 3D</span>
+          </button>
+        </div>
+      </div>
+    );
+  };
+
+  const renderRFdiffusionResult = (result: ExtendedMessage['rfdiffusionResult'], message?: ExtendedMessage) => {
+    if (!result?.pdbContent) return null;
+    const downloadPDB = () => {
+      const blob = new Blob([result.pdbContent!], { type: 'text/plain' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = result.filename || 'rfdiffusion_design.pdb';
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    };
+    const loadInViewer = async () => {
+      if (!result.pdbContent || !plugin) return;
+      try {
+        setIsExecuting(true);
+        const executor = new CodeExecutor(plugin);
+        const storeRes = await api.post('/upload/pdb/from-content', {
+          pdbContent: result.pdbContent,
+          filename: result.filename || 'rfdiffusion_design.pdb',
+        });
+        const fileId = storeRes.data?.file_info?.file_id;
+        const apiUrl = fileId ? `/api/upload/pdb/${fileId}` : null;
+        if (!apiUrl) throw new Error('Failed to store PDB');
+        const blobRes = await api.get(`/upload/pdb/${fileId}`, { responseType: 'blob' });
+        const blob = new Blob([blobRes.data], { type: 'chemical/x-pdb' });
+        const blobUrl = URL.createObjectURL(blob);
+        const execCode = `
+try {
+  await builder.clearStructure();
+  await builder.loadStructure('${blobUrl}');
+  await builder.addCartoonRepresentation({ color: 'secondary-structure' });
+  builder.focusView();
+} catch (e) { console.error('Failed to load RFdiffusion result:', e); }`;
+        const savedCode = `
+try {
+  await builder.clearStructure();
+  await builder.loadStructure('${apiUrl}');
+  await builder.addCartoonRepresentation({ color: 'secondary-structure' });
+  builder.focusView();
+} catch (e) { console.error('Failed to load RFdiffusion result:', e); }`;
+        await executor.executeCode(execCode);
+        setTimeout(() => URL.revokeObjectURL(blobUrl), 5000);
+        setCurrentCode(savedCode);
+        if (activeSessionId) saveVisualizationCode(activeSessionId, savedCode, message?.id);
+        setViewerVisibleAndSave(true);
+        setActivePane('viewer');
+        setCurrentStructureOrigin({ type: 'rfdiffusion', filename: result.filename || 'rfdiffusion_design.pdb' });
+      } catch (err) {
+        console.error('Failed to load RFdiffusion result in viewer:', err);
+      } finally {
+        setIsExecuting(false);
+      }
+    };
+    return (
+      <div className="mt-3 p-4 bg-gradient-to-r from-indigo-50 to-violet-50 border border-indigo-200 rounded-lg">
+        <div className="flex items-center space-x-2 mb-3">
+          <div className="w-8 h-8 bg-indigo-600 rounded-full flex items-center justify-center">
+            <span className="text-white text-sm font-bold">RF</span>
+          </div>
+          <div>
+            <h4 className="font-medium text-gray-900">RFdiffusion Protein Design</h4>
+            <p className="text-xs text-gray-600">Designed structure ready</p>
+          </div>
+        </div>
+        <div className="flex space-x-2">
+          <button
+            onClick={downloadPDB}
+            className="flex items-center space-x-1 px-3 py-2 bg-indigo-600 text-white rounded-md hover:bg-indigo-700 text-sm"
           >
             <Download className="w-4 h-4" />
             <span>Download PDB</span>
@@ -1317,6 +1455,9 @@ try {
       let lastProgressUpdate = 10;
 
       const poll = async (): Promise<boolean> => {
+        if (proteinmpnnProgress.isCancelled?.()) {
+          return true;
+        }
         try {
           const statusResp = await api.get(`/proteinmpnn/status/${jobId}`);
           const statusData = statusResp.data || {};
@@ -1407,14 +1548,22 @@ try {
       };
 
       while (!finished && (Date.now() - started) / 1000 < timeoutSec) {
+        if (proteinmpnnProgress.isCancelled?.()) {
+          finished = true;
+          break;
+        }
         // eslint-disable-next-line no-await-in-loop
         finished = await poll();
         if (finished) break;
+        if (proteinmpnnProgress.isCancelled?.()) {
+          finished = true;
+          break;
+        }
         // eslint-disable-next-line no-await-in-loop
         await new Promise((resolve) => setTimeout(resolve, 4000));
       }
 
-      if (!finished) {
+      if (!finished && !proteinmpnnProgress.isCancelled?.()) {
         const errorDetails = createProteinMPNNError(
           'PROTEINMPNN_TIMEOUT',
           'ProteinMPNN job timed out before completion.',
@@ -1489,7 +1638,7 @@ try {
             updatedMessages[messageIndex] = {
               ...updatedMessages[messageIndex],
               content: `RFdiffusion protein design completed successfully! The designed structure is ready for download and visualization.`,
-              alphafoldResult: {
+              rfdiffusionResult: {
                 pdbContent: result.pdbContent,
                 filename: result.filename || `designed_${Date.now()}.pdb`,
                 parameters,
@@ -2149,7 +2298,7 @@ try {
       // Sync code into editor
       setCurrentCode(code);
       
-      // Save code to active session
+      // Save code to session (localStorage cache)
       if (activeSessionId) {
         saveVisualizationCode(activeSessionId, code);
         console.log('[ChatPanel] Saved visualization code to session:', activeSessionId);
@@ -2185,6 +2334,14 @@ try {
       // Add thinking process if available
       if (thinkingProcess) {
         aiResponse.thinkingProcess = thinkingProcess;
+      }
+      
+      // Include threeDCanvas so message is persisted with canvas data (enables restore on refresh)
+      if (code && code.trim() && !code.includes('blob:http') && !code.includes('blob:https:')) {
+        aiResponse.threeDCanvas = {
+          id: aiResponse.id,
+          sceneData: code,
+        };
       }
       
       addMessage(aiResponse);
@@ -2290,7 +2447,7 @@ try {
                             updatedMessages[messageIndex] = {
                               ...updatedMessages[messageIndex],
                               content: `RFdiffusion protein design completed successfully! The designed structure is ready for download and visualization.`,
-                              alphafoldResult: {
+                              rfdiffusionResult: {
                                 pdbContent: data.pdbContent,
                                 filename: data.filename || `designed_${Date.now()}.pdb`,
                                 parameters: data.parameters,
@@ -2394,8 +2551,9 @@ try {
                     }
                     return null;
                   })()}
-                  {renderAlphaFoldResult(message.alphafoldResult)}
-                  {renderOpenFold2Result(message.openfold2Result)}
+                  {renderAlphaFoldResult(message.alphafoldResult, message)}
+                  {renderOpenFold2Result(message.openfold2Result, message)}
+                  {renderRFdiffusionResult(message.rfdiffusionResult, message)}
                   {renderProteinMPNNResult(message.proteinmpnnResult)}
                   {message.error && (
                     <div className="mt-3">

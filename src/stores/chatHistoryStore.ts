@@ -143,7 +143,7 @@ interface ChatHistoryState {
   deleteSessions: (sessionIds: string[]) => Promise<void>;
   addMessageToSession: (sessionId: string, message: Message) => Promise<void>;
   updateSessionMessages: (sessionId: string, messages: Message[]) => Promise<void>;
-  syncSessions: () => Promise<void>;
+  syncSessions: (preferredActiveSessionId?: string | null) => Promise<void>;
   syncSessionMessages: (sessionId: string) => Promise<void>;
   syncSessionState: (sessionId: string) => Promise<void>;
   
@@ -164,6 +164,7 @@ interface ChatHistoryState {
   // Visualization Code Management
   saveVisualizationCode: (sessionId: string, code: string, messageId?: string) => Promise<void>;
   getVisualizationCode: (sessionId?: string) => Promise<string | undefined>;
+  getLastCanvasCodeFromSession: (sessionId: string) => string | undefined;
   getUserLatestVisualizationCode: () => Promise<string | undefined>;
   
   // Viewer Visibility Management
@@ -591,39 +592,119 @@ export const useChatHistoryStore = create<ChatHistoryState>()(
         }
       },
       
+      getLastCanvasCodeFromSession: (sessionId: string): string | undefined => {
+        const { sessions } = get();
+        const session = sessions.find(s => s.id === sessionId);
+        const messages = session?.messages;
+        if (!messages?.length) return undefined;
+
+        // Helper: generate load code from PDB content using data URL (persists across refresh)
+        const codeFromPdbContent = (pdbContent: string): string => {
+          try {
+            const base64 = btoa(unescape(encodeURIComponent(pdbContent)));
+            const dataUrl = `data:chemical/x-pdb;base64,${base64}`;
+            return `try {
+  await builder.clearStructure();
+  await builder.loadStructure('${dataUrl}');
+  await builder.addCartoonRepresentation({ color: 'secondary-structure' });
+  builder.focusView();
+} catch (e) { console.error('Failed to load structure:', e); }`;
+          } catch {
+            return '';
+          }
+        };
+
+        const aiMessages = messages.filter(m => m.type === 'ai').sort((a, b) => {
+          const aTime = a.timestamp instanceof Date ? a.timestamp.getTime() : new Date(a.timestamp as any).getTime();
+          const bTime = b.timestamp instanceof Date ? b.timestamp.getTime() : new Date(b.timestamp as any).getTime();
+          return bTime - aTime;
+        });
+
+        // 1. Try threeDCanvas with valid (non-blob) code
+        for (let i = aiMessages.length - 1; i >= 0; i--) {
+          const m = aiMessages[i];
+          const code = m.threeDCanvas?.sceneData;
+          if (code?.trim() && !code.includes('blob:http') && !code.includes('blob:https')) return code;
+        }
+
+        // 2. Fallback: generate from alphafoldResult/openfold2Result/rfdiffusionResult pdbContent
+        for (let i = aiMessages.length - 1; i >= 0; i--) {
+          const m = aiMessages[i] as Message & { openfold2Result?: { pdbContent?: string }; rfdiffusionResult?: { pdbContent?: string } };
+          const pdb = m.alphafoldResult?.pdbContent ?? m.openfold2Result?.pdbContent ?? m.rfdiffusionResult?.pdbContent;
+          if (pdb?.trim()) {
+            const generated = codeFromPdbContent(pdb);
+            if (generated) return generated;
+          }
+        }
+
+        return undefined;
+      },
+
       getVisualizationCode: async (sessionId?: string) => {
         const user = useAuthStore.getState().user;
         if (!user) {
           console.warn('[getVisualizationCode] User not authenticated');
           return undefined;
         }
-        
-        // Step 1: If sessionId provided, check session-scoped localStorage cache first
+
+        // Step 1: Session messages (in-memory) - highest priority
+        if (sessionId) {
+          const sessionCode = get().getLastCanvasCodeFromSession(sessionId);
+          if (sessionCode) {
+            console.log(`[getVisualizationCode] Found code in session messages: ${sessionId}`);
+            return sessionCode;
+          }
+        }
+
+        // Step 2: Session-scoped localStorage cache
         if (sessionId) {
           try {
             const cacheKey = `novoprotein-session-code-${sessionId}`;
             const cached = localStorage.getItem(cacheKey);
             if (cached) {
               const cacheData = JSON.parse(cached);
-              console.log(`[getVisualizationCode] Found code in session cache: ${sessionId}`);
-              return cacheData.code;
+              const code = cacheData.code;
+              if (code && !code.includes('blob:http://') && !code.includes('blob:https://')) {
+                console.log(`[getVisualizationCode] Found code in session cache: ${sessionId}`);
+                return code;
+              }
             }
           } catch (error) {
             console.warn('[getVisualizationCode] Failed to read from session cache:', error);
           }
         }
-        
-        // Step 2: Fallback to backend query (user-scoped) - gets latest across all user's messages
+
+        // Step 3: Session-specific backend API
+        if (sessionId) {
+          try {
+            const response = await api.get(`/conversations/${sessionId}/messages/canvases/latest`);
+            if (response.data.status === 'success' && response.data.canvas) {
+              const canvas = response.data.canvas;
+              const code = canvas.sceneData || (canvas.scene_data?.molstar_code || '');
+              if (code && !code.includes('blob:http://') && !code.includes('blob:https://')) {
+                console.log(`[getVisualizationCode] Retrieved code from session canvases: ${sessionId}`);
+                return code;
+              }
+            }
+          } catch (error: any) {
+            if (error?.response?.status !== 404) {
+              console.warn('[getVisualizationCode] Session canvases fetch failed:', error?.message);
+            }
+          }
+        }
+
+        // Step 4: User-scoped fallback - only if canvas belongs to this session
         try {
           const response = await api.get('/user/canvases/latest');
           if (response.data.status === 'success' && response.data.canvas) {
             const canvas = response.data.canvas;
+            const convId = canvas.conversation_id || canvas.session_id;
+            if (sessionId && convId !== sessionId) {
+              return undefined; // Wrong session - do not use
+            }
             const code = canvas.sceneData || (canvas.scene_data?.molstar_code || '');
-            
-            if (code) {
+            if (code && !code.includes('blob:http://') && !code.includes('blob:https://')) {
               console.log('[getVisualizationCode] Retrieved latest code from backend (user-scoped)');
-              
-              // Cache in session localStorage if sessionId provided
               if (sessionId) {
                 try {
                   const cacheKey = `novoprotein-session-code-${sessionId}`;
@@ -634,19 +715,17 @@ export const useChatHistoryStore = create<ChatHistoryState>()(
                     timestamp: canvas.updated_at || new Date().toISOString(),
                   };
                   localStorage.setItem(cacheKey, JSON.stringify(cacheData));
-                  console.log(`[getVisualizationCode] Cached backend result in session: ${sessionId}`);
-                } catch (error) {
-                  console.warn('[getVisualizationCode] Failed to cache backend result:', error);
+                } catch (e) {
+                  console.warn('[getVisualizationCode] Failed to cache backend result:', e);
                 }
               }
-              
               return code;
             }
           }
         } catch (error: any) {
           console.error('[getVisualizationCode] Failed to fetch from backend:', error);
         }
-        
+
         return undefined;
       },
       
@@ -1220,7 +1299,7 @@ export const useChatHistoryStore = create<ChatHistoryState>()(
         };
       },
       
-      syncSessions: async () => {
+      syncSessions: async (preferredActiveSessionId?: string | null) => {
         const user = useAuthStore.getState().user;
         const state = get();
         
@@ -1296,7 +1375,12 @@ export const useChatHistoryStore = create<ChatHistoryState>()(
           const sessions = Array.from(sessionMap.values());
           
           // REPLACE all sessions (don't merge) - already cleared above, but set again to be explicit
-          const newActiveSessionId = sessions.length > 0 ? sessions[0].id : null;
+          // Restore user's previous session if it exists (important for refresh)
+          const newActiveSessionId = sessions.length > 0
+            ? (preferredActiveSessionId && sessions.some(s => s.id === preferredActiveSessionId)
+                ? preferredActiveSessionId
+                : sessions[0].id)
+            : null;
           set({ 
             sessions, 
             activeSessionId: newActiveSessionId,
@@ -1762,6 +1846,7 @@ export const useChatHistoryStore = create<ChatHistoryState>()(
                     messages: s.messages || [],
                     title: s.title,
                   }));
+                  const previousActiveSessionId = state.activeSessionId;
                   
                   // Clear local sessions first, then sync from backend
                   // This ensures we start fresh and get only the current user's sessions
@@ -1770,7 +1855,7 @@ export const useChatHistoryStore = create<ChatHistoryState>()(
                   
                   try {
                     // Sync sessions (this will load messages for all sessions from backend)
-                    await state.syncSessions();
+                    await state.syncSessions(previousActiveSessionId);
                     
                     // Restore messages and titles from backup if backend doesn't have them
                     // This prevents data loss during refresh

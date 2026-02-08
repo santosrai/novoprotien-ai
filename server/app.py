@@ -682,6 +682,45 @@ async def upload_pdb(
         raise HTTPException(status_code=500, detail="Failed to upload PDB file")
 
 
+@app.post("/api/upload/pdb/from-content")
+@limiter.limit("30/minute")
+async def upload_pdb_from_content(
+    request: Request,
+    user: Dict[str, Any] = Depends(get_current_user),
+):
+    """Store PDB content from message results (AlphaFold, RFdiffusion, OpenFold2) and return file_id for clean API URLs."""
+    _ = request
+    try:
+        body = await request.json()
+        pdb_content = body.get("pdbContent") or body.get("pdb_content")
+        filename = body.get("filename", "structure.pdb")
+        if not pdb_content:
+            raise HTTPException(status_code=400, detail="pdbContent is required")
+        if not filename.lower().endswith(".pdb"):
+            filename = f"{filename}.pdb" if not filename.endswith(".pdb") else "structure.pdb"
+        user_id = user.get("id")
+        if not user_id:
+            raise HTTPException(status_code=401, detail="User ID not found")
+        contents = pdb_content.encode("utf-8") if isinstance(pdb_content, str) else pdb_content
+        metadata = save_uploaded_pdb(filename, contents, user_id)
+        return {
+            "status": "success",
+            "message": "PDB stored",
+            "file_info": {
+                "filename": metadata.get("filename"),
+                "file_id": metadata.get("file_id"),
+                "file_url": f"/api/upload/pdb/{metadata.get('file_id')}",
+                "atoms": metadata.get("atoms"),
+                "chains": metadata.get("chains", []),
+            },
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        log_line("pdb_from_content_failed", {"error": str(e), "trace": traceback.format_exc()})
+        raise HTTPException(status_code=500, detail="Failed to store PDB content")
+
+
 @app.get("/api/upload/pdb/{file_id}")
 @limiter.limit("30/minute")
 async def download_uploaded_pdb(request: Request, file_id: str, user: Dict[str, Any] = Depends(get_current_user)):
@@ -917,7 +956,8 @@ async def delete_user_file(request: Request, file_id: str, user: Dict[str, Any] 
 async def proteinmpnn_sources(request: Request, user: Dict[str, Any] = Depends(get_current_user)):
     _ = request
     try:
-        sources = proteinmpnn_handler.list_available_sources()
+        user_id = user.get("id")
+        sources = proteinmpnn_handler.list_available_sources(user_id=user_id)
         return {"status": "success", "sources": sources}
     except Exception as e:
         log_line("proteinmpnn_sources_failed", {"error": str(e), "trace": traceback.format_exc()})
@@ -944,6 +984,7 @@ async def proteinmpnn_design(request: Request, user: Dict[str, Any] = Depends(ge
             },
         )
 
+    user_id = user.get("id")
     job_payload = {
         "jobId": job_id,
         "parameters": body.get("parameters", {}),
@@ -953,10 +994,11 @@ async def proteinmpnn_design(request: Request, user: Dict[str, Any] = Depends(ge
         "pdbPath": body.get("pdbPath"),
         "pdbContent": body.get("pdbContent"),
         "source": body.get("source"),
+        "userId": user_id,
     }
 
     try:
-        proteinmpnn_handler.validate_job(job_payload)
+        proteinmpnn_handler.validate_job(job_payload, user_id=user_id)
     except Exception as e:
         log_line(
             "proteinmpnn_validation_failed",
@@ -1003,7 +1045,8 @@ async def proteinmpnn_design(request: Request, user: Dict[str, Any] = Depends(ge
 @limiter.limit("30/minute")
 async def proteinmpnn_status(request: Request, job_id: str, user: Dict[str, Any] = Depends(get_current_user)):
     try:
-        status = proteinmpnn_handler.get_job_status(job_id)
+        user_id = user.get("id")
+        status = proteinmpnn_handler.get_job_status(job_id, user_id=user_id)
         return status
     except Exception as e:
         log_line("proteinmpnn_status_failed", {"error": str(e), "trace": traceback.format_exc()})
@@ -1016,15 +1059,19 @@ async def proteinmpnn_status(request: Request, job_id: str, user: Dict[str, Any]
 @app.get("/api/proteinmpnn/result/{job_id}")
 @limiter.limit("30/minute")
 async def proteinmpnn_result(request: Request, job_id: str, user: Dict[str, Any] = Depends(get_current_user), fmt: str = "json"):
+    user_id = user.get("id")
     try:
-        result = proteinmpnn_handler.get_job_result(job_id)
+        result = proteinmpnn_handler.get_job_result(job_id, user_id=user_id)
         if not result:
             raise HTTPException(status_code=404, detail="ProteinMPNN result not found")
 
         if fmt == "json":
             return result
         if fmt == "fasta":
-            fasta_path = proteinmpnn_handler.results_dir / job_id / "designed_sequences.fasta"
+            result_dir = proteinmpnn_handler.get_result_dir(job_id, user_id=user_id)
+            if not result_dir:
+                raise HTTPException(status_code=404, detail="ProteinMPNN result not found")
+            fasta_path = result_dir / "designed_sequences.fasta"
             if not fasta_path.exists():
                 raise HTTPException(status_code=404, detail="FASTA output not available")
             return FileResponse(
@@ -1033,7 +1080,10 @@ async def proteinmpnn_result(request: Request, job_id: str, user: Dict[str, Any]
                 filename=f"proteinmpnn_{job_id}.fasta",
             )
         if fmt == "raw":
-            raw_path = proteinmpnn_handler.results_dir / job_id / "raw_data.json"
+            result_dir = proteinmpnn_handler.get_result_dir(job_id, user_id=user_id)
+            if not result_dir:
+                raise HTTPException(status_code=404, detail="ProteinMPNN result not found")
+            raw_path = result_dir / "raw_data.json"
             if raw_path.exists():
                 return FileResponse(
                     raw_path,

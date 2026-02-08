@@ -271,6 +271,70 @@ async def update_canvas(
     }
 
 
+@router.get("/canvases/latest")
+async def get_conversation_latest_canvas(
+    conversation_id: str,
+    user: Dict[str, Any] = Depends(get_current_user),
+) -> Dict[str, Any]:
+    """Get the latest 3D canvas for a conversation. Verifies conversation ownership."""
+    user_id = user["id"]
+
+    with get_db() as conn:
+        conversation = conn.execute(
+            "SELECT id FROM conversations WHERE id = ? AND user_id = ?",
+            (conversation_id, user_id),
+        ).fetchone()
+
+        if not conversation:
+            conversation = conn.execute(
+                "SELECT id FROM chat_sessions WHERE id = ? AND user_id = ?",
+                (conversation_id, user_id),
+            ).fetchone()
+
+        if not conversation:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Conversation not found or access denied",
+            )
+
+        canvas_row = conn.execute(
+            """SELECT * FROM three_d_canvases
+               WHERE conversation_id = ?
+               ORDER BY updated_at DESC, created_at DESC
+               LIMIT 1""",
+            (conversation_id,),
+        ).fetchone()
+
+        if not canvas_row:
+            return {
+                "status": "success",
+                "canvas": None,
+                "message": "No canvas found for conversation",
+            }
+
+        canvas = dict(canvas_row)
+        try:
+            scene_data = json.loads(canvas['scene_data']) if canvas.get('scene_data') else {}
+        except json.JSONDecodeError:
+            scene_data = {"molstar_code": canvas.get('scene_data', '')}
+
+        molstar_code = scene_data.get('molstar_code', '') if isinstance(scene_data, dict) else str(scene_data)
+
+        return {
+            "status": "success",
+            "canvas": {
+                "id": canvas['id'],
+                "message_id": canvas['message_id'],
+                "scene_data": scene_data,
+                "sceneData": molstar_code,
+                "preview_url": canvas.get('preview_url'),
+                "version": canvas.get('version', 1),
+                "created_at": canvas.get('created_at'),
+                "updated_at": canvas.get('updated_at'),
+            },
+        }
+
+
 @router.get("/canvases")
 async def list_conversation_canvases(
     conversation_id: str,
