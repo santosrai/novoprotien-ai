@@ -35,8 +35,8 @@
       "type": "textarea",
       "required": false,
       "default": "",
-      "placeholder": "Paste template content in hhr format (optional)...",
-      "label": "Template (hhr format)",
+      "placeholder": "Paste template content in mmCIF format (optional)...",
+      "label": "Template (mmCIF format)",
       "helpText": "Optional structural template for improved accuracy"
     },
     "relax_prediction": {

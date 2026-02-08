@@ -93,7 +93,7 @@ export const OpenFold2Dialog: React.FC<OpenFold2DialogProps> = ({
           </div>
 
           <p className="text-sm text-gray-600 dark:text-gray-400 mb-4">
-            Predict 3D structure from sequence. Optional: upload MSA (a3m) and templates (hhr) for improved accuracy.
+            Predict 3D structure from sequence. Optional: upload MSA (a3m) and templates (mmCIF .cif) for improved accuracy.
           </p>
 
           {/* Sequence Input */}
@@ -171,12 +171,12 @@ export const OpenFold2Dialog: React.FC<OpenFold2DialogProps> = ({
               </div>
               <div>
                 <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
-                  Template File (hhr format, optional)
+                  Template File (mmCIF .cif format, optional)
                 </label>
                 <div className="flex items-center gap-2">
                   <input
                     type="file"
-                    accept=".hhr,.txt"
+                    accept=".cif,.txt"
                     onChange={handleTemplateFileChange}
                     className="text-sm text-gray-600 dark:text-gray-400 file:mr-2 file:py-1 file:px-3 file:rounded file:border-0 file:text-sm file:font-medium file:bg-blue-50 file:text-blue-700 hover:file:bg-blue-100 dark:file:bg-blue-900/30 dark:file:text-blue-300"
                   />

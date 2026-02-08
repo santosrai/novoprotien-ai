@@ -65,7 +65,7 @@ agents = {
     "openfold2-agent": {
         "id": "openfold2-agent",
         "name": "OpenFold2 Structure Prediction",
-        "description": "Predicts protein 3D structures using OpenFold2 via NVIDIA NIM. Supports sequence-only or sequence with optional MSA (a3m) and template (hhr) uploads. Max 1000 residues. Use for structure prediction when you have pre-computed MSA or want an alternative to AlphaFold2.",
+        "description": "Predicts protein 3D structures using OpenFold2 via NVIDIA NIM. Supports sequence-only or sequence with optional MSA (a3m) and template (mmCIF .cif) uploads. Max 1000 residues. Use for structure prediction when you have pre-computed MSA or want an alternative to AlphaFold2.",
         "system": OPENFOLD2_AGENT_SYSTEM_PROMPT,
         "modelEnv": "CLAUDE_CHAT_MODEL",
         "defaultModel": os.getenv("CLAUDE_CHAT_MODEL", "claude-3-5-sonnet-20241022"),

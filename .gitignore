@@ -54,3 +54,10 @@ server/proteinmpnn_results/*
 server/rfdiffusion_results/*
 *.pdb
 server/uploads/pdb_index.json
+
+# Playwright
+/test-results/
+/playwright-report/
+/blob-report/
+/playwright/.cache/
+/playwright/.auth/
