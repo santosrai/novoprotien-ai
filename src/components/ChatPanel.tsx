@@ -25,6 +25,7 @@ import { PipelineSelectionModal } from './PipelineSelectionModal';
 import { ServerFilesDialog } from './ServerFilesDialog';
 import { usePipelineStore } from '../components/pipeline-canvas';
 import { PipelineBlueprint } from '../components/pipeline-canvas';
+import { extractStructureMetadata, summarizeForAgent } from '../utils/structureMetadata';
 
 // Extended message metadata for structured agent results
 interface ExtendedMessage extends Message {
@@ -267,7 +268,7 @@ const createProteinMPNNError = (
 });
 
 export const ChatPanel: React.FC = () => {
-  const { plugin, currentCode, setCurrentCode, setIsExecuting, setActivePane, setPendingCodeToRun, setViewerVisible, setCurrentStructureOrigin, pendingCodeToRun } = useAppStore();
+  const { plugin, currentCode, currentStructureOrigin, setCurrentCode, setIsExecuting, setActivePane, setPendingCodeToRun, setViewerVisible, setCurrentStructureOrigin, pendingCodeToRun } = useAppStore();
   const selections = useAppStore(state => state.selections);
   const removeSelection = useAppStore(state => state.removeSelection);
   const clearSelections = useAppStore(state => state.clearSelections);
@@ -308,6 +309,8 @@ export const ChatPanel: React.FC = () => {
       atoms: number;
       chains: string[];
       size: number;
+      chain_residue_counts?: Record<string, number>;
+      total_residues?: number;
     };
     error?: string;
   }
@@ -801,27 +804,22 @@ try {
       try {
         setIsExecuting(true);
         const executor = new CodeExecutor(plugin);
-        
-        // Create temporary PDB data URL
         const pdbBlob = new Blob([result.pdbContent], { type: 'text/plain' });
-        const pdbUrl = URL.createObjectURL(pdbBlob);
-        
-        // Load structure in viewer
-        const code = `
+        const blobUrl = URL.createObjectURL(pdbBlob);
+        const loadCode = `
 try {
   await builder.clearStructure();
-  // Note: This would need to be adapted to load from blob URL
-  // For now, we'll show the sequence info and guide user to download
-  console.log('AlphaFold result ready for visualization');
+  await builder.loadStructure('${blobUrl}');
+  await builder.addCartoonRepresentation({ color: 'secondary-structure' });
+  builder.focusView();
 } catch (e) { 
   console.error('Failed to load AlphaFold result:', e); 
 }`;
-        
-        await executor.executeCode(code);
+        await executor.executeCode(loadCode);
         setViewerVisibleAndSave(true);
         setActivePane('viewer');
-        
-        URL.revokeObjectURL(pdbUrl);
+        setCurrentStructureOrigin({ type: 'alphafold', filename: result.filename || 'alphafold_result.pdb' });
+        setTimeout(() => URL.revokeObjectURL(blobUrl), 5000);
       } catch (err) {
         console.error('Failed to load AlphaFold result in viewer:', err);
       } finally {
@@ -898,10 +896,18 @@ try {
         const executor = new CodeExecutor(plugin);
         const pdbBlob = new Blob([result.pdbContent], { type: 'text/plain' });
         const blobUrl = URL.createObjectURL(pdbBlob);
-        await executor.executeCode(`await builder.clearStructure(); await builder.loadStructure('${blobUrl}');`);
-        URL.revokeObjectURL(blobUrl);
+        const loadCode = `
+try {
+  await builder.clearStructure();
+  await builder.loadStructure('${blobUrl}');
+  await builder.addCartoonRepresentation({ color: 'secondary-structure' });
+  builder.focusView();
+} catch (e) { console.error('Failed to load OpenFold2 result:', e); }`;
+        await executor.executeCode(loadCode);
         setViewerVisibleAndSave(true);
         setActivePane('viewer');
+        setCurrentStructureOrigin({ type: 'alphafold', filename: result.filename || 'openfold2_result.pdb' });
+        setTimeout(() => URL.revokeObjectURL(blobUrl), 5000);
       } catch (err) {
         console.error('Failed to load OpenFold2 result in viewer:', err);
       } finally {
@@ -1649,6 +1655,8 @@ try {
         atoms: result.file_info.atoms,
         chains: result.file_info.chains,
         size: result.file_info.size || 0,
+        chain_residue_counts: result.file_info.chain_residue_counts,
+        total_residues: result.file_info.total_residues,
       };
 
       // Mark file as uploaded
@@ -1822,12 +1830,36 @@ try {
       let aiText = ''; // AI text response for better user experience
       let thinkingProcess: ExtendedMessage['thinkingProcess'] | undefined = undefined;
       try {
+        // Extract structure metadata from viewer when plugin and structure are available
+        let structureMetadata: Awaited<ReturnType<typeof extractStructureMetadata>> = null;
+        if (plugin) {
+          try {
+            const raw = await extractStructureMetadata(plugin);
+            structureMetadata = raw ? summarizeForAgent(raw) : null;
+          } catch (e) {
+            console.warn('[ChatPanel] Failed to extract structure metadata:', e);
+          }
+        }
+
         const payload = {
           input: text,
           currentCode,
           history: messages.slice(-6).map(m => ({ type: m.type, content: m.content })),
           selection: selections.length > 0 ? selections[0] : null, // First selection for backward compatibility
           selections: selections, // Full selections array for new multi-selection support
+          currentStructureOrigin: currentStructureOrigin || undefined,
+          uploadedFile: uploadedFileInfo
+            ? {
+                file_id: uploadedFileInfo.file_id,
+                filename: uploadedFileInfo.filename,
+                file_url: uploadedFileInfo.file_url,
+                atoms: uploadedFileInfo.atoms,
+                chains: uploadedFileInfo.chains,
+                chain_residue_counts: uploadedFileInfo.chain_residue_counts,
+                total_residues: uploadedFileInfo.total_residues,
+              }
+            : undefined,
+          structureMetadata: structureMetadata || undefined,
           agentId: agentSettings.selectedAgentId || undefined, // Only send if manually selected
           model: agentSettings.selectedModel || undefined, // Only send if manually selected
           pipeline_id: pipelineIdToSend || undefined, // Pass pipeline ID to backend

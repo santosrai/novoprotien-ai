@@ -69,7 +69,6 @@ export const FileEditor: React.FC<FileEditorProps> = ({ fileId, filename, fileTy
       const startTime = Date.now();
       while (Date.now() - startTime < maxWait) {
         if (plugin) {
-          // Check if plugin has the necessary builders (indicates it's initialized)
           try {
             if (plugin.builders && plugin.builders.data && plugin.builders.structure) {
               return true;
@@ -83,19 +82,26 @@ export const FileEditor: React.FC<FileEditorProps> = ({ fileId, filename, fileTy
       return false;
     };
 
-    // Construct file URL based on file type - use API endpoint directly
-    let fileUrl: string;
-    if (fileType === 'upload') {
-      fileUrl = `/api/upload/pdb/${fileId}`;
-    } else {
-      fileUrl = `/api/files/${fileId}/download`;
+    // Fetch file with auth (Molstar's fetch won't include JWT) and create blob URL
+    const apiPath = fileType === 'upload' ? `/upload/pdb/${fileId}` : `/files/${fileId}/download`;
+    let loadUrl: string;
+    try {
+      const response = await api.get(apiPath, { responseType: 'blob' });
+      const blob = new Blob([response.data], { type: 'chemical/x-pdb' });
+      loadUrl = URL.createObjectURL(blob);
+      // Revoke after Molstar has fetched (avoid memory leak)
+      setTimeout(() => URL.revokeObjectURL(loadUrl), 15000);
+    } catch (err: any) {
+      console.error('[FileEditor] Failed to fetch file for 3D:', err);
+      alert(`Failed to load file: ${err.response?.data?.detail || err.message || 'Unknown error'}`);
+      return;
     }
 
-    // Load structure in viewer using API endpoint directly (no blob URLs)
+    const fileUrlForContext = fileType === 'upload' ? `/api/upload/pdb/${fileId}` : `/api/files/${fileId}/download`;
     const code = `
 try {
   await builder.clearStructure();
-  await builder.loadStructure('${fileUrl}');
+  await builder.loadStructure('${loadUrl}');
   await builder.addCartoonRepresentation({ color: 'secondary-structure' });
   builder.focusView();
   console.log('Successfully loaded ${filename} in 3D viewer');
@@ -103,8 +109,18 @@ try {
   console.error('Failed to load file in 3D viewer:', e); 
 }`;
 
-    // Save code to editor so user can see and modify it
-    setCurrentCode(code);
+    // Save code to editor so user can see and modify it (use API path for saved code - blob URLs expire)
+    const savedCode = `
+try {
+  await builder.clearStructure();
+  await builder.loadStructure('${fileUrlForContext}');
+  await builder.addCartoonRepresentation({ color: 'secondary-structure' });
+  builder.focusView();
+  console.log('Successfully loaded ${filename} in 3D viewer');
+} catch (e) { 
+  console.error('Failed to load file in 3D viewer:', e); 
+}`;
+    setCurrentCode(savedCode);
 
     // Set structure origin for LLM context
     setCurrentStructureOrigin({
@@ -112,20 +128,19 @@ try {
       filename: filename,
       metadata: {
         file_id: fileId,
-        file_url: fileUrl,
+        file_url: fileUrlForContext,
       },
     });
 
-    // Save code to active session for persistence
+    // Save code to active session for persistence (use API path, not blob)
     if (activeSessionId) {
-      saveVisualizationCode(activeSessionId, code);
+      saveVisualizationCode(activeSessionId, savedCode);
       console.log('[FileEditor] Saved visualization code to session:', activeSessionId);
     }
 
     const isPluginReady = await waitForPlugin();
     if (!isPluginReady) {
       console.warn('[FileEditor] Plugin not ready, queueing code for execution');
-      // Queue code to run when plugin is ready
       setPendingCodeToRun(code);
       setViewerVisible(true);
       setActivePane('viewer');
@@ -142,7 +157,6 @@ try {
       const executor = new CodeExecutor(plugin);
       await executor.executeCode(code);
 
-      // Switch to viewer pane and make it visible
       setViewerVisible(true);
       setActivePane('viewer');
     } catch (err: any) {

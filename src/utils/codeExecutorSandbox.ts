@@ -308,18 +308,11 @@ export class SandboxExecutor {
     this.iframe.style.height = '0';
     this.iframe.style.border = 'none';
     
-    // Set sandbox HTML content
-    const blob = new Blob([SANDBOX_HTML], { type: 'text/html' });
-    const url = URL.createObjectURL(blob);
-    this.iframe.src = url;
+    // Use srcdoc instead of blob URL to avoid "Not allowed to load local resource: blob:..." errors
+    this.iframe.srcdoc = SANDBOX_HTML;
     
     // Append to body
     document.body.appendChild(this.iframe);
-    
-    // Cleanup URL after load
-    this.iframe.onload = () => {
-      URL.revokeObjectURL(url);
-    };
   }
 
   private setupMessageListener(): void {

@@ -14,7 +14,8 @@ import {
   Atom,
   Link2,
   Circle,
-  Trash2
+  Trash2,
+  Code
 } from 'lucide-react';
 import { PluginUIContext } from 'molstar/lib/mol-plugin-ui/context';
 import {
@@ -43,6 +44,7 @@ import {
   type RepresentationType,
 } from '../utils/molstarSelections';
 import { useAppStore } from '../stores/appStore';
+import { useSettingsStore } from '../stores/settingsStore';
 import { CodeExecutor } from '../utils/codeExecutor';
 
 interface MolstarToolbarProps {
@@ -209,7 +211,8 @@ export const MolstarToolbar: React.FC<MolstarToolbarProps> = ({ plugin }) => {
   const [selectionCount, setSelectionCount] = useState(0);
   const [chainIds, setChainIds] = useState<string[]>([]);
   const [selectionLabel, setSelectionLabel] = useState<string>('');
-  const { setMolstarSelectionCount, recordMolstarAction } = useAppStore();
+  const { setMolstarSelectionCount, recordMolstarAction, setActivePane } = useAppStore();
+  const codeEditorEnabled = useSettingsStore((s) => s.settings.codeEditor.enabled);
   
   // Subscribe to selection changes
   useEffect(() => {
@@ -492,6 +495,21 @@ export const MolstarToolbar: React.FC<MolstarToolbarProps> = ({ plugin }) => {
       
       {/* Spacer */}
       <div className="flex-1" />
+      
+      {/* Code Editor Button - enabled only when code editor is enabled in settings */}
+      <button
+        onClick={() => setActivePane('editor')}
+        disabled={!codeEditorEnabled}
+        className={`flex items-center gap-1 px-2 py-1 text-sm font-medium rounded transition-colors ${
+          !codeEditorEnabled
+            ? 'text-gray-400 cursor-not-allowed'
+            : 'text-blue-600 hover:bg-blue-50 hover:text-blue-700'
+        }`}
+        title={codeEditorEnabled ? 'View code editor' : 'Enable code editor in Settings to view'}
+      >
+        <Code className="w-4 h-4" />
+        <span className="hidden sm:inline">Code</span>
+      </button>
       
       {/* Clear Structure Button */}
       <button

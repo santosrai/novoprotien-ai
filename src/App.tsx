@@ -133,13 +133,46 @@ function App() {
         {(activePane === 'viewer' || activePane === 'editor' || activePane === 'files' || activePane === 'pipeline') && (
           <div className="flex-1 flex flex-col min-w-0">
             {/* Content Pane with fixed, responsive height */}
-            <div className="flex-1 min-h-0">
-              {activePane === 'pipeline' ? (
-                <PipelineThemeWrapper externalTheme={theme} className="h-full">
-                  <PipelineCanvas />
-                </PipelineThemeWrapper>
-              ) : activePane === 'files' ? (
-                <div className="h-full">
+            <div className="flex-1 min-h-0 relative">
+              {/* MolstarViewer is always mounted so the plugin stays alive for code execution.
+                  Hidden via CSS when another pane is active. */}
+              <div
+                className="absolute inset-0 bg-gray-900"
+                style={{ display: (activePane === 'viewer' || activePane === 'editor') ? 'block' : 'none',
+                         visibility: activePane === 'viewer' ? 'visible' : 'hidden',
+                         zIndex: activePane === 'viewer' ? 1 : 0 }}
+              >
+                <Suspense fallback={
+                  <div className="h-full flex items-center justify-center text-gray-400">
+                    <div className="text-center">
+                      <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-gray-400 mx-auto mb-4"></div>
+                      <p>Loading molecular viewer...</p>
+                    </div>
+                  </div>
+                }>
+                  <MolstarViewer />
+                </Suspense>
+              </div>
+
+              {/* Code Editor overlay - shown on top when editor pane active */}
+              {activePane === 'editor' && settings.codeEditor.enabled && (
+                <div className="absolute inset-0 z-10">
+                  <CodeEditor />
+                </div>
+              )}
+
+              {/* Pipeline pane */}
+              {activePane === 'pipeline' && (
+                <div className="absolute inset-0 z-10">
+                  <PipelineThemeWrapper externalTheme={theme} className="h-full">
+                    <PipelineCanvas />
+                  </PipelineThemeWrapper>
+                </div>
+              )}
+
+              {/* Files pane */}
+              {activePane === 'files' && (
+                <div className="absolute inset-0 z-10">
                   {selectedFile ? (
                     <FileEditor
                       fileId={selectedFile.id}
@@ -150,23 +183,6 @@ function App() {
                   ) : (
                     <FileBrowser onFileSelect={handleFileSelect} />
                   )}
-                </div>
-              ) : activePane === 'editor' && settings.codeEditor.enabled ? (
-                <div className="h-full">
-                  <CodeEditor />
-                </div>
-              ) : (
-                <div className="h-full bg-gray-900">
-                  <Suspense fallback={
-                    <div className="h-full flex items-center justify-center text-gray-400">
-                      <div className="text-center">
-                        <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-gray-400 mx-auto mb-4"></div>
-                        <p>Loading molecular viewer...</p>
-                      </div>
-                    </div>
-                  }>
-                    <MolstarViewer />
-                  </Suspense>
                 </div>
               )}
             </div>

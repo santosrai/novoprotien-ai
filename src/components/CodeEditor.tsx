@@ -10,7 +10,7 @@ const defaultCode = `// Molstar Code Editor
 // Example: await builder.loadStructure('1ABC');`;
 
 export const CodeEditor: React.FC = () => {
-  const { plugin, currentCode, setCurrentCode, isExecuting, setIsExecuting } = useAppStore();
+  const { plugin, currentCode, setCurrentCode, isExecuting, setIsExecuting, setActivePane } = useAppStore();
   const { activeSessionId, saveVisualizationCode } = useChatHistoryStore();
   const editorRef = useRef<any>(null);
 
@@ -34,6 +34,9 @@ export const CodeEditor: React.FC = () => {
       const exec = new CodeExecutor(plugin);
       const res = await exec.executeCode(currentCode);
       console.log('[Molstar] execute result:', res);
+      
+      // Switch to viewer pane so user can see the 3D result
+      setActivePane('viewer');
       
       // Save code to active session after successful execution (message-scoped if possible)
       if (activeSessionId && currentCode.trim()) {
@@ -135,12 +138,14 @@ try {
             <RotateCcw className="w-4 h-4" />
           </button>
           <button
+            data-code-editor-run
             onClick={executeCode}
-            disabled={isExecuting}
+            disabled={isExecuting || !plugin}
+            title={!plugin ? 'Viewer initializing...' : 'Run code in Molstar viewer'}
             className="flex items-center space-x-1 px-3 py-1 bg-green-600 hover:bg-green-700 text-white rounded text-sm disabled:opacity-50"
           >
             <Play className="w-3 h-3" />
-            <span>{isExecuting ? 'Running...' : 'Run'}</span>
+            <span>{isExecuting ? 'Running...' : !plugin ? 'Wait...' : 'Run'}</span>
           </button>
         </div>
       </div>

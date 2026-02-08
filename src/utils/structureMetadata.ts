@@ -180,3 +180,38 @@ export async function extractStructureMetadata(
   }
 }
 
+/**
+ * Summarize structure metadata for sending to the agent.
+ * Strips full sequences and truncates composition to reduce payload size.
+ * Backend still applies final truncation.
+ */
+export function summarizeForAgent(metadata: StructureMetadata | null): StructureMetadata | null {
+  if (!metadata) return null;
+
+  const result: StructureMetadata = {
+    chains: metadata.chains,
+    chainCount: metadata.chainCount,
+    residueCount: metadata.residueCount,
+    structureType: metadata.structureType,
+  };
+
+  // Keep sequences as chain + length only (no full sequence strings)
+  if (metadata.sequences && metadata.sequences.length > 0) {
+    result.sequences = metadata.sequences.map(({ chain, length }) => ({
+      chain,
+      sequence: '', // Omit to reduce payload
+      length,
+    }));
+  }
+
+  // Truncate residue composition to top 5
+  if (metadata.residueComposition && Object.keys(metadata.residueComposition).length > 0) {
+    const sorted = Object.entries(metadata.residueComposition)
+      .sort(([, a], [, b]) => b - a)
+      .slice(0, 5);
+    result.residueComposition = Object.fromEntries(sorted);
+  }
+
+  return result;
+}
+

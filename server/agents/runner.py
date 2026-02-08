@@ -735,6 +735,82 @@ def _parse_thinking_data(completion: Any) -> Optional[Dict[str, Any]]:
         return None
 
 
+def _build_summarized_structure_context(
+    *,
+    structure_metadata: Optional[Dict[str, Any]] = None,
+    uploaded_file_context: Optional[Dict[str, Any]] = None,
+    pdb_id: Optional[str] = None,
+    structure_label: Optional[str] = None,
+    max_chars: int = 800,
+) -> str:
+    """Build a truncated StructureContext for the LLM, applying tiered truncation for large structures."""
+    lines: List[str] = []
+    chain_residue_counts: Dict[str, int] = {}
+    residue_composition: Optional[Dict[str, int]] = None
+    total_residues = 0
+
+    # Gather metadata from structure_metadata (from frontend MolStar)
+    if structure_metadata:
+        if structure_metadata.get("sequences"):
+            for seq in structure_metadata["sequences"]:
+                chain = seq.get("chain", "?")
+                length = seq.get("length", 0)
+                chain_residue_counts[chain] = length
+        total_residues = structure_metadata.get("residueCount") or sum(chain_residue_counts.values())
+        residue_composition = structure_metadata.get("residueComposition")
+
+    # Or from uploaded_file_context
+    if not chain_residue_counts and uploaded_file_context:
+        chain_residue_counts = dict(uploaded_file_context.get("chain_residue_counts") or {})
+        total_residues = uploaded_file_context.get("total_residues") or sum(chain_residue_counts.values())
+        if not chain_residue_counts and uploaded_file_context.get("chains"):
+            chains = uploaded_file_context.get("chains", [])
+            if chains:
+                chain_residue_counts = {c: 0 for c in chains}
+
+    # Build chain summary with tiered detail
+    if chain_residue_counts:
+        sorted_chains = sorted(chain_residue_counts.items(), key=lambda x: x[0])
+        chain_count = len(sorted_chains)
+
+        if total_residues > 5000 or chain_count > 10:
+            total = total_residues or sum(c for _, c in sorted_chains)
+            lines.append(f"Chains: {chain_count} chains, {total} total residues.")
+        elif total_residues > 1000:
+            chain_parts = [f"{c}({n})" for c, n in sorted_chains[:15]]
+            if len(sorted_chains) > 15:
+                chain_parts.append(f"...+{len(sorted_chains) - 15} more")
+            lines.append(f"Chains: {', '.join(chain_parts)}.")
+        else:
+            chain_parts = [f"{c}({n} residues)" for c, n in sorted_chains]
+            lines.append(f"Chains: {', '.join(chain_parts)}.")
+
+    # Add composition (tiered: top 5 for <300, top 3 for 300-1000, skip for >1000)
+    if residue_composition and total_residues <= 1000:
+        cap = 5 if total_residues < 300 else 3
+        sorted_comp = sorted(
+            residue_composition.items(),
+            key=lambda x: x[1],
+            reverse=True,
+        )[:cap]
+        total_count = sum(residue_composition.values()) or 1
+        comp_parts = [f"{r} {int(100 * c / total_count)}%" for r, c in sorted_comp]
+        if comp_parts:
+            lines.append(f"Residue composition (top {len(comp_parts)}): {', '.join(comp_parts)}.")
+
+    label = structure_label or (f"PDB {pdb_id}" if pdb_id else "structure")
+    header = f"StructureContext: {label}."
+    body = " ".join(lines)
+    if body:
+        full = f"{header} {body}"
+    else:
+        full = header
+
+    if len(full) > max_chars:
+        full = full[: max_chars - 3] + "..."
+    return full
+
+
 async def run_agent(
     *,
     agent: Dict[str, Any],
@@ -745,9 +821,11 @@ async def run_agent(
     selections: Optional[List[Dict[str, Any]]] = None,
     current_structure_origin: Optional[Dict[str, Any]] = None,
     uploaded_file_context: Optional[Dict[str, Any]] = None,
+    structure_metadata: Optional[Dict[str, Any]] = None,
     pipeline_id: Optional[str] = None,
     pipeline_data: Optional[Dict[str, Any]] = None,
     model_override: Optional[str] = None,
+    user_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     # Use model_override if provided, otherwise fall back to agent's default
     if model_override:
@@ -1121,6 +1199,20 @@ async def run_agent(
     code_pdb_id = None
     structure_origin_context = None
     
+    # Enrich uploaded_file_context with full metadata from DB if we have file_id but missing chain_residue_counts
+    if uploaded_file_context and user_id:
+        file_id = uploaded_file_context.get("file_id")
+        if file_id and not uploaded_file_context.get("chain_residue_counts"):
+            try:
+                from ..domain.storage.pdb_storage import get_uploaded_pdb
+                db_meta = get_uploaded_pdb(file_id, user_id)
+                if db_meta:
+                    uploaded_file_context = dict(uploaded_file_context)
+                    uploaded_file_context["chain_residue_counts"] = db_meta.get("chain_residue_counts", {})
+                    uploaded_file_context["total_residues"] = db_meta.get("total_residues")
+            except Exception as e:
+                log_line("agent:text:upload_metadata_fetch_error", {"error": str(e), "file_id": file_id})
+
     # Add uploaded file context if available
     uploaded_file_info = ""
     if uploaded_file_context:
@@ -1209,6 +1301,40 @@ async def run_agent(
             code_pdb_id = pdb_match.group(1).upper()
             if not structure_origin_context:
                 structure_origin_context = f"Current Structure: PDB ID {code_pdb_id} (from Protein Data Bank)."
+
+    # Fetch PDB metadata when we have PDB ID but no structure_metadata from frontend
+    if code_pdb_id and not structure_metadata:
+        try:
+            from ..domain.protein.sequence import SequenceExtractor
+            extractor = SequenceExtractor()
+            sequences = extractor.extract_from_pdb_id(code_pdb_id)
+            if sequences:
+                structure_metadata = {
+                    "sequences": [{"chain": c, "sequence": s, "length": len(s)} for c, s in sequences.items()],
+                    "chains": list(sequences.keys()),
+                    "residueCount": sum(len(s) for s in sequences.values()),
+                }
+        except Exception as e:
+            log_line("agent:text:pdb_metadata_fetch_error", {"error": str(e), "pdb_id": code_pdb_id})
+
+    # Build summarized StructureContext (chains, residue counts, composition) for residue-suggestion questions
+    summarized_structure_context = ""
+    structure_label = None
+    if current_structure_origin:
+        origin_type = current_structure_origin.get("type", "")
+        if origin_type == "upload" and current_structure_origin.get("filename"):
+            structure_label = f"uploaded file '{current_structure_origin['filename']}'"
+        elif origin_type == "pdb" and current_structure_origin.get("pdbId"):
+            code_pdb_id = code_pdb_id or current_structure_origin.get("pdbId")
+    if code_pdb_id and not structure_label:
+        structure_label = f"PDB {code_pdb_id}"
+    if structure_metadata or (uploaded_file_context and (uploaded_file_context.get("chain_residue_counts") or uploaded_file_context.get("chains"))):
+        summarized_structure_context = _build_summarized_structure_context(
+            structure_metadata=structure_metadata,
+            uploaded_file_context=uploaded_file_context,
+            pdb_id=code_pdb_id,
+            structure_label=structure_label,
+        )
     
     # Handle multiple selections if provided, otherwise fall back to single selection
     active_selections = selections if selections and len(selections) > 0 else ([selection] if selection else [])
@@ -1363,6 +1489,9 @@ async def run_agent(
         context_parts.append("Recent Structure Generation History:\n" + "\n".join(history_context_lines))
     if selection_context:
         context_parts.append(selection_context)
+    # Add summarized StructureContext (chains, residue counts) for residue-suggestion questions
+    if summarized_structure_context and not is_greeting:
+        context_parts.append(summarized_structure_context)
     # Only include code/structure context if user is NOT just greeting
     # For greetings, skip structure context to avoid describing structures unnecessarily
     if code_context and not is_greeting:

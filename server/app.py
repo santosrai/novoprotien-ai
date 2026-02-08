@@ -396,9 +396,11 @@ async def route(request: Request, user: Dict[str, Any] = Depends(get_current_use
             selections=body.get("selections"),
             current_structure_origin=body.get("currentStructureOrigin"),
             uploaded_file_context=body.get("uploadedFile"),  # Pass uploaded file context if available
+            structure_metadata=body.get("structureMetadata"),  # Structure metadata from viewer
             pipeline_id=pipeline_id,  # Pass pipeline_id to agent
             pipeline_data=pipeline_data,  # Pass fetched pipeline data to agent
             model_override=model_override,
+            user_id=user.get("id") if user else None,  # For fetching uploaded file metadata
         )
         
         log_line("agent_completed", {
@@ -669,6 +671,8 @@ async def upload_pdb(
                 "size": metadata.get("size"),
                 "atoms": metadata.get("atoms"),
                 "chains": metadata.get("chains", []),
+                "chain_residue_counts": metadata.get("chain_residue_counts", {}),
+                "total_residues": metadata.get("total_residues"),
             },
         }
     except HTTPException as exc:
