@@ -4,6 +4,14 @@ import os
 from typing import Any, Dict, List, Optional
 
 try:
+    from langsmith import traceable
+except ImportError:
+    def traceable(*args, **kwargs):
+        def noop(f):
+            return f
+        return noop
+
+try:
     from langchain_openai import OpenAIEmbeddings  # type: ignore
 except Exception:  # pragma: no cover
     OpenAIEmbeddings = None  # type: ignore
@@ -51,6 +59,7 @@ class SimpleRouterGraph:
             elif not OpenAIEmbeddings:
                 print("[RouterGraph] OpenAIEmbeddings not available - using rule-based routing only")
 
+    @traceable(name="RouterGraph.ainvoke", run_type="chain")
     async def ainvoke(self, state: Dict[str, Any]) -> Dict[str, Any]:
         # Rule-based shortcut: selection present + interrogative → bio-chat
         input_text: str = state.get("input", "") or ""

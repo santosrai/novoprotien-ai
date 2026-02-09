@@ -26,6 +26,19 @@ if os.path.exists(server_env_path):
     load_dotenv(server_env_path, override=True)
     print(f"Also loaded .env from: {server_env_path}")
 
+# LangSmith tracing (must run after env load, before agent imports)
+try:
+    from .infrastructure.langsmith_config import setup_langsmith
+    setup_langsmith()
+except ImportError:
+    try:
+        from infrastructure.langsmith_config import setup_langsmith
+        setup_langsmith()
+    except Exception:
+        pass
+except Exception:
+    pass
+
 # Debug: Check if key environment variables are loaded
 api_key = os.getenv('OPENROUTER_API_KEY')
 if api_key:
@@ -48,6 +61,14 @@ from slowapi.errors import RateLimitExceeded
 from fastapi.responses import JSONResponse, FileResponse
 
 try:
+    from langsmith import traceable
+except ImportError:
+    def traceable(*args, **kwargs):
+        def noop(f):
+            return f
+        return noop
+
+try:
     from .agents.registry import agents, list_agents
     from .agents.router import init_router, routerGraph
     from .agents.runner import run_agent
@@ -67,6 +88,13 @@ except ImportError:
     current_dir = os.path.dirname(os.path.abspath(__file__))
     if current_dir not in sys.path:
         sys.path.insert(0, current_dir)
+    try:
+        from langsmith import traceable
+    except ImportError:
+        def traceable(*args, **kwargs):
+            def noop(f):
+                return f
+            return noop
     from agents.registry import agents, list_agents
     from agents.router import init_router, routerGraph
     from agents.runner import run_agent
@@ -82,6 +110,52 @@ except ImportError:
     from api.routes import auth, chat_sessions, chat_messages, pipelines, credits, reports, admin, three_d_canvases, attachments
 
 DEBUG_API = os.getenv("DEBUG_API", "0") == "1"
+
+
+@traceable(name="AgentRoute", run_type="chain")
+async def _invoke_route_and_agent(
+    *,
+    input_text: str,
+    body: Dict[str, Any],
+    manual_agent_id: Optional[str],
+    pipeline_id: Optional[str],
+    pipeline_data: Optional[Dict[str, Any]],
+    model_override: Optional[str],
+    user: Optional[Dict[str, Any]],
+) -> Dict[str, Any]:
+    """LangSmith-traced route + agent invocation (router → run_agent)."""
+    if manual_agent_id and manual_agent_id in agents:
+        agent_id = manual_agent_id
+        reason = f"Manually selected: {agents[agent_id].get('name', agent_id)}"
+    else:
+        routed = await routerGraph.ainvoke({
+            "input": input_text,
+            "selection": body.get("selection"),
+            "selections": body.get("selections"),
+            "currentCode": body.get("currentCode"),
+            "history": body.get("history"),
+            "pipeline_id": pipeline_id,
+        })
+        agent_id = routed.get("routedAgentId")
+        reason = routed.get("reason")
+    if not agent_id:
+        return {"error": "router_no_decision", "reason": reason}
+    res = await run_agent(
+        agent=agents[agent_id],
+        user_text=input_text,
+        current_code=body.get("currentCode"),
+        history=body.get("history"),
+        selection=body.get("selection"),
+        selections=body.get("selections"),
+        current_structure_origin=body.get("currentStructureOrigin"),
+        uploaded_file_context=body.get("uploadedFile"),
+        structure_metadata=body.get("structureMetadata"),
+        pipeline_id=pipeline_id,
+        pipeline_data=pipeline_data,
+        model_override=model_override,
+        user_id=user.get("id") if user else None,
+    )
+    return {"agentId": agent_id, **res, "reason": reason}
 
 
 def _rate_limit_key(request: Request) -> str:
@@ -348,70 +422,41 @@ async def route(request: Request, user: Dict[str, Any] = Depends(get_current_use
             "model_override": model_override
         })
         
-        # If agentId is provided, skip routing and use specified agent
-        if manual_agent_id:
-            if manual_agent_id not in agents:
-                return {"error": "invalid_agent_id", "agentId": manual_agent_id}
-            agent_id = manual_agent_id
-            reason = f"Manually selected: {agents[agent_id].get('name', agent_id)}"
-        else:
-            # Use router to determine agent
-            routed = await routerGraph.ainvoke(
-                {
-                    "input": input_text,
-                    "selection": body.get("selection"),
-                    "selections": body.get("selections"),
-                    "currentCode": body.get("currentCode"),
-                    "history": body.get("history"),
-                    "pipeline_id": pipeline_id,  # Pass pipeline_id to router
-                }
-            )
-            agent_id = routed.get("routedAgentId")
-            reason = routed.get("reason")
+        # If agentId is provided, validate before traced invocation
+        if manual_agent_id and manual_agent_id not in agents:
+            return {"error": "invalid_agent_id", "agentId": manual_agent_id}
         
+        # LangSmith-traced: router → run_agent
+        result = await _invoke_route_and_agent(
+            input_text=input_text,
+            body=body,
+            manual_agent_id=manual_agent_id,
+            pipeline_id=pipeline_id,
+            pipeline_data=pipeline_data,
+            model_override=model_override,
+            user=user,
+        )
+        
+        if "error" in result and result.get("error") == "router_no_decision":
+            return result
+        
+        agent_id = result.get("agentId")
         log_line("agent_route_result", {
             "input": input_text,
             "agentId": agent_id,
-            "reason": reason,
+            "reason": result.get("reason"),
             "is_alphafold": agent_id == "alphafold-agent",
             "manual_override": bool(manual_agent_id)
         })
-        
-        if not agent_id:
-            return {"error": "router_no_decision", "reason": reason}
-        log_line("router", {"agentId": agent_id, "reason": reason})
-        log_line("agent_executing", {
-            "agentId": agent_id,
-            "agent_kind": agents[agent_id].get("kind"),
-            "input": input_text,
-            "model_override": model_override
-        })
-        
-        res = await run_agent(
-            agent=agents[agent_id],
-            user_text=input_text,
-            current_code=body.get("currentCode"),
-            history=body.get("history"),
-            selection=body.get("selection"),
-            selections=body.get("selections"),
-            current_structure_origin=body.get("currentStructureOrigin"),
-            uploaded_file_context=body.get("uploadedFile"),  # Pass uploaded file context if available
-            structure_metadata=body.get("structureMetadata"),  # Structure metadata from viewer
-            pipeline_id=pipeline_id,  # Pass pipeline_id to agent
-            pipeline_data=pipeline_data,  # Pass fetched pipeline data to agent
-            model_override=model_override,
-            user_id=user.get("id") if user else None,  # For fetching uploaded file metadata
-        )
-        
         log_line("agent_completed", {
             "agentId": agent_id,
-            "response_type": res.get("type"),
-            "has_text": "text" in res,
-            "has_code": "code" in res,
-            "text_length": len(res.get("text", "")) if res.get("text") else 0
+            "response_type": result.get("type"),
+            "has_text": "text" in result,
+            "has_code": "code" in result,
+            "text_length": len(result.get("text", "")) if result.get("text") else 0
         })
         
-        return {"agentId": agent_id, **res, "reason": reason}
+        return result
     except Exception as e:
         log_line("agent_route_failed", {"error": str(e), "trace": traceback.format_exc()})
         content = {"error": "agent_route_failed"}

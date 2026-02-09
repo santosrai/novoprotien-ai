@@ -7,6 +7,14 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, AsyncGenerator
 
 try:
+    from langsmith import traceable
+except ImportError:
+    def traceable(*args, **kwargs):
+        def noop(f):
+            return f
+        return noop
+
+try:
     from ..infrastructure.utils import log_line, get_text_from_completion, strip_code_fences, trim_history, extract_code_and_text
     from ..infrastructure.safety import violates_whitelist, ensure_clear_on_change
     from ..domain.protein.uniprot import search_uniprot
@@ -811,6 +819,7 @@ def _build_summarized_structure_context(
     return full
 
 
+@traceable(name="RunAgent", run_type="chain")
 async def run_agent(
     *,
     agent: Dict[str, Any],
@@ -1571,6 +1580,7 @@ async def run_agent(
     return result
 
 
+@traceable(name="RunAgentStream", run_type="chain")
 async def run_agent_stream(
     *,
     agent: Dict[str, Any],
