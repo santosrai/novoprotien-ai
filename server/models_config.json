@@ -1,7 +1,7 @@
 {
   "defaults": {
-    "codeModel": "mistralai/devstral-2512:free",
-    "chatModel": "mistralai/devstral-2512:free"
+    "codeModel": "moonshotai/kimi-k2.5",
+    "chatModel": "moonshotai/kimi-k2.5"
   },
   "models": [
     {
@@ -95,17 +95,6 @@
       }
     },
     {
-      "id": "mistralai/devstral-2512:free",
-      "name": "Devstral 2512",
-      "provider": "Mistral AI",
-      "description": "Mistral's open-source model for complex reasoning tasks.",
-      "context_length": 32768,
-      "pricing": {
-        "prompt": "0.00000027",
-        "completion": "0.00000027"
-      }
-    },
-    {
       "id": "meta-llama/llama-3-8b-instruct",
       "name": "Llama 3 8B Instruct",
       "provider": "Meta",
@@ -136,6 +125,17 @@
       "pricing": {
         "prompt": "0.000001",
         "completion": "0.000002"
+      }
+    },
+    {
+      "id": "moonshotai/kimi-k2.5",
+      "name": "Moonshot Kimi K2.5",
+      "provider": "Moonshot AI",
+      "description": "Moonshot's native multimodal model with state-of-the-art visual coding and agent swarm paradigm. Strong in general reasoning, visual coding, and agentic tool-calling.",
+      "context_length": 262144,
+      "pricing": {
+        "prompt": "0.00000045",
+        "completion": "0.00000225"
       }
     }
   ]
