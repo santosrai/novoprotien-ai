@@ -1,5 +1,6 @@
 import { PluginUIContext } from 'molstar/lib/mol-plugin-ui/context';
 import { getPDBUrl, validatePDBId } from './pdbUtils';
+import { getAuthHeaders } from './api';
 
 export interface ResidueSelector {
   label_asym_id?: string;
@@ -37,6 +38,9 @@ export const createMolstarBuilder = (
                     pdbIdOrUrl.startsWith('blob:') ||
                     pdbIdOrUrl.startsWith('data:') ||
                     pdbIdOrUrl.startsWith('/api/');
+
+      // Check if this is an internal API URL that needs authentication
+      const isApiUrl = pdbIdOrUrl.startsWith('/api/');
       
       // If it's not a URL, validate as PDB ID
       if (!isUrl && !validatePDBId(pdbIdOrUrl)) {
@@ -48,14 +52,38 @@ export const createMolstarBuilder = (
         // This avoids having multiple proteins displayed at once if a default or
         // previous structure was loaded outside of this builder's lifecycle.
         await this.clearStructure();
-        
-        // Use URL directly if it's a URL, otherwise convert PDB ID to URL
-        const url = isUrl ? pdbIdOrUrl : getPDBUrl(pdbIdOrUrl);
-        
-        const data = await plugin.builders.data.download({
-          url,
-          isBinary: false,
-        });
+
+        let data: any;
+
+        if (isApiUrl) {
+          // For internal API URLs, fetch with authentication headers since
+          // MolStar's built-in download doesn't include JWT tokens.
+          const headers = getAuthHeaders();
+          const response = await fetch(pdbIdOrUrl, { headers });
+          if (!response.ok) {
+            throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+          }
+          const pdbText = await response.text();
+          // Create a blob URL from the fetched data so MolStar's download()
+          // processes it through its standard pipeline (same as external PDB files).
+          const blob = new Blob([pdbText], { type: 'text/plain' });
+          const blobUrl = URL.createObjectURL(blob);
+          try {
+            data = await plugin.builders.data.download({
+              url: blobUrl,
+              isBinary: false,
+            });
+          } finally {
+            URL.revokeObjectURL(blobUrl);
+          }
+        } else {
+          // Use URL directly if it's a URL, otherwise convert PDB ID to URL
+          const url = isUrl ? pdbIdOrUrl : getPDBUrl(pdbIdOrUrl);
+          data = await plugin.builders.data.download({
+            url,
+            isBinary: false,
+          });
+        }
 
         const trajectory = await plugin.builders.structure.parseTrajectory(data, 'pdb');
         const model = await plugin.builders.structure.createModel(trajectory);

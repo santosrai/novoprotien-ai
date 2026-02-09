@@ -90,6 +90,9 @@ export const MolstarViewer: React.FC = () => {
         setPlugin(pluginInstance);
         setStorePlugin(pluginInstance);
         setIsInitialized(true);
+        // Clear loading overlay immediately so the viewer is visible.
+        // Code execution (below) runs in the background without blocking the UI.
+        setIsLoading(false);
         console.log('[Molstar] initViewer: plugin stored and initialized');
 
         // Double-click detection built on top of the click event

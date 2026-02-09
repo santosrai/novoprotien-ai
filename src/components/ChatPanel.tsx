@@ -1,5 +1,6 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { Send, Sparkles, Download, Play, X, Copy, ChevronDown, ChevronUp } from 'lucide-react';
+import { PluginUIContext } from 'molstar/lib/mol-plugin-ui/context';
 import { useAppStore } from '../stores/appStore';
 import { useChatHistoryStore, useActiveSession, Message } from '../stores/chatHistoryStore';
 import { CodeExecutor } from '../utils/codeExecutor';
@@ -604,15 +605,48 @@ export const ChatPanel: React.FC = () => {
   };
 
   const loadUploadedFileInViewer = async (fileInfo: { file_id: string; filename: string; file_url: string }) => {
+    // Use API endpoint directly instead of blob URL to avoid blob URL expiration issues
+    const apiUrl = `/api/upload/pdb/${fileInfo.file_id}`;
+
+    // Build visualization code (shown in editor for user reference)
+    const code = `
+try {
+  await builder.clearStructure();
+  await builder.loadStructure('${apiUrl}');
+  await builder.addCartoonRepresentation({ color: 'secondary-structure' });
+  builder.focusView();
+  console.log('Uploaded file loaded successfully');
+} catch (e) { 
+  console.error('Failed to load uploaded file:', e); 
+}`;
+
+    // Set structure origin for LLM context
+    setCurrentStructureOrigin({
+      type: 'upload',
+      filename: fileInfo.filename,
+      metadata: {
+        file_id: fileInfo.file_id,
+        file_url: fileInfo.file_url,
+      },
+    });
+
+    // Clear currentCode BEFORE making viewer visible to prevent MolstarViewer from
+    // trying to auto-execute stale code via the sandbox during initialization.
+    setCurrentCode('');
+
+    // Make the viewer visible first so the MolStar plugin can initialize
+    setViewerVisibleAndSave(true);
+    setActivePane('viewer');
+
     // Wait for plugin to be ready (with timeout and retry)
-    const waitForPlugin = async (maxWait = 5000, retryInterval = 100): Promise<boolean> => {
+    const waitForPlugin = async (maxWait = 15000, retryInterval = 200): Promise<PluginUIContext | null> => {
       const startTime = Date.now();
       while (Date.now() - startTime < maxWait) {
-        if (plugin) {
-          // Check if plugin has the necessary builders (indicates it's initialized)
+        const currentPlugin = useAppStore.getState().plugin;
+        if (currentPlugin) {
           try {
-            if (plugin.builders && plugin.builders.data && plugin.builders.structure) {
-              return true;
+            if (currentPlugin.builders && currentPlugin.builders.data && currentPlugin.builders.structure) {
+              return currentPlugin;
             }
           } catch (e) {
             // Plugin exists but might not be fully ready
@@ -620,88 +654,37 @@ export const ChatPanel: React.FC = () => {
         }
         await new Promise(resolve => setTimeout(resolve, retryInterval));
       }
-      return false;
+      return null;
     };
 
-    const isPluginReady = await waitForPlugin();
-    if (!isPluginReady) {
-      console.warn('[ChatPanel] Plugin not ready, using API endpoint directly');
-      // Use API endpoint instead of blob URL to avoid initialization issues
-      const apiUrl = `/api/upload/pdb/${fileInfo.file_id}`;
-      const code = `
-try {
-  await builder.clearStructure();
-  await builder.loadStructure('${apiUrl}');
-  await builder.addCartoonRepresentation({ color: 'secondary-structure' });
-  builder.focusView();
-  console.log('Uploaded file loaded successfully');
-} catch (e) { 
-  console.error('Failed to load uploaded file:', e); 
-}`;
-      
-      // Queue code to run when plugin is ready
-      setPendingCodeToRun(code);
+    const readyPlugin = await waitForPlugin();
+
+    if (!readyPlugin) {
+      console.warn('[ChatPanel] Plugin not ready after timeout, queuing code for execution');
       setCurrentCode(code);
-      setViewerVisibleAndSave(true);
-      setActivePane('viewer');
-      
-      // Save code to active session
-      if (activeSessionId) {
-        saveVisualizationCode(activeSessionId, code);
-      }
-      
+      setPendingCodeToRun(code);
       return;
     }
-    
-    if (!plugin) {
-      console.warn('[ChatPanel] Plugin not available, cannot execute code');
-      return;
-    }
-    
+
+    // Execute directly using the MolstarBuilder (bypasses sandbox for reliability)
     try {
       setIsExecuting(true);
-      const executor = new CodeExecutor(plugin);
-      
-      // Use API endpoint directly instead of blob URL to avoid blob URL expiration issues
-      const apiUrl = `/api/upload/pdb/${fileInfo.file_id}`;
-      
-      // Load structure in viewer using API endpoint
-      const code = `
-try {
-  await builder.clearStructure();
-  await builder.loadStructure('${apiUrl}');
-  await builder.addCartoonRepresentation({ color: 'secondary-structure' });
-  builder.focusView();
-  console.log('Uploaded file loaded successfully');
-} catch (e) { 
-  console.error('Failed to load uploaded file:', e); 
-}`;
-      
-      // Save code to editor so user can see and modify it
+      const { createMolstarBuilder } = await import('../utils/molstarBuilder');
+      const builder = createMolstarBuilder(readyPlugin);
+      await builder.clearStructure();
+      await builder.loadStructure(apiUrl);
+      await builder.addCartoonRepresentation({ color: 'secondary-structure' });
+      builder.focusView();
+      console.log('[ChatPanel] Uploaded file loaded successfully in 3D viewer');
+
+      // Now set the code in the editor for user reference and persistence
       setCurrentCode(code);
-      
-      // Set structure origin for LLM context
-      setCurrentStructureOrigin({
-        type: 'upload',
-        filename: fileInfo.filename,
-        metadata: {
-          file_id: fileInfo.file_id,
-          file_url: fileInfo.file_url,
-        },
-      });
-      
-      // Save code to active session for persistence
       if (activeSessionId) {
         saveVisualizationCode(activeSessionId, code);
         console.log('[ChatPanel] Saved visualization code to session:', activeSessionId);
       }
-      
-      await executor.executeCode(code);
-      setViewerVisibleAndSave(true);
-      setActivePane('viewer');
     } catch (err) {
-      console.error('Failed to load uploaded file in viewer:', err);
-      // Show user-friendly error
+      console.error('[ChatPanel] Failed to load uploaded file in viewer:', err);
       alert(`Failed to load ${fileInfo.filename} in 3D viewer. Please try again.`);
     } finally {
       setIsExecuting(false);
@@ -744,8 +727,7 @@ try {
         <div className="flex space-x-2">
           <button
             onClick={() => loadUploadedFileInViewer(fileInfo)}
-            disabled={!plugin}
-            className={`flex items-center space-x-1 px-3 py-2 ${buttonClass} rounded-md disabled:opacity-50 disabled:cursor-not-allowed text-sm`}
+            className={`flex items-center space-x-1 px-3 py-2 ${buttonClass} rounded-md text-sm`}
           >
             <Play className="w-4 h-4" />
             <span>View in 3D</span>

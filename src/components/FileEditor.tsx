@@ -1,9 +1,9 @@
 import React, { useState, useEffect } from 'react';
 import { X, Download, FileText, Play } from 'lucide-react';
+import { PluginUIContext } from 'molstar/lib/mol-plugin-ui/context';
 import { api } from '../utils/api';
 import { useAppStore } from '../stores/appStore';
 import { useChatHistoryStore } from '../stores/chatHistoryStore';
-import { CodeExecutor } from '../utils/codeExecutor';
 
 interface FileEditorProps {
   fileId: string;
@@ -16,7 +16,7 @@ export const FileEditor: React.FC<FileEditorProps> = ({ fileId, filename, fileTy
   const [content, setContent] = useState<string>('');
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const { plugin, setActivePane, setViewerVisible, setIsExecuting, setCurrentCode, setCurrentStructureOrigin, setPendingCodeToRun } = useAppStore();
+  const { setActivePane, setViewerVisible, setIsExecuting, setCurrentCode, setCurrentStructureOrigin, setPendingCodeToRun } = useAppStore();
   const { activeSessionId, saveVisualizationCode } = useChatHistoryStore();
 
   useEffect(() => {
@@ -64,24 +64,6 @@ export const FileEditor: React.FC<FileEditorProps> = ({ fileId, filename, fileTy
   };
 
   const handleView3D = async () => {
-    // Wait for plugin to be ready (with timeout and retry)
-    const waitForPlugin = async (maxWait = 5000, retryInterval = 100): Promise<boolean> => {
-      const startTime = Date.now();
-      while (Date.now() - startTime < maxWait) {
-        if (plugin) {
-          try {
-            if (plugin.builders && plugin.builders.data && plugin.builders.structure) {
-              return true;
-            }
-          } catch (e) {
-            // Plugin exists but might not be fully ready
-          }
-        }
-        await new Promise(resolve => setTimeout(resolve, retryInterval));
-      }
-      return false;
-    };
-
     // Fetch file with auth (Molstar's fetch won't include JWT) and create blob URL
     const apiPath = fileType === 'upload' ? `/upload/pdb/${fileId}` : `/files/${fileId}/download`;
     let loadUrl: string;
@@ -138,24 +120,47 @@ try {
       console.log('[FileEditor] Saved visualization code to session:', activeSessionId);
     }
 
-    const isPluginReady = await waitForPlugin();
-    if (!isPluginReady) {
+    // Make the viewer visible first so the MolStar plugin can initialize
+    setViewerVisible(true);
+    setActivePane('viewer');
+
+    // Wait for plugin to be ready (with timeout and retry)
+    const waitForPlugin = async (maxWait = 10000, retryInterval = 150): Promise<PluginUIContext | null> => {
+      const startTime = Date.now();
+      while (Date.now() - startTime < maxWait) {
+        const currentPlugin = useAppStore.getState().plugin;
+        if (currentPlugin) {
+          try {
+            if (currentPlugin.builders && currentPlugin.builders.data && currentPlugin.builders.structure) {
+              return currentPlugin;
+            }
+          } catch (e) {
+            // Plugin exists but might not be fully ready
+          }
+        }
+        await new Promise(resolve => setTimeout(resolve, retryInterval));
+      }
+      return null;
+    };
+
+    const readyPlugin = await waitForPlugin();
+
+    if (!readyPlugin) {
       console.warn('[FileEditor] Plugin not ready, queueing code for execution');
       setPendingCodeToRun(code);
-      setViewerVisible(true);
-      setActivePane('viewer');
       return;
     }
 
-    if (!plugin) {
-      console.warn('[FileEditor] Plugin not available, cannot execute code');
-      return;
-    }
-
+    // Execute directly using the MolstarBuilder (bypasses sandbox for reliability)
     try {
       setIsExecuting(true);
-      const executor = new CodeExecutor(plugin);
-      await executor.executeCode(code);
+      const { createMolstarBuilder } = await import('../utils/molstarBuilder');
+      const builder = createMolstarBuilder(readyPlugin);
+      await builder.clearStructure();
+      await builder.loadStructure(loadUrl);
+      await builder.addCartoonRepresentation({ color: 'secondary-structure' });
+      builder.focusView();
+      console.log('[FileEditor] Successfully loaded file in 3D viewer');
 
       setViewerVisible(true);
       setActivePane('viewer');
@@ -186,8 +191,7 @@ try {
           {isPdbFile && (
             <button
               onClick={handleView3D}
-              disabled={!plugin}
-              className="flex items-center space-x-1 px-3 py-2 bg-white text-blue-600 hover:bg-gray-100 rounded-md disabled:opacity-50 disabled:cursor-not-allowed text-sm transition-colors"
+              className="flex items-center space-x-1 px-3 py-2 bg-white text-blue-600 hover:bg-gray-100 rounded-md text-sm transition-colors"
               title="View in 3D canvas"
             >
               <Play className="w-4 h-4" />
