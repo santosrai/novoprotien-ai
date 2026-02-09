@@ -39,11 +39,38 @@ def _parse_a3m_content(content: str) -> Optional[Dict[str, Any]]:
     return {"small_bfd": {"a3m": {"alignment": content.strip(), "format": "a3m"}}}
 
 
-def _parse_hhr_content(content: str) -> Optional[Any]:
-    """Parse hhr template content. Return as-is for API (structure TBD)."""
+def _is_hhr_content(content: str) -> bool:
+    """Detect if content is HHR format (no longer supported by OpenFold2 v2.0+)."""
+    if not content or not content.strip():
+        return False
+    s = content.strip()
+    # HHR format: starts with "Query " or contains Probab/Hit markers
+    return (
+        s.startswith("Query ")
+        or "Probab" in s[:800]
+        or ("Hit" in s[:300] and "E-value" in s[:500])
+    )
+
+
+def _is_mmcif_content(content: str) -> bool:
+    """Detect if content is mmCIF format (supported by OpenFold2 v2.0+)."""
+    if not content or not content.strip():
+        return False
+    s = content.strip()
+    return s.startswith("data_") or s.startswith("#") or s.startswith("loop_") or "_atom_site" in s[:500]
+
+
+def _parse_mmcif_content(content: str, name: str = "user_template") -> Optional[Dict[str, Any]]:
+    """Parse mmCIF template into OpenFold2 explicit_templates format (v2.0+)."""
     if not content or not content.strip():
         return None
-    return {"hhr": {"content": content.strip(), "format": "hhr"}}
+    return {
+        "name": name,
+        "format": "mmcif",
+        "structure": content.strip(),
+        "source": "user_provided",
+        "rank": -1,
+    }
 
 
 class OpenFold2Handler:
@@ -97,6 +124,18 @@ class OpenFold2Handler:
         job_id = job_id or str(uuid.uuid4())
         user_id = user_id or "system"
 
+        # Reject HHR templates early (OpenFold2 v2.0+ no longer supports them)
+        if templates_raw and _is_hhr_content(templates_raw):
+            return {
+                "status": "error",
+                "error": (
+                    "OpenFold2 v2.0+ no longer supports HHR template format. "
+                    "Please use mmCIF format (.cif) instead. "
+                    "See https://docs.nvidia.com/nim/bionemo/openfold2/latest/migrating-from-hhr-to-explicit-templates.html"
+                ),
+                "code": "TEMPLATE_FORMAT_INVALID",
+            }
+
         # Validate sequence
         client = self._get_client()
         is_valid, msg = client.validate_sequence(sequence)
@@ -120,18 +159,18 @@ class OpenFold2Handler:
             if parsed:
                 final_alignments = parsed if not final_alignments else {**final_alignments, **parsed}
 
-        # Build templates from raw hhr if provided
-        final_templates = templates
-        if templates_raw:
-            parsed = _parse_hhr_content(templates_raw)
-            if parsed:
-                final_templates = parsed
+        # Build templates: OpenFold2 v2.0+ only supports mmCIF (explicit_templates)
+        explicit_templates = None
+        if templates_raw and _is_mmcif_content(templates_raw):
+            t = _parse_mmcif_content(templates_raw)
+            if t:
+                explicit_templates = [t]
 
         try:
             result = await client.predict(
                 sequence=sequence,
                 alignments=final_alignments,
-                templates=final_templates,
+                explicit_templates=explicit_templates,
                 relax_prediction=relax_prediction,
             )
         except ValueError as e:

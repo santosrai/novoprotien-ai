@@ -80,7 +80,7 @@ try:
     from .domain.storage.pdb_storage import save_uploaded_pdb, get_uploaded_pdb
     from .domain.storage.file_access import list_user_files, verify_file_ownership, get_file_metadata, get_user_file_path
     from .database.db import get_db
-    from .api.middleware.auth import get_current_user
+    from .api.middleware.auth import get_current_user, get_current_user_optional
     from .api.routes import auth, chat_sessions, chat_messages, pipelines, credits, reports, admin, three_d_canvases, attachments
 except ImportError:
     # When running directly (not as module)
@@ -106,7 +106,7 @@ except ImportError:
     from domain.storage.pdb_storage import save_uploaded_pdb, get_uploaded_pdb
     from domain.storage.file_access import list_user_files, verify_file_ownership, get_file_metadata, get_user_file_path
     from database.db import get_db
-    from api.middleware.auth import get_current_user
+    from api.middleware.auth import get_current_user, get_current_user_optional
     from api.routes import auth, chat_sessions, chat_messages, pipelines, credits, reports, admin, three_d_canvases, attachments
 
 DEBUG_API = os.getenv("DEBUG_API", "0") == "1"
@@ -260,8 +260,8 @@ def health() -> Dict[str, Any]:
 
 @app.post("/api/logs/error")
 @limiter.limit("100/minute")
-async def log_error(request: Request, user: Dict[str, Any] = Depends(get_current_user)):
-    """Accept error logs from frontend"""
+async def log_error(request: Request, user: Optional[Dict[str, Any]] = Depends(get_current_user_optional)):
+    """Accept error logs from frontend (auth optional - capture errors during login/session issues)"""
     try:
         body = await request.json()
         log_line("frontend_error", body)
@@ -1415,7 +1415,7 @@ async def openfold2_predict(request: Request, user: Dict[str, Any] = Depends(get
         alignments = body.get("alignments")
         alignments_raw = body.get("alignmentsRaw")  # Raw a3m file content
         templates = body.get("templates")
-        templates_raw = body.get("templatesRaw")  # Raw hhr file content
+        templates_raw = body.get("templatesRaw")  # Raw mmCIF template file content (HHR no longer supported in v2.0+)
         relax_prediction = body.get("relax_prediction", False)
         job_id = body.get("jobId")
         session_id = body.get("sessionId")

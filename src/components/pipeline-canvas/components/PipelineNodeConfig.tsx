@@ -1093,14 +1093,14 @@ export const PipelineNodeConfig: React.FC<PipelineNodeConfigProps> = ({
                 {/* Template Input */}
                 <div>
                   <Label className="text-xs font-medium text-[hsl(var(--pc-text-muted))] mb-2">
-                    Template (hhr format)
+                    Template (mmCIF format)
                   </Label>
                   <textarea
                     value={node.config?.templates_raw || ''}
                     onChange={(e) => handleConfigChange('templates_raw', e.target.value)}
                     className={`${inputClassName} font-mono text-xs`}
                     rows={4}
-                    placeholder="Paste template content in hhr format (optional)..."
+                    placeholder="Paste template content in mmCIF format (optional)..."
                   />
                   <div className="flex justify-between items-center mt-1.5">
                     <p className="text-xs text-[hsl(var(--pc-text-muted))]">

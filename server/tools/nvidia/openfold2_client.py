@@ -80,10 +80,12 @@ class OpenFold2Client:
         self,
         sequence: str,
         alignments: Optional[Dict[str, Any]] = None,
-        templates: Optional[Any] = None,
+        explicit_templates: Optional[list] = None,
         relax_prediction: bool = False,
     ) -> Dict[str, Any]:
-        """Build request payload for OpenFold2 API."""
+        """Build request payload for OpenFold2 API.
+        OpenFold2 v2.0+ uses explicit_templates (mmCIF), not templates (HHR).
+        """
         payload: Dict[str, Any] = {
             "sequence": sequence,
             "selected_models": [1, 2, 3, 4, 5],  # Default: all 5 models
@@ -91,15 +93,16 @@ class OpenFold2Client:
         }
         if alignments:
             payload["alignments"] = alignments
-        if templates:
-            payload["templates"] = templates
+        if explicit_templates:
+            payload["use_templates"] = True
+            payload["explicit_templates"] = explicit_templates
         return payload
 
     async def predict(
         self,
         sequence: str,
         alignments: Optional[Dict[str, Any]] = None,
-        templates: Optional[Any] = None,
+        explicit_templates: Optional[list] = None,
         relax_prediction: bool = False,
     ) -> Dict[str, Any]:
         """
@@ -108,7 +111,7 @@ class OpenFold2Client:
         Args:
             sequence: Protein amino acid sequence (≤1000 chars)
             alignments: Optional MSA in format { "uniref90": { "a3m": { "alignment": "...", "format": "a3m" } } }
-            templates: Optional template data in hhr format
+            explicit_templates: Optional mmCIF templates (v2.0+ format)
             relax_prediction: Whether to apply relaxation step
 
         Returns:
@@ -122,7 +125,7 @@ class OpenFold2Client:
         payload = self.build_payload(
             clean_sequence,
             alignments=alignments,
-            templates=templates,
+            explicit_templates=explicit_templates,
             relax_prediction=relax_prediction,
         )
 
@@ -131,7 +134,7 @@ class OpenFold2Client:
             self.base_url,
             len(clean_sequence),
             bool(alignments),
-            bool(templates),
+            bool(explicit_templates),
         )
 
         try:

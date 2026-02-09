@@ -956,10 +956,10 @@ export class OpenFold2ErrorHandler {
     TEMPLATE_FORMAT_INVALID: {
       category: ErrorCategory.VALIDATION,
       severity: ErrorSeverity.MEDIUM,
-      userMessage: 'Template file must be in hhr format',
+      userMessage: 'OpenFold2 v2.0+ requires mmCIF format (.cif). HHR format is no longer supported.',
       technicalMessage: 'Invalid template file format',
       suggestions: [
-        { action: 'Upload valid hhr file', description: 'hhr is output by hh-search', type: 'fix', priority: 1 },
+        { action: 'Upload mmCIF file', description: 'Use .cif format (convert from PDB with BioPython if needed)', type: 'fix', priority: 1 },
       ],
     },
     API_KEY_MISSING: {
