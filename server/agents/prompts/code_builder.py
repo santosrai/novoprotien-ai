@@ -40,6 +40,7 @@ CODE_AGENT_SYSTEM_PROMPT = (
     "// Load uploaded file\n"
     "await builder.loadStructure('/api/upload/pdb/abc123');\n\n"
     "Rules:\n"
+    "- CRITICAL: Always load the structure first before highlightResidue, labelResidue, or focusResidue. These methods throw 'No structure loaded' if the viewer is empty (e.g., after agent switch). Include await builder.clearStructure(); await builder.loadStructure(...) at the start when the code uses structure-dependent methods.\n"
     "- When residue/chain information is provided, use selector methods with {label_asym_id, label_seq_id}\n"
     "- If the request changes the structure (different PDB or uploaded file), clear first with await builder.clearStructure().\n"
     "- If the request modifies the existing view (e.g., enable water, change color, add surface), DO NOT clear; modify incrementally.\n"

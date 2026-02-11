@@ -46,8 +46,12 @@ async def create_message(
                 detail="Session not found or access denied",
             )
         
-        # Create message
-        message_id = str(uuid.uuid4())
+        # Create message: accept client-provided ID if valid UUID (ensures frontend/backend ID parity for canvas save)
+        client_id = message_data.get("id")
+        try:
+            message_id = str(uuid.UUID(client_id)) if client_id else str(uuid.uuid4())
+        except (ValueError, TypeError):
+            message_id = str(uuid.uuid4())
         content = message_data.get("content", "")
         message_type = message_data.get("type", "user")
         role = message_data.get("role", message_type)

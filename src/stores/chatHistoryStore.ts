@@ -316,6 +316,7 @@ const createSaveMessageToBackend = (getSessions: () => ChatSession[]) => async (
         messageType: message.messageType || (message.type === 'ai' ? 'tool_result' : 'text'),
         role: message.role || (message.type === 'user' ? 'user' : 'assistant'),
         sender_id: senderId,
+        ...(message.id && { id: message.id }),
         metadata: {
           jobId: message.jobId,
           jobType: message.jobType,
@@ -423,6 +424,7 @@ export const useChatHistoryStore = create<ChatHistoryState>()(
                     content: message.content,
                     type: message.type,
                     role: message.type === 'user' ? 'user' : 'assistant',
+                    ...(message.id && { id: message.id }),
                     metadata: {
                       jobId: message.jobId,
                       jobType: message.jobType,
@@ -1714,29 +1716,50 @@ export const useChatHistoryStore = create<ChatHistoryState>()(
     {
       name: 'novoprotein-chat-history-storage', // Base name, will be user-scoped
       version: 1,
-      storage: createJSONStorage(() => {
-        // Create user-scoped storage adapter
-        return {
-          getItem: (_key: string) => {
-            const user = useAuthStore.getState().user;
-            const userId = user?.id || 'anonymous';
-            const userKey = `novoprotein-chat-history-${userId}`;
-            return localStorage.getItem(userKey);
+      storage: createJSONStorage(
+        () => {
+          // Create user-scoped storage adapter
+          return {
+            getItem: (_key: string) => {
+              const user = useAuthStore.getState().user;
+              const userId = user?.id || 'anonymous';
+              const userKey = `novoprotein-chat-history-${userId}`;
+              return localStorage.getItem(userKey);
+            },
+            setItem: (_key: string, value: string) => {
+              const user = useAuthStore.getState().user;
+              const userId = user?.id || 'anonymous';
+              const userKey = `novoprotein-chat-history-${userId}`;
+              localStorage.setItem(userKey, value);
+            },
+            removeItem: (_key: string) => {
+              const user = useAuthStore.getState().user;
+              const userId = user?.id || 'anonymous';
+              const userKey = `novoprotein-chat-history-${userId}`;
+              localStorage.removeItem(userKey);
+            },
+          };
+        },
+        {
+          replacer: (_, value) => {
+            if (value instanceof Date) {
+              return { __type: 'Date', value: value.toISOString() };
+            }
+            return value;
           },
-          setItem: (_key: string, value: string) => {
-            const user = useAuthStore.getState().user;
-            const userId = user?.id || 'anonymous';
-            const userKey = `novoprotein-chat-history-${userId}`;
-            localStorage.setItem(userKey, value);
+          reviver: (key, value) => {
+            if (value && typeof value === 'object' && '__type' in value && value.__type === 'Date' && 'value' in value) {
+              return new Date((value as { value: string }).value);
+            }
+            // Legacy: ISO date strings in date fields
+            const dateKeys = ['createdAt', 'lastModified', 'timestamp', 'lastActivity'];
+            if (dateKeys.includes(key) && typeof value === 'string' && /^\d{4}-\d{2}-\d{2}T/.test(value)) {
+              return new Date(value);
+            }
+            return value;
           },
-          removeItem: (_key: string) => {
-            const user = useAuthStore.getState().user;
-            const userId = user?.id || 'anonymous';
-            const userKey = `novoprotein-chat-history-${userId}`;
-            localStorage.removeItem(userKey);
-          },
-        };
-      }),
+        }
+      ),
       partialize: (state) => ({
         sessions: state.sessions.map(session => ({
           ...session,
@@ -1750,74 +1773,6 @@ export const useChatHistoryStore = create<ChatHistoryState>()(
         // Don't persist UI state like panel open, search query, selections
         // Don't persist internal sync flags
       }),
-      // Custom serialization to handle Date objects
-      serialize: (state) => {
-        return JSON.stringify(state, (_, value) => {
-          if (value instanceof Date) {
-            return { __type: 'Date', value: value.toISOString() };
-          }
-          return value;
-        });
-      },
-      deserialize: (str) => {
-        const parsed = JSON.parse(str, (_, value) => {
-          if (value && typeof value === 'object' && value.__type === 'Date') {
-            return new Date(value.value);
-          }
-          return value;
-        });
-        
-        // Check if user is authenticated - if not, return empty state
-        const user = useAuthStore.getState().user;
-        if (!user) {
-          console.log('No user authenticated, returning empty chat history');
-          return {
-            sessions: [],
-            activeSessionId: null,
-            recentSessionIds: [],
-            isSidebarCollapsed: parsed.isSidebarCollapsed || false,
-          };
-        }
-        
-        // Ensure all dates in sessions are properly converted
-        if (parsed.sessions) {
-          parsed.sessions = parsed.sessions.map((session: any) => ({
-            ...session,
-            createdAt: ensureDate(session.createdAt),
-            lastModified: ensureDate(session.lastModified),
-            metadata: {
-              ...session.metadata,
-              lastActivity: ensureDate(session.metadata.lastActivity),
-            },
-            messages: (session.messages || []).map((message: any) => {
-              const msg: any = {
-                ...message,
-                timestamp: ensureDate(message.timestamp),
-              };
-              // Handle thinkingProcess dates
-              if (message.thinkingProcess && message.thinkingProcess.steps) {
-                msg.thinkingProcess = {
-                  ...message.thinkingProcess,
-                  steps: message.thinkingProcess.steps.map((step: any) => ({
-                    ...step,
-                    timestamp: step.timestamp ? ensureDate(step.timestamp) : undefined,
-                  })),
-                };
-              }
-              // Handle error timestamp
-              if (message.error && message.error.timestamp) {
-                msg.error = {
-                  ...message.error,
-                  timestamp: ensureDate(message.error.timestamp),
-                };
-              }
-              return msg;
-            }),
-          }));
-        }
-        
-        return parsed;
-      },
       onRehydrateStorage: () => (state) => {
         if (state) {
           // Always sync with backend after rehydration to ensure user-specific data

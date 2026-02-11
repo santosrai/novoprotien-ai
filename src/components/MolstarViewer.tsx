@@ -17,6 +17,7 @@ import { getCodeToExecute } from '../utils/codeUtils';
 export const MolstarViewer: React.FC = () => {
   const containerRef = useRef<HTMLDivElement>(null);
   const lastExecutedCodeRef = useRef<string>('');
+  const pluginRef = useRef<PluginUIContext | null>(null);
   const [plugin, setPlugin] = useState<PluginUIContext | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [isInitialized, setIsInitialized] = useState(false);
@@ -59,6 +60,12 @@ export const MolstarViewer: React.FC = () => {
           console.warn('[Molstar] Initialization taking longer than expected...');
         }, 10000); // 10 second warning
 
+        // Clear container before createPluginUI to avoid createRoot-on-used-container warning
+        // (occurs when MolstarViewer remounts e.g. in React Strict Mode or on session switch)
+        if (containerRef.current.firstChild) {
+          containerRef.current.replaceChildren();
+        }
+
         const spec = DefaultPluginUISpec();
         const pluginInstance = await createPluginUI({
           target: containerRef.current,
@@ -87,6 +94,7 @@ export const MolstarViewer: React.FC = () => {
         clearTimeout(initTimeout);
         console.log('[Molstar] createPluginUI: success');
 
+        pluginRef.current = pluginInstance;
         setPlugin(pluginInstance);
         setStorePlugin(pluginInstance);
         setIsInitialized(true);
@@ -200,14 +208,20 @@ export const MolstarViewer: React.FC = () => {
 
     return () => {
       console.log('[Molstar] cleanup: start');
-      if (plugin) {
+      const instance = pluginRef.current;
+      if (instance) {
         try {
-          plugin.dispose();
+          instance.dispose();
           console.log('[Molstar] cleanup: plugin disposed');
         } catch (e) {
           console.warn('[Molstar] cleanup: dispose failed', e);
         }
+        pluginRef.current = null;
         setStorePlugin(null);
+      }
+      // Clear container so next init uses a fresh DOM node (avoids createRoot warning on remount)
+      if (containerRef.current?.firstChild) {
+        containerRef.current.replaceChildren();
       }
       console.log('[Molstar] cleanup: end');
     };
