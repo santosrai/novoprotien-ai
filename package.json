@@ -28,7 +28,7 @@
     "@types/react-router-dom": "^5.3.3",
     "@types/uuid": "^10.0.0",
     "@upstash/context7-mcp": "^1.0.14",
-    "axios": "^1.7.3",
+    "axios": "^1.13.5",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "cors": "^2.8.5",
