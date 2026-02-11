@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { X, Code2, Palette, Zap, RotateCcw, History, Settings, Sun, Moon } from 'lucide-react';
+import { X, Code2, Palette, Zap, RotateCcw, History, Settings, Sun, Moon, ExternalLink } from 'lucide-react';
 import { useSettingsStore } from '../stores/settingsStore';
 import { useChatHistoryStore } from '../stores/chatHistoryStore';
 import { useTheme } from '../contexts/ThemeContext';
@@ -19,10 +19,11 @@ export const SettingsDialog: React.FC<SettingsDialogProps> = ({ isOpen, onClose 
   // Sync localSettings when dialog opens or settings change
   React.useEffect(() => {
     if (isOpen) {
-      // Ensure api field exists
+      // Ensure api and langsmith fields exist
       const settingsWithApi = {
         ...settings,
-        api: settings.api || { key: '' }
+        api: settings.api || { key: '' },
+        langsmith: settings.langsmith || { enabled: false, apiKey: '', project: 'novoprotein-agent' }
       };
       setLocalSettings(settingsWithApi);
     }
@@ -421,6 +422,58 @@ export const SettingsDialog: React.FC<SettingsDialogProps> = ({ isOpen, onClose 
               {activeTab === 'advanced' && (
                 <div className="space-y-1">
                   <h3 className="text-lg font-medium text-gray-900 dark:text-gray-100 mb-4">Advanced Settings</h3>
+
+                  {/* LangSmith Tracing */}
+                  <div className="bg-slate-50 dark:bg-slate-800/50 border border-slate-200 dark:border-slate-700 rounded-lg p-4 mb-4">
+                    <Switch
+                      checked={localSettings.langsmith?.enabled ?? false}
+                      onChange={(checked) => handleSettingChange('langsmith.enabled', checked)}
+                      label="LangSmith Tracing"
+                      description="Send agent traces to LangSmith for debugging and observability. View at smith.langchain.com"
+                    />
+                    {localSettings.langsmith?.enabled && (
+                      <div className="mt-4 pt-4 border-t border-slate-200 dark:border-slate-700 space-y-3">
+                        <div>
+                          <label htmlFor="langsmithApiKey" className="block text-sm font-medium text-gray-900 dark:text-gray-100">
+                            API Key <span className="text-gray-500 font-normal">(optional)</span>
+                          </label>
+                          <input
+                            type="password"
+                            id="langsmithApiKey"
+                            className="mt-1 block w-full px-3 py-2 border border-gray-300 dark:border-slate-600 bg-white dark:bg-slate-700 rounded-md text-sm text-gray-900 dark:text-gray-100 focus:ring-blue-500 focus:border-blue-500"
+                            placeholder="lsv2_pt_..."
+                            value={localSettings.langsmith?.apiKey || ''}
+                            onChange={(e) => handleSettingChange('langsmith.apiKey', e.target.value)}
+                          />
+                          <p className="mt-1 text-xs text-gray-600 dark:text-gray-400">
+                            Use your own LangSmith key, or leave empty to use server env vars.
+                          </p>
+                        </div>
+                        <div>
+                          <label htmlFor="langsmithProject" className="block text-sm font-medium text-gray-900 dark:text-gray-100">
+                            Project Name
+                          </label>
+                          <input
+                            type="text"
+                            id="langsmithProject"
+                            className="mt-1 block w-full px-3 py-2 border border-gray-300 dark:border-slate-600 bg-white dark:bg-slate-700 rounded-md text-sm text-gray-900 dark:text-gray-100 focus:ring-blue-500 focus:border-blue-500"
+                            placeholder="novoprotein-agent"
+                            value={localSettings.langsmith?.project || 'novoprotein-agent'}
+                            onChange={(e) => handleSettingChange('langsmith.project', e.target.value)}
+                          />
+                        </div>
+                        <a
+                          href="https://smith.langchain.com"
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="inline-flex items-center gap-1 text-sm text-blue-600 dark:text-blue-400 hover:underline"
+                        >
+                          Open smith.langchain.com
+                          <ExternalLink className="w-3.5 h-3.5" />
+                        </a>
+                      </div>
+                    )}
+                  </div>
 
                   <Switch
                     checked={localSettings.performance.debugMode}

@@ -31,29 +31,61 @@ class MVSRAGRetriever:
     def extract_intent_keywords(self, user_query: str) -> List[str]:
         """Extract key intent words from user query for better retrieval"""
         intent_keywords = []
-        
+        low = user_query.lower()
+
         # Component keywords
-        if any(word in user_query.lower() for word in ['ligand', 'small molecule', 'drug', 'inhibitor']):
+        if any(word in low for word in ['ligand', 'small molecule', 'drug', 'inhibitor']):
             intent_keywords.append('ligand')
-        if any(word in user_query.lower() for word in ['protein', 'polymer', 'chain']):
+        if any(word in low for word in ['protein', 'polymer', 'chain']):
             intent_keywords.append('polymer')
-        if any(word in user_query.lower() for word in ['water', 'solvent']):
+        if any(word in low for word in ['water', 'solvent']):
             intent_keywords.append('water')
-            
+
         # Feature keywords
-        if any(word in user_query.lower() for word in ['label', 'text', 'name', 'annotate']):
+        if any(word in low for word in ['label', 'text', 'name', 'annotate']):
             intent_keywords.append('label')
-        if any(word in user_query.lower() for word in ['color', 'colour', 'red', 'blue', 'green', 'orange']):
+        if any(word in low for word in ['color', 'colour', 'red', 'blue', 'green', 'orange']):
             intent_keywords.append('color')
-        if any(word in user_query.lower() for word in ['surface', 'molecular surface']):
+        if any(word in low for word in ['surface', 'molecular surface']):
             intent_keywords.append('surface')
-        if any(word in user_query.lower() for word in ['cartoon', 'ribbon']):
+        if any(word in low for word in ['cartoon', 'ribbon']):
             intent_keywords.append('cartoon')
-        if any(word in user_query.lower() for word in ['ball', 'stick', 'atomic']):
+        if any(word in low for word in ['ball', 'stick', 'atomic']):
             intent_keywords.append('ball_and_stick')
-        if any(word in user_query.lower() for word in ['focus', 'zoom', 'center']):
+        if any(word in low for word in ['focus', 'zoom', 'center']):
             intent_keywords.append('focus')
-            
+
+        # Canvas/background keywords
+        if any(word in low for word in ['background', 'canvas', 'dark mode', 'dark background']):
+            intent_keywords.append('canvas')
+        # Camera keywords
+        if any(word in low for word in ['camera', 'angle', 'perspective', 'viewpoint']):
+            intent_keywords.append('camera')
+        # Opacity/transparency keywords
+        if any(word in low for word in ['transparent', 'opacity', 'semi-transparent', 'translucent']):
+            intent_keywords.append('opacity')
+        # Tooltip keywords
+        if any(word in low for word in ['tooltip', 'hover', 'mouseover']):
+            intent_keywords.append('tooltip')
+        # Assembly keywords
+        if any(word in low for word in ['assembly', 'biological assembly', 'symmetry', 'unit cell']):
+            intent_keywords.append('assembly')
+        # Primitives keywords
+        if any(word in low for word in ['arrow', 'distance', 'measurement', 'sphere', 'box', 'primitive']):
+            intent_keywords.append('primitives')
+        # Transform keywords
+        if any(word in low for word in ['rotate', 'translate', 'transform']):
+            intent_keywords.append('transform')
+        # Multi-structure keywords
+        if any(word in low for word in ['compare', 'comparison', 'overlay', 'superpose', 'two structures']):
+            intent_keywords.append('multi_structure')
+        # Residue range keywords
+        if any(word in low for word in ['range', 'residues', 'domain', 'region', 'loop', 'helix']):
+            intent_keywords.append('residue_range')
+        # Volume/density keywords
+        if any(word in low for word in ['volume', 'density', 'isosurface', 'electron density']):
+            intent_keywords.append('volume')
+
         return intent_keywords
     
     async def retrieve_relevant_examples(self, user_query: str, top_k: int = 3) -> List[Dict[str, Any]]:

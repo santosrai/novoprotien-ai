@@ -19,13 +19,22 @@ def _truncate(value: Any, max_len: int = 8000) -> str:
     return s
 
 
+def _safe_for_console(s: str) -> str:
+    """Ensure string can be printed on consoles with limited encoding (e.g. Windows cp1252)."""
+    return s.encode("ascii", errors="replace").decode("ascii")
+
+
 def log_line(section: str, message: Any) -> None:
     if not LOG_AI:
         return
     from datetime import datetime
 
     ts = datetime.utcnow().isoformat()
-    print(f"[{section}] {ts} {_truncate(message)}")
+    output = f"[{section}] {ts} {_truncate(message)}"
+    try:
+        print(output)
+    except UnicodeEncodeError:
+        print(_safe_for_console(output))
 
 
 def get_text_from_completion(completion: Any) -> str:

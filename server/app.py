@@ -61,12 +61,14 @@ from slowapi.errors import RateLimitExceeded
 from fastapi.responses import JSONResponse, FileResponse
 
 try:
-    from langsmith import traceable
+    from langsmith import traceable, tracing_context, Client as LangSmithClient
 except ImportError:
     def traceable(*args, **kwargs):
         def noop(f):
             return f
         return noop
+    tracing_context = None
+    LangSmithClient = None
 
 try:
     from .agents.registry import agents, list_agents
@@ -89,12 +91,14 @@ except ImportError:
     if current_dir not in sys.path:
         sys.path.insert(0, current_dir)
     try:
-        from langsmith import traceable
+        from langsmith import traceable, tracing_context, Client as LangSmithClient
     except ImportError:
         def traceable(*args, **kwargs):
             def noop(f):
                 return f
             return noop
+        tracing_context = None
+        LangSmithClient = None
     from agents.registry import agents, list_agents
     from agents.router import init_router, routerGraph
     from agents.runner import run_agent
@@ -110,6 +114,37 @@ except ImportError:
     from api.routes import auth, chat_sessions, chat_messages, pipelines, credits, reports, admin, three_d_canvases, attachments
 
 DEBUG_API = os.getenv("DEBUG_API", "0") == "1"
+
+
+def _langsmith_context(langsmith_config: Optional[Dict[str, Any]]):
+    """
+    Return a context manager for LangSmith tracing based on user settings.
+    - enabled=False: explicitly disable tracing
+    - enabled=True + apiKey: use user's LangSmith client
+    - enabled=True, no apiKey: use env (no-op context, default behavior)
+    - no config: use env (no-op context)
+    """
+    if tracing_context is None:
+        from contextlib import nullcontext
+        return nullcontext()
+
+    cfg = langsmith_config or {}
+    enabled = cfg.get("enabled", True)
+
+    if enabled is False:
+        return tracing_context(enabled=False)
+
+    api_key = (cfg.get("apiKey") or "").strip()
+    if api_key and LangSmithClient:
+        project = cfg.get("project") or "novoprotein-agent"
+        client = LangSmithClient(
+            api_key=api_key,
+            api_url="https://api.smith.langchain.com",
+        )
+        return tracing_context(client=client, project_name=project)
+
+    from contextlib import nullcontext
+    return nullcontext()
 
 
 @traceable(name="AgentRoute", run_type="chain")
@@ -425,17 +460,19 @@ async def route(request: Request, user: Dict[str, Any] = Depends(get_current_use
         # If agentId is provided, validate before traced invocation
         if manual_agent_id and manual_agent_id not in agents:
             return {"error": "invalid_agent_id", "agentId": manual_agent_id}
-        
-        # LangSmith-traced: router → run_agent
-        result = await _invoke_route_and_agent(
-            input_text=input_text,
-            body=body,
-            manual_agent_id=manual_agent_id,
-            pipeline_id=pipeline_id,
-            pipeline_data=pipeline_data,
-            model_override=model_override,
-            user=user,
-        )
+
+        langsmith_config = body.get("langsmith")
+        with _langsmith_context(langsmith_config):
+            # LangSmith-traced: router → run_agent
+            result = await _invoke_route_and_agent(
+                input_text=input_text,
+                body=body,
+                manual_agent_id=manual_agent_id,
+                pipeline_id=pipeline_id,
+                pipeline_data=pipeline_data,
+                model_override=model_override,
+                user=user,
+            )
         
         if "error" in result and result.get("error") == "router_no_decision":
             return result

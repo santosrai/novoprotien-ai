@@ -225,10 +225,14 @@ class SimpleRouterGraph:
         
         # MVS vs Simple Code routing rules
         mvs_keywords = [
-            "label", "labels", "annotate", "highlight", "annotation", "text", "custom label", 
+            "label", "labels", "annotate", "highlight", "annotation", "text", "custom label",
             "multiple", "complex", "declarative", "scene", "components",
-            "fluent api", "mvs", "molviewspec", "specification", "write text", 
-            "add text", "name the", "call it", "mark as", "tag as"
+            "fluent api", "mvs", "molviewspec", "specification", "write text",
+            "add text", "name the", "call it", "mark as", "tag as",
+            "tooltip", "opacity", "transparent", "background", "canvas",
+            "camera", "assembly", "symmetry", "primitives", "arrow", "distance",
+            "measurement", "compare structures", "overlay", "transform",
+            "semi-transparent", "dark background", "volume", "density", "isosurface"
         ]
         
         simple_keywords = [
@@ -251,7 +255,13 @@ class SimpleRouterGraph:
         if not input_text.strip() or not self.agent_vecs or not self.embeddings:
             # Use keyword heuristic only
             # Enhanced keyword heuristic with MVS detection
-            mvs_keywords = ["label", "labels", "annotate", "annotation", "text", "custom", "multiple", "complex"]
+            mvs_keywords = [
+                "label", "labels", "annotate", "annotation", "text", "custom", "multiple", "complex",
+                "tooltip", "opacity", "transparent", "background", "canvas", "camera",
+                "assembly", "symmetry", "primitives", "arrow", "distance", "measurement",
+                "compare structures", "overlay", "transform", "semi-transparent",
+                "dark background", "volume", "density", "isosurface"
+            ]
             code_keywords = [
                 "show ", "display ", "visualize", "render", "color", "colour", "cartoon", "surface", "ball-and-stick", "water", "ligand", "focus", "zoom", "load", "pdb", "highlight", "chain", "view", "representation",
             ]
@@ -300,7 +310,13 @@ class SimpleRouterGraph:
         if best_score < self.threshold or (best_score - second_score) < self.margin:
             # fallback logic: simple heuristic using keywords
             # Enhanced fallback with MVS detection
-            mvs_keywords = ["label", "labels", "annotate", "annotation", "text", "custom", "multiple", "complex"]
+            mvs_keywords = [
+                "label", "labels", "annotate", "annotation", "text", "custom", "multiple", "complex",
+                "tooltip", "opacity", "transparent", "background", "canvas", "camera",
+                "assembly", "symmetry", "primitives", "arrow", "distance", "measurement",
+                "compare structures", "overlay", "transform", "semi-transparent",
+                "dark background", "volume", "density", "isosurface"
+            ]
             code_keywords = [
                 "show ", "display ", "visualize", "render", "color", "colour", "cartoon", "surface", "ball-and-stick", "water", "ligand", "focus", "zoom", "load", "pdb", "highlight", "chain", "view", "representation",
             ]

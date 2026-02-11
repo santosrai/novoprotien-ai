@@ -872,47 +872,8 @@ export const useChatHistoryStore = create<ChatHistoryState>()(
       },
       
       addMessageToSession: async (sessionId, message) => {
-        // Check if user is authenticated - require auth for saving
-        const user = useAuthStore.getState().user;
-        const saveMessageToBackend = createSaveMessageToBackend(() => get().sessions);
-        
-        if (!user) {
-          console.warn('[addMessageToSession] User not authenticated - message will only be saved locally');
-          // Still save locally but don't attempt backend save
-        } else {
-          // Try to save to backend with retry logic
-          const saved = await saveMessageToBackend(sessionId, message, 3);
-          
-          if (!saved) {
-            // Save failed, add to pending queue
-            const pendingMessage: PendingMessage = {
-              id: uuidv4(),
-              sessionId,
-              message,
-              retryCount: 0,
-              lastAttempt: Date.now(),
-            };
-            
-            set((state) => ({
-              _pendingMessages: [...state._pendingMessages, pendingMessage],
-            }));
-            
-            console.warn('[addMessageToSession] Message saved to pending queue:', pendingMessage.id);
-            
-            // Dispatch custom event for UI notification
-            window.dispatchEvent(new CustomEvent('message-save-failed', {
-              detail: { sessionId, messageId: message.id }
-            }));
-            
-            // Try to retry pending messages in background
-            get().retryPendingMessages().catch(err => {
-              console.error('[addMessageToSession] Failed to retry pending messages:', err);
-            });
-          } else {
-            console.log('[addMessageToSession] Message saved to backend successfully');
-          }
-        }
-        
+        // Optimistic update: add message to UI immediately (user message → loading → AI response)
+        // Backend save runs in background
         set((state) => {
           const updatedSessions = state.sessions.map(session => {
             if (session.id === sessionId) {
@@ -984,6 +945,36 @@ export const useChatHistoryStore = create<ChatHistoryState>()(
           
           return { sessions: updatedSessions };
         });
+
+        // Save to backend in background (after UI has updated)
+        const user = useAuthStore.getState().user;
+        if (!user) {
+          console.warn('[addMessageToSession] User not authenticated - message saved locally only');
+          return;
+        }
+        const saveMessageToBackend = createSaveMessageToBackend(() => get().sessions);
+        const saved = await saveMessageToBackend(sessionId, message, 3);
+        if (!saved) {
+          const pendingMessage: PendingMessage = {
+            id: uuidv4(),
+            sessionId,
+            message,
+            retryCount: 0,
+            lastAttempt: Date.now(),
+          };
+          set((state) => ({
+            _pendingMessages: [...state._pendingMessages, pendingMessage],
+          }));
+          console.warn('[addMessageToSession] Message saved to pending queue:', pendingMessage.id);
+          window.dispatchEvent(new CustomEvent('message-save-failed', {
+            detail: { sessionId, messageId: message.id }
+          }));
+          get().retryPendingMessages().catch(err => {
+            console.error('[addMessageToSession] Failed to retry pending messages:', err);
+          });
+        } else {
+          console.log('[addMessageToSession] Message saved to backend successfully');
+        }
       },
       
       updateSessionMessages: async (sessionId, messages) => {

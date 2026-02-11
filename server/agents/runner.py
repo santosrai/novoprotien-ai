@@ -1134,14 +1134,14 @@ async def run_agent(
         # Enhanced system prompt with RAG for MVS agent
         system_prompt = agent.get("system")
         if agent.get("id") == "mvs-builder":
-            print(f"🧠 [RAG] MVS agent triggered, enhancing prompt with Pinecone examples...")
+            print("[RAG] MVS agent triggered, enhancing prompt with Pinecone examples...")
             try:
                 from ..memory.rag.mvs_rag import enhance_mvs_prompt_with_rag
                 system_prompt = await enhance_mvs_prompt_with_rag(user_text, system_prompt)
-                print(f"✅ [RAG] Successfully enhanced MVS prompt")
+                print("[RAG] Successfully enhanced MVS prompt")
                 log_line("agent:mvs:rag", {"enhanced": True, "userText": user_text})
             except Exception as e:
-                print(f"❌ [RAG] Failed to enhance prompt: {e}")
+                print(f"[RAG] Failed to enhance prompt: {e}")
                 log_line("agent:mvs:rag_error", {"error": str(e)})
                 # Fallback to base prompt if RAG fails
         

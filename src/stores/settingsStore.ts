@@ -19,6 +19,11 @@ export interface AppSettings {
     debugMode: boolean;         // Enhanced logging
     enableAnalytics: boolean;   // Usage tracking (for future use)
   };
+  langsmith: {
+    enabled: boolean;           // Enable LangSmith tracing
+    apiKey: string;             // Optional: user's LangSmith API key
+    project: string;            // Optional: project name (default: novoprotein-agent)
+  };
   agent: {
     selectedAgentId: string | null;  // null = auto-route
     selectedModel: string | null;     // null = use agent default
@@ -66,6 +71,11 @@ try {
     debugMode: false,         // Disable debug logging by default
     enableAnalytics: false,   // Privacy-first approach
   },
+  langsmith: {
+    enabled: false,          // Disable LangSmith tracing by default
+    apiKey: '',              // User's LangSmith API key (optional)
+    project: 'novoprotein-agent',
+  },
   agent: {
     selectedAgentId: null,    // Auto-route by default
     selectedModel: null,      // Use agent default by default
@@ -87,6 +97,7 @@ export const useSettingsStore = create<SettingsState>()(
           ui: { ...state.settings.ui, ...updates.ui },
           api: { ...state.settings.api, ...updates.api },
           performance: { ...state.settings.performance, ...updates.performance },
+          langsmith: { ...(state.settings.langsmith ?? defaultSettings.langsmith), ...updates.langsmith },
           agent: { ...state.settings.agent, ...updates.agent },
         }
       })),

@@ -17,7 +17,7 @@ import { ErrorDetails, AlphaFoldErrorHandler, OpenFold2ErrorHandler, RFdiffusion
 import { logAlphaFoldError } from '../utils/errorLogger';
 import { AgentSelector } from './AgentSelector';
 import { ModelSelector } from './ModelSelector';
-import { useAgentSettings } from '../stores/settingsStore';
+import { useAgentSettings, useSettingsStore } from '../stores/settingsStore';
 import { ThinkingProcessDisplay } from './ThinkingProcessDisplay';
 import { AttachmentMenu } from './AttachmentMenu';
 import { JobLoadingPill } from './JobLoadingPill';
@@ -296,6 +296,7 @@ export const ChatPanel: React.FC = () => {
 
   // Agent and model settings
   const { settings: agentSettings } = useAgentSettings();
+  const langsmithSettings = useSettingsStore((s) => s.settings?.langsmith);
   
   const [input, setInput] = useState('');
   const [isLoading, setIsLoading] = useState(false);
@@ -2035,6 +2036,13 @@ try {
           agentId: agentSettings.selectedAgentId || undefined, // Only send if manually selected
           model: agentSettings.selectedModel || undefined, // Only send if manually selected
           pipeline_id: pipelineIdToSend || undefined, // Pass pipeline ID to backend
+          langsmith: langsmithSettings?.enabled
+            ? {
+                enabled: true,
+                apiKey: langsmithSettings.apiKey || undefined,
+                project: langsmithSettings.project || undefined,
+              }
+            : { enabled: false },
         };
         console.log('[AI] route:request', payload);
         console.log('[DEBUG] currentCode length:', currentCode?.length || 0);

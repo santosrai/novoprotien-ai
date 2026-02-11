@@ -1,5 +1,7 @@
 import { PluginUIContext } from 'molstar/lib/mol-plugin-ui/context';
 import { createMolstarBuilder, MolstarBuilder } from './molstarBuilder';
+import { createMVSBuilder } from 'molstar/lib/extensions/mvs/tree/mvs/mvs-builder';
+import { loadMVS } from 'molstar/lib/extensions/mvs/load';
 import { useAppStore } from '../stores/appStore';
 import { SandboxExecutor } from './codeExecutorSandbox';
 import { api } from './api';
@@ -39,6 +41,89 @@ export class CodeExecutor {
     this.builder = pluginAny[BUILDER_KEY] as MolstarBuilder;
   }
 
+  /** Detect if code uses MVS (MolViewSpec) API - requires direct execution for chaining to work */
+  private isMVSCode(code: string): boolean {
+    if (!code || !code.trim()) return false;
+    return /mvs\.(download|apply)/.test(code) || /mvs\.\w+\(/.test(code);
+  }
+
+  /** Resolve /api/upload/pdb/{file_id} URLs in MVS download calls (MolStar fetch won't include JWT) */
+  private async resolveMVSApiUrls(code: string): Promise<string> {
+    const mvsUrlMatch = code.match(/mvs\.download\s*\(\s*\{\s*url:\s*['"]([^'"]*\/api\/upload\/pdb\/([a-f0-9]+))['"]/);
+    if (mvsUrlMatch) {
+      try {
+        const fileId = mvsUrlMatch[2];
+        const response = await api.get(`/upload/pdb/${fileId}`, { responseType: 'blob' });
+        const blob = new Blob([response.data], { type: 'chemical/x-pdb' });
+        const dataUrl = await new Promise<string>((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onload = () => resolve(reader.result as string);
+          reader.onerror = reject;
+          reader.readAsDataURL(blob);
+        });
+        return code.replace(mvsUrlMatch[1], dataUrl);
+      } catch (e) {
+        console.warn('[CodeExecutor] Failed to resolve MVS API URL:', e);
+      }
+    }
+    return code;
+  }
+
+  /**
+   * Execute MVS code directly in parent context. The sandbox proxy breaks method chaining
+   * (download().parse().modelStructure()), so MVS must run with the real builder.
+   */
+  private async executeMVSCodeDirect(code: string, timeout: number): Promise<ExecutionResult> {
+    return new Promise((resolve) => {
+      const timer = setTimeout(() => {
+        resolve({
+          success: false,
+          message: 'Execution timeout',
+          error: 'MVS execution exceeded timeout of ' + timeout + 'ms',
+        });
+      }, timeout);
+
+      (async () => {
+        try {
+          const mvs = createMVSBuilder();
+          (mvs as any).apply = async () => {
+            await loadMVS(this.plugin, mvs.getState());
+          };
+
+          const setLastLoadedPdb = useAppStore.getState?.().setLastLoadedPdb;
+          const builder = this.builder;
+
+          const runCode = new Function(
+            'mvs',
+            'builder',
+            'console',
+            `return (async function(mvs, builder, console) { ${code} })(mvs, builder, console);`
+          );
+          const promise = runCode(mvs, builder, console);
+
+          if (promise && typeof promise.then === 'function') {
+            await promise;
+          }
+
+          const pdbMatch = code.match(/download[^'"]*\/pdbe\/[^/]+\/([a-z0-9]{4})_/i);
+          if (pdbMatch && typeof setLastLoadedPdb === 'function') {
+            setLastLoadedPdb(pdbMatch[1].toUpperCase());
+          }
+
+          clearTimeout(timer);
+          resolve({ success: true, message: 'Code executed successfully' });
+        } catch (error) {
+          clearTimeout(timer);
+          resolve({
+            success: false,
+            message: 'Execution failed',
+            error: error instanceof Error ? error.message : String(error),
+          });
+        }
+      })();
+    });
+  }
+
   /**
    * Extract structure information from code for AI context.
    * This helps the AI understand what structure is being loaded even when
@@ -47,10 +132,14 @@ export class CodeExecutor {
   private extractStructureInfo(code: string): { pdbId?: string; url?: string } | null {
     if (!code || !code.trim()) return null;
 
-    // Extract PDB ID (4-character code)
-    const pdbIdMatch = code.match(/loadStructure\s*\(\s*['"]([0-9A-Za-z]{4})['"]/);
-    if (pdbIdMatch) {
-      return { pdbId: pdbIdMatch[1].toUpperCase() };
+    // Extract PDB ID from loadStructure(4-char) or mvs.download url
+    const loadPdbMatch = code.match(/loadStructure\s*\(\s*['"]([0-9A-Za-z]{4})['"]/);
+    if (loadPdbMatch) {
+      return { pdbId: loadPdbMatch[1].toUpperCase() };
+    }
+    const mvsPdbMatch = code.match(/download[^'"]*\/pdbe\/[^/]+\/([a-z0-9]{4})_/i);
+    if (mvsPdbMatch) {
+      return { pdbId: mvsPdbMatch[1].toUpperCase() };
     }
 
     // Extract URL (blob, http, https, /api/)
@@ -64,6 +153,22 @@ export class CodeExecutor {
 
   async executeCode(code: string): Promise<ExecutionResult> {
     try {
+      // MVS code requires direct execution (sandbox proxy breaks method chaining)
+      if (this.isMVSCode(code)) {
+        code = await this.resolveMVSApiUrls(code);
+        const structureInfo = this.extractStructureInfo(code);
+        const result = await this.executeMVSCodeDirect(code, 10000);
+        const setLastLoadedPdb = useAppStore.getState?.().setLastLoadedPdb;
+        if (structureInfo?.pdbId && typeof setLastLoadedPdb === 'function') {
+          try {
+            setLastLoadedPdb(structureInfo.pdbId);
+          } catch {
+            // ignore
+          }
+        }
+        return result;
+      }
+
       // Resolve /api/upload/pdb/{file_id} to data URL before execution (Molstar fetch won't include JWT)
       const apiUrlMatch = code.match(/loadStructure\s*\(\s*['"]([^'"]*\/api\/upload\/pdb\/([a-f0-9]+))['"]/);
       if (apiUrlMatch) {
