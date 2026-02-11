@@ -1,9 +1,10 @@
 """
 Pluggable FastAPI router for pipeline persistence.
 Inject get_db and get_current_user from your host application.
+Supports both authenticated and unauthenticated (no-auth) modes.
 """
-from typing import Dict, Any, List, Optional, Callable
-from fastapi import APIRouter, HTTPException, Depends, status
+from typing import Dict, Any, List, Optional, Callable, Literal
+from fastapi import APIRouter, HTTPException, Depends, status, Request
 import json
 import uuid
 from datetime import datetime
@@ -11,8 +12,12 @@ from datetime import datetime
 
 def create_pipeline_router(
     get_db: Callable,
-    get_current_user: Callable,
+    get_current_user: Optional[Callable] = None,
     *,
+    auth_mode: Literal["required", "optional", "disabled"] = "required",
+    get_current_user_optional: Optional[Callable] = None,
+    session_header: str = "X-Session-Id",
+    anonymous_id: str = "anonymous",
     verify_message_ownership: bool = False,
 ) -> APIRouter:
     """
@@ -21,7 +26,15 @@ def create_pipeline_router(
     Args:
         get_db: Context manager yielding a DB connection (e.g., sqlite3 connection).
                 Must support: with get_db() as conn: conn.execute(...)
-        get_current_user: FastAPI dependency that returns {"id": user_id, ...}
+        get_current_user: FastAPI dependency that returns {"id": user_id, ...}.
+                Required when auth_mode is "required". Ignored for "disabled".
+        auth_mode: "required" = must be authenticated (default, backwards compatible).
+                   "optional" = use user when present (via get_current_user_optional), else session/anonymous.
+                   "disabled" = never require auth; always use session/anonymous.
+        get_current_user_optional: For auth_mode "optional": dependency that returns user or None.
+                Use HTTPBearer(auto_error=False) to avoid 401 when no token.
+        session_header: HTTP header name for session scope when no auth (default: X-Session-Id).
+        anonymous_id: Fallback scope when no user and no session header (default: "anonymous").
         verify_message_ownership: If True, verify message_id and conversation_id
                 against chat_messages/conversations/chat_sessions tables.
                 Set False if your app has no chat tables.
@@ -29,7 +42,33 @@ def create_pipeline_router(
     Returns:
         APIRouter with prefix /api/pipelines
     """
+    if auth_mode == "required" and get_current_user is None:
+        raise ValueError("get_current_user is required when auth_mode is 'required'")
+
     router = APIRouter(prefix="/api/pipelines", tags=["pipelines"])
+
+    # Build the user-resolver dependency based on auth_mode
+    if auth_mode == "disabled":
+        async def _resolve_user(request: Request) -> Dict[str, Any]:
+            uid = request.headers.get(session_header) or anonymous_id
+            return {"id": uid}
+    elif auth_mode == "optional" and get_current_user_optional is not None:
+        async def _resolve_user(
+            request: Request,
+            user: Optional[Dict[str, Any]] = Depends(get_current_user_optional),
+        ) -> Dict[str, Any]:
+            if user and user.get("id"):
+                return user
+            uid = request.headers.get(session_header) or anonymous_id
+            return {"id": uid}
+    elif auth_mode == "optional":
+        # No optional dep provided: use session/anonymous only
+        async def _resolve_user(request: Request) -> Dict[str, Any]:
+            uid = request.headers.get(session_header) or anonymous_id
+            return {"id": uid}
+    else:
+        # required: use get_current_user directly
+        _resolve_user = get_current_user
 
     def _verify_message(conn, message_id: str, user_id: str) -> Optional[str]:
         if not verify_message_ownership or not message_id:
@@ -60,7 +99,7 @@ def create_pipeline_router(
     @router.post("")
     async def create_pipeline(
         pipeline_data: Dict[str, Any],
-        user: Dict[str, Any] = Depends(get_current_user),
+        user: Dict[str, Any] = Depends(_resolve_user),
     ) -> Dict[str, Any]:
         """Create or save a pipeline."""
         pipeline_id = pipeline_data.get("id") or str(uuid.uuid4())
@@ -135,7 +174,7 @@ def create_pipeline_router(
 
     @router.get("")
     async def list_pipelines(
-        user: Dict[str, Any] = Depends(get_current_user),
+        user: Dict[str, Any] = Depends(_resolve_user),
         conversation_id: Optional[str] = None,
     ) -> Dict[str, Any]:
         """List all pipelines for the current user."""
@@ -169,7 +208,7 @@ def create_pipeline_router(
     @router.get("/{pipeline_id}")
     async def get_pipeline(
         pipeline_id: str,
-        user: Dict[str, Any] = Depends(get_current_user),
+        user: Dict[str, Any] = Depends(_resolve_user),
     ) -> Dict[str, Any]:
         """Get a specific pipeline."""
         with get_db() as conn:
@@ -196,7 +235,7 @@ def create_pipeline_router(
     async def update_pipeline(
         pipeline_id: str,
         pipeline_data: Dict[str, Any],
-        user: Dict[str, Any] = Depends(get_current_user),
+        user: Dict[str, Any] = Depends(_resolve_user),
     ) -> Dict[str, Any]:
         """Update a pipeline."""
         with get_db() as conn:
@@ -242,7 +281,7 @@ def create_pipeline_router(
     @router.delete("/{pipeline_id}")
     async def delete_pipeline(
         pipeline_id: str,
-        user: Dict[str, Any] = Depends(get_current_user),
+        user: Dict[str, Any] = Depends(_resolve_user),
     ) -> Dict[str, Any]:
         """Delete a pipeline."""
         with get_db() as conn:
@@ -260,7 +299,7 @@ def create_pipeline_router(
     async def create_execution(
         pipeline_id: str,
         execution_data: Dict[str, Any],
-        user: Dict[str, Any] = Depends(get_current_user),
+        user: Dict[str, Any] = Depends(_resolve_user),
     ) -> Dict[str, Any]:
         """Create a pipeline execution record."""
         with get_db() as conn:
@@ -288,7 +327,7 @@ def create_pipeline_router(
     @router.get("/{pipeline_id}/executions")
     async def list_executions(
         pipeline_id: str,
-        user: Dict[str, Any] = Depends(get_current_user),
+        user: Dict[str, Any] = Depends(_resolve_user),
     ) -> Dict[str, Any]:
         """List all executions for a pipeline."""
         with get_db() as conn:

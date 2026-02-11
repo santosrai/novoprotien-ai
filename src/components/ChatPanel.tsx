@@ -1692,6 +1692,47 @@ try {
     }
   };
 
+  // Dialog cancel/close handlers — add a short AI message when user closes without confirming
+  const handleAlphaFoldClose = useCallback(() => {
+    setShowAlphaFoldDialog(false);
+    addMessage({
+      id: uuidv4(),
+      content: "You've cancelled the folding. What else can I help you with?",
+      type: 'ai',
+      timestamp: new Date(),
+    });
+  }, [addMessage]);
+
+  const handleRFdiffusionClose = useCallback(() => {
+    setShowRFdiffusionDialog(false);
+    addMessage({
+      id: uuidv4(),
+      content: "You've cancelled the design. What else can I help you with?",
+      type: 'ai',
+      timestamp: new Date(),
+    });
+  }, [addMessage]);
+
+  const handleProteinMPNNClose = useCallback(() => {
+    setShowProteinMPNNDialog(false);
+    addMessage({
+      id: uuidv4(),
+      content: "You've cancelled the sequence design. What else can I help you with?",
+      type: 'ai',
+      timestamp: new Date(),
+    });
+  }, [addMessage]);
+
+  const handleOpenFold2Close = useCallback(() => {
+    setShowOpenFold2Dialog(false);
+    addMessage({
+      id: uuidv4(),
+      content: "You've cancelled the structure prediction. What else can I help you with?",
+      type: 'ai',
+      timestamp: new Date(),
+    });
+  }, [addMessage]);
+
   const handleAlphaFoldResponse = (responseData: any) => {
     try {
       // Enhanced logging for debugging
@@ -2157,32 +2198,21 @@ try {
             }
           }
 
-          // Check if this is a pipeline-agent response with blueprint
-          if (agentId === 'pipeline-agent') {
-            console.log('🔧 [Pipeline] Agent detected, processing response');
-            console.log('📄 [Pipeline] Agent response text:', aiText.slice(0, 200) + '...');
-            console.log('📦 [Pipeline] Full response data:', response.data);
-            
-            // Try to parse blueprint from response
+          // Try to parse and display pipeline blueprint from response
+          // Works for pipeline-agent and as fallback when any agent returns blueprint JSON
+          const tryParseBlueprint = (): { blueprint: PipelineBlueprint; rationale?: string; message?: string } | null => {
+            let blueprintData: any = null;
             try {
-              let blueprintData: any = null;
-              
-              // First, check if blueprint is already in response.data (structured response)
               if (response.data?.blueprint || (response.data?.type === 'blueprint' && response.data?.blueprint)) {
                 blueprintData = response.data;
-                console.log('✅ [Pipeline] Blueprint found in response.data');
               } else {
-                // Try to parse from text response
-                // First, try to parse the entire response as JSON
                 try {
                   blueprintData = JSON.parse(aiText);
                 } catch {
-                  // If not valid JSON, try to extract JSON from markdown code blocks
                   const jsonMatch = aiText.match(/```(?:json)?\s*(\{[\s\S]*?\})\s*```/);
                   if (jsonMatch) {
                     blueprintData = JSON.parse(jsonMatch[1]);
                   } else {
-                    // Try to find JSON object in the text
                     const jsonObjectMatch = aiText.match(/\{[\s\S]*"type"\s*:\s*"blueprint"[\s\S]*\}/);
                     if (jsonObjectMatch) {
                       blueprintData = JSON.parse(jsonObjectMatch[0]);
@@ -2190,40 +2220,41 @@ try {
                   }
                 }
               }
-
-              if (blueprintData && blueprintData.type === 'blueprint' && blueprintData.blueprint) {
-                console.log('✅ [Pipeline] Blueprint detected in response');
-                console.log('📋 [Pipeline] Blueprint nodes:', blueprintData.blueprint.nodes?.length || 0);
-                
-                // Set blueprint in pipeline store
-                setGhostBlueprint(blueprintData.blueprint);
-                console.log('💾 [Pipeline] Blueprint set in pipeline store');
-                
-                // Create message with blueprint
-                const chatMsg: ExtendedMessage = {
-                  id: uuidv4(),
-                  content: blueprintData.message || aiText,
-                  type: 'ai',
-                  timestamp: new Date(),
-                  blueprint: blueprintData.blueprint,
-                  blueprintRationale: blueprintData.rationale || blueprintData.blueprint.rationale,
-                };
-                
-                // Add thinking process if available
-                if (thinkingProcess) {
-                  chatMsg.thinkingProcess = thinkingProcess;
-                }
-                
-                addMessage(chatMsg);
-                console.log('💬 [Pipeline] Message with blueprint added to chat');
-                return; // Exit early - blueprint displayed
-              } else {
-                console.warn('⚠️ [Pipeline] Blueprint data found but invalid structure:', blueprintData);
-              }
-            } catch (error) {
-              console.warn('⚠️ [Pipeline] Failed to parse blueprint from response:', error);
-              // Fall through to regular text message
+              if (!blueprintData || blueprintData.type !== 'blueprint') return null;
+              // Support nested (blueprint.blueprint) and flat (blueprint with nodes/edges at top level)
+              const blueprintObj = blueprintData.blueprint ?? (blueprintData.nodes ? blueprintData : null);
+              if (!blueprintObj || !Array.isArray(blueprintObj.nodes)) return null;
+              return {
+                blueprint: {
+                  rationale: blueprintObj.rationale ?? blueprintData.rationale ?? '',
+                  nodes: blueprintObj.nodes,
+                  edges: Array.isArray(blueprintObj.edges) ? blueprintObj.edges : [],
+                  missing_resources: Array.isArray(blueprintObj.missing_resources) ? blueprintObj.missing_resources : [],
+                },
+                rationale: blueprintData.rationale ?? blueprintObj.rationale,
+                message: blueprintData.message,
+              };
+            } catch {
+              return null;
             }
+          };
+
+          const parsedBlueprint = tryParseBlueprint();
+          if (parsedBlueprint) {
+            console.log('✅ [Pipeline] Blueprint detected in response', agentId === 'pipeline-agent' ? '(pipeline-agent)' : '(fallback)');
+            console.log('📋 [Pipeline] Blueprint nodes:', parsedBlueprint.blueprint.nodes?.length || 0);
+            setGhostBlueprint(parsedBlueprint.blueprint);
+            const chatMsg: ExtendedMessage = {
+              id: uuidv4(),
+              content: parsedBlueprint.message || aiText,
+              type: 'ai',
+              timestamp: new Date(),
+              blueprint: parsedBlueprint.blueprint,
+              blueprintRationale: parsedBlueprint.rationale,
+            };
+            if (thinkingProcess) chatMsg.thinkingProcess = thinkingProcess;
+            addMessage(chatMsg);
+            return;
           }
           
           // Bio-chat and other text agents should never modify the editor code
@@ -2912,7 +2943,7 @@ try {
       {/* AlphaFold Dialog */}
       <AlphaFoldDialog
         isOpen={showAlphaFoldDialog}
-        onClose={() => setShowAlphaFoldDialog(false)}
+        onClose={handleAlphaFoldClose}
         onConfirm={handleAlphaFoldConfirm}
         initialData={alphafoldData}
       />
@@ -2920,21 +2951,21 @@ try {
       {/* RFdiffusion Dialog */}
       <RFdiffusionDialog
         isOpen={showRFdiffusionDialog}
-        onClose={() => setShowRFdiffusionDialog(false)}
+        onClose={handleRFdiffusionClose}
         onConfirm={handleRFdiffusionConfirm}
         initialData={rfdiffusionData}
       />
 
       <ProteinMPNNDialog
         isOpen={showProteinMPNNDialog}
-        onClose={() => setShowProteinMPNNDialog(false)}
+        onClose={handleProteinMPNNClose}
         onConfirm={handleProteinMPNNConfirm}
         initialData={proteinmpnnData}
       />
 
       <OpenFold2Dialog
         isOpen={showOpenFold2Dialog}
-        onClose={() => setShowOpenFold2Dialog(false)}
+        onClose={handleOpenFold2Close}
         onConfirm={handleOpenFold2Confirm}
       />
 

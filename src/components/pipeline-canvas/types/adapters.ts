@@ -150,15 +150,34 @@ export interface NodeExecutionAdapter {
   cancel?(jobId: string): Promise<void>;
 }
 
+/** Options for NovoProteinAdapter */
+export interface NovoProteinAdapterOptions {
+  /** Session ID for no-auth mode; sent as X-Session-Id header */
+  sessionId?: string;
+}
+
 /**
  * Default NovoProtein Adapter Implementation
  * Implements the adapter interfaces using NovoProtein's current API structure
  */
 export class NovoProteinAdapter implements PipelinePersistenceAdapter {
-  constructor(private apiClient: ApiClient) {
+  private readonly sessionId?: string;
+  constructor(
+    private apiClient: ApiClient,
+    options?: NovoProteinAdapterOptions
+  ) {
     if (!apiClient) {
       throw new Error('ApiClient is required for NovoProteinAdapter');
     }
+    this.sessionId = options?.sessionId;
+  }
+
+  private getHeaders(extra?: Record<string, string>): Record<string, string> {
+    const headers: Record<string, string> = { ...extra };
+    if (this.sessionId) {
+      headers['X-Session-Id'] = this.sessionId;
+    }
+    return headers;
   }
 
   async save(pipeline: Pipeline, options?: SaveOptions): Promise<{ id: string }> {
@@ -176,7 +195,9 @@ export class NovoProteinAdapter implements PipelinePersistenceAdapter {
       pipelineData.status = options.status;
     }
 
-    const response = await this.apiClient.post('/pipelines', pipelineData);
+    const response = await this.apiClient.post('/pipelines', pipelineData, {
+      headers: this.getHeaders(),
+    });
     
     // Handle NovoProtein response format: { status: "success", pipeline: {...} }
     if (response.data?.pipeline?.id) {
@@ -191,7 +212,9 @@ export class NovoProteinAdapter implements PipelinePersistenceAdapter {
   }
 
   async load(id: string): Promise<Pipeline> {
-    const response = await this.apiClient.get(`/pipelines/${id}`);
+    const response = await this.apiClient.get(`/pipelines/${id}`, {
+      headers: this.getHeaders(),
+    });
     
     // Handle NovoProtein response format
     const backendPipeline = response.data?.pipeline || response.data;
@@ -214,7 +237,9 @@ export class NovoProteinAdapter implements PipelinePersistenceAdapter {
     const query = searchParams.toString();
     const url = query ? `/pipelines?${query}` : '/pipelines';
 
-    const response = await this.apiClient.get(url);
+    const response = await this.apiClient.get(url, {
+      headers: this.getHeaders(),
+    });
 
     // Handle NovoProtein response format: { pipelines: [...] }
     let backendPipelines = response.data?.pipelines || response.data || [];
@@ -243,12 +268,13 @@ export class NovoProteinAdapter implements PipelinePersistenceAdapter {
   }
 
   async delete(id: string): Promise<void> {
+    const headers = this.getHeaders();
     if (this.apiClient.delete) {
-      await this.apiClient.delete(`/pipelines/${id}`);
+      await this.apiClient.delete(`/pipelines/${id}`, { headers });
     } else {
       // Fallback: use POST with method override
       await this.apiClient.post(`/pipelines/${id}`, {}, { 
-        headers: { 'X-HTTP-Method-Override': 'DELETE' } 
+        headers: { ...headers, 'X-HTTP-Method-Override': 'DELETE' } 
       });
     }
   }

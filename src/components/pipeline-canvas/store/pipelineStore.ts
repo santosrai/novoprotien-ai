@@ -119,8 +119,7 @@ let globalAdapters: {
   execution?: NodeExecutionAdapter;
 } = {};
 
-// Module-level configuration store
-// @ts-expect-error - globalConfig is set via setPipelineConfig and may be used in the future
+// Module-level configuration store (set via setPipelineConfig)
 let globalConfig: PipelineConfig | null = null;
 
 /**
@@ -171,6 +170,13 @@ const getUserId = (): string => {
 };
 
 /**
+ * Whether to use backend without authenticated user (no-auth mode)
+ */
+const getUseBackendWithoutAuth = (): boolean => {
+  return globalConfig?.features?.useBackendWithoutAuth ?? false;
+};
+
+/**
  * Get persistence adapter (with fallback to default)
  */
 const getPersistenceAdapter = (): PipelinePersistenceAdapter | null => {
@@ -181,7 +187,7 @@ const getPersistenceAdapter = (): PipelinePersistenceAdapter | null => {
   // Fallback: create default adapter if apiClient is available
   const deps = getDependencies();
   if (deps.apiClient) {
-    return new NovoProteinAdapter(deps.apiClient);
+    return new NovoProteinAdapter(deps.apiClient, { sessionId: deps.sessionId });
   }
   
   return null;
@@ -231,15 +237,12 @@ const debouncedAutoSave = (get: () => PipelineState, set: (partial: Partial<Pipe
       // Also save draft to backend if dependencies are available
       const deps = getDependencies();
       const user = deps.authState?.user;
-      const apiClient = deps.apiClient;
+      const useBackend = user || getUseBackendWithoutAuth();
+      const adapter = getPersistenceAdapter();
       
-      if (user && apiClient) {
+      if (useBackend && adapter) {
         try {
-          // Save as draft pipeline (status='draft')
-          await apiClient.post('/pipelines', {
-            ...draft,
-            status: 'draft',
-          });
+          await adapter.save({ ...draft, status: 'draft' });
           console.log('[debouncedAutoSave] Draft pipeline saved to backend');
         } catch (error: any) {
           console.error('[debouncedAutoSave] Failed to save draft to backend:', error);
@@ -568,7 +571,8 @@ export const usePipelineStore = create<PipelineState>()(
         
         // Try to use adapter for backend save
         const adapter = getPersistenceAdapter();
-        if (user && adapter) {
+        const useBackend = user || getUseBackendWithoutAuth();
+        if (useBackend && adapter) {
           try {
             await adapter.save(pipelineToSave, {
               messageId,
@@ -617,7 +621,8 @@ export const usePipelineStore = create<PipelineState>()(
         
         // Try to use adapter for backend load
         const adapter = getPersistenceAdapter();
-        if (user && adapter) {
+        const useBackend = user || getUseBackendWithoutAuth();
+        if (useBackend && adapter) {
           try {
             const backendPipeline = await adapter.load(pipelineId);
             
@@ -664,7 +669,8 @@ export const usePipelineStore = create<PipelineState>()(
         
         // Try to use adapter for backend delete
         const adapter = getPersistenceAdapter();
-        if (user && adapter) {
+        const useBackend = user || getUseBackendWithoutAuth();
+        if (useBackend && adapter) {
           try {
             await adapter.delete(pipelineId);
             console.log('Pipeline deleted from backend');
@@ -685,9 +691,10 @@ export const usePipelineStore = create<PipelineState>()(
         // Get dependencies from parameter or global store
         const effectiveDeps = deps || getDependencies();
         const user = effectiveDeps.authState?.user;
+        const useBackend = user || getUseBackendWithoutAuth();
         
-        if (!user) {
-          console.log('[syncPipelines] User not authenticated, skipping pipeline sync');
+        if (!useBackend) {
+          console.log('[syncPipelines] User not authenticated and useBackendWithoutAuth disabled, skipping pipeline sync');
           return;
         }
         
@@ -699,7 +706,7 @@ export const usePipelineStore = create<PipelineState>()(
         }
         
         try {
-          console.log('[syncPipelines] Syncing pipelines from backend for user:', user.id);
+          console.log('[syncPipelines] Syncing pipelines from backend for user:', user?.id ?? 'session/anonymous');
           
           // Use adapter's sync method if available, otherwise use list
           const validPipelines = adapter.sync 
@@ -1124,23 +1131,8 @@ export const usePipelineStore = create<PipelineState>()(
             } catch (error) {
             console.error('Failed to load draft:', error);
           }
-          
-          // Sync with backend after rehydration (if user is authenticated)
-          setTimeout(() => {
-            const deps = getDependencies();
-            const user = deps.authState?.user;
-            const apiClient = deps.apiClient;
-            if (user && apiClient && state.syncPipelines) {
-              // Clear local pipelines first, then sync from backend to ensure user-specific data
-              console.log('[PipelineStore] Clearing pipelines and syncing from backend...');
-              usePipelineStore.setState({ savedPipelines: [] });
-              state.syncPipelines({ apiClient, authState: deps.authState }).catch(console.error);
-            } else if (!user) {
-              // If no user, clear all pipeline data
-              state.clearPipeline();
-              usePipelineStore.setState({ savedPipelines: [] });
-            }
-          }, 1000); // Delay to ensure auth is loaded
+          // Do not sync from backend on rehydration - use persisted state on load.
+          // Sync only after sign-in (authStore) or when user clicks Refresh in pipeline sidebar.
         }
       },
     }

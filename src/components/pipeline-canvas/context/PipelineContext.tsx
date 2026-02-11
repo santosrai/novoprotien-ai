@@ -1,8 +1,21 @@
-import React, { createContext, useContext, ReactNode, useEffect } from 'react';
+import React, { createContext, useContext, ReactNode, useEffect, useMemo } from 'react';
 import { PipelineDependencies } from '../types/dependencies';
 import { PipelinePersistenceAdapter, NodeExecutionAdapter } from '../types/adapters';
 import { PipelineConfig } from '../types/config';
 import { setPipelineDependencies, setPipelineAdapters, setPipelineConfig } from '../store/pipelineStore';
+
+const SESSION_STORAGE_KEY = 'pipeline-canvas-session-id';
+
+/** Get or create session ID for no-auth mode (persisted in sessionStorage) */
+function getOrCreateSessionId(): string {
+  if (typeof sessionStorage === 'undefined') return `anon-${Date.now()}`;
+  let id = sessionStorage.getItem(SESSION_STORAGE_KEY);
+  if (!id) {
+    id = `sess-${crypto.randomUUID?.() ?? Math.random().toString(36).slice(2)}`;
+    sessionStorage.setItem(SESSION_STORAGE_KEY, id);
+  }
+  return id;
+}
 
 /**
  * Pipeline Context Value
@@ -83,7 +96,7 @@ export const PipelineProvider: React.FC<PipelineProviderProps> = ({
   children,
   apiClient,
   authState,
-  sessionId,
+  sessionId: sessionIdProp,
   getAuthHeaders,
   logger,
   errorReporter,
@@ -91,6 +104,15 @@ export const PipelineProvider: React.FC<PipelineProviderProps> = ({
   executionAdapter,
   config,
 }) => {
+  // Auto-generate sessionId for no-auth mode when not provided
+  const sessionId = useMemo(() => {
+    if (sessionIdProp) return sessionIdProp;
+    if (config?.features?.useBackendWithoutAuth && apiClient) {
+      return getOrCreateSessionId();
+    }
+    return undefined;
+  }, [sessionIdProp, config?.features?.useBackendWithoutAuth, apiClient]);
+
   const value: PipelineContextValue = {
     apiClient,
     authState,
@@ -103,7 +125,7 @@ export const PipelineProvider: React.FC<PipelineProviderProps> = ({
     config,
   };
 
-  // Update store dependencies when context changes
+  // Update store dependencies when context changes (no auto-sync on mount)
   useEffect(() => {
     setPipelineDependencies({
       apiClient,
@@ -123,24 +145,8 @@ export const PipelineProvider: React.FC<PipelineProviderProps> = ({
     if (config) {
       setPipelineConfig(config);
     }
-    
-    // Sync pipelines from backend when dependencies are available and user is authenticated
-    // Debounced to coalesce rapid triggers (e.g. from parent re-renders)
-    if (apiClient && authState?.user) {
-      const syncTimer = setTimeout(async () => {
-        try {
-          const { usePipelineStore } = await import('../store/pipelineStore');
-          const pipelineStore = usePipelineStore.getState();
-          if (pipelineStore.syncPipelines) {
-            await pipelineStore.syncPipelines({ apiClient, authState });
-          }
-        } catch (error) {
-          console.error('[PipelineProvider] Failed to sync pipelines:', error);
-        }
-      }, 150);
-
-      return () => clearTimeout(syncTimer);
-    }
+    // Pipelines are not synced on mount - use persisted state on load.
+    // Sync happens after sign-in (authStore) or when user clicks Refresh in pipeline sidebar.
   }, [apiClient, authState, sessionId, persistenceAdapter, executionAdapter, config]);
 
   return (

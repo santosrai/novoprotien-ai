@@ -1,11 +1,11 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { X, Check, Upload, File, Eye, Sparkles, Dna, Layers, FileInput } from 'lucide-react';
-import { PipelineNodeBlueprint } from '../components/pipeline-canvas';
-import { useChatHistoryStore } from '../stores/chatHistoryStore';
-import { useAppStore } from '../stores/appStore';
-import { CodeExecutor } from '../utils/codeExecutor';
-import { getAuthHeaders } from '../utils/api';
-import { ServerFilesDialog } from './ServerFilesDialog';
+import { PipelineNodeBlueprint } from '../dist';
+import { useChatHistoryStore } from '../../../stores/chatHistoryStore';
+import { useAppStore } from '../../../stores/appStore';
+import { CodeExecutor } from '../../../utils/codeExecutor';
+import { getAuthHeaders } from '../../../utils/api';
+import { ServerFilesDialog } from '../../ServerFilesDialog';
 
 interface NodeConfigModalProps {
   isOpen: boolean;

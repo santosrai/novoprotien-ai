@@ -190,7 +190,8 @@ class SimpleRouterGraph:
             "design protein pipeline", "fold pipeline", "protein workflow",
             "create a pipeline", "set up pipeline", "setup pipeline",
             "pipeline for", "workflow for", "create a workflow",
-            "generate pipeline", "generate workflow", "make a pipeline"
+            "generate pipeline", "generate workflow", "make a pipeline",
+            "pipeline with",  # e.g. "create pipeline with rfdiffusion"
         ]
         # Check for explicit pipeline/workflow creation intent
         has_pipeline_intent = any(k in low for k in pipeline_keywords) or (

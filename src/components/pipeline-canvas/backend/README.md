@@ -69,6 +69,51 @@ router = create_pipeline_router(get_db, get_current_user, verify_message_ownersh
 app.include_router(router)
 ```
 
+### Auth Modes
+
+The router supports three auth modes:
+
+| Mode | Description | Use Case |
+|------|-------------|----------|
+| `required` (default) | Must be authenticated. 401 when no token. | Apps with login (backwards compatible) |
+| `optional` | Use user when present; else `X-Session-Id` or `anonymous` | Mixed: logged-in and anonymous users |
+| `disabled` | Never require auth; use `X-Session-Id` or `anonymous` | No-auth apps, demos, internal tools |
+
+**Auth required (default):**
+
+```python
+router = create_pipeline_router(get_db, get_current_user, verify_message_ownership=False)
+```
+
+**No-auth (disabled):**
+
+```python
+router = create_pipeline_router(get_db, get_current_user=None, auth_mode="disabled")
+# Frontend sends X-Session-Id header for per-session scope
+```
+
+**Optional auth (both logged-in and anonymous):**
+
+```python
+# Provide get_current_user_optional that returns user or None (use HTTPBearer(auto_error=False))
+from fastapi.security import HTTPBearer
+security_optional = HTTPBearer(auto_error=False)
+
+async def get_current_user_optional(credentials = Depends(security_optional)):
+    if not credentials: return None
+    # validate token, return user or None
+    ...
+
+router = create_pipeline_router(
+    get_db,
+    get_current_user=None,
+    auth_mode="optional",
+    get_current_user_optional=get_current_user_optional,
+)
+```
+
+**Parameters:** `session_header` (default `X-Session-Id`), `anonymous_id` (default `"anonymous"`)
+
 ### Copying Backend to Your Project
 
 For a cleaner setup, copy the backend into your project:

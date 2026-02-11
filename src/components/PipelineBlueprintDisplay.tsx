@@ -4,7 +4,7 @@ import { PipelineBlueprint, PipelineNodeBlueprint } from '../components/pipeline
 import { usePipelineStore } from '../components/pipeline-canvas';
 import { useAppStore } from '../stores/appStore';
 import { useChatHistoryStore } from '../stores/chatHistoryStore';
-import { NodeConfigModal } from './NodeConfigModal';
+import { NodeConfigModal } from './pipeline-canvas/components/NodeConfigModal';
 import { ErrorDetails, ErrorCategory, ErrorSeverity } from '../utils/errorHandler';
 import { v4 as uuidv4 } from 'uuid';
 

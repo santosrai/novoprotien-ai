@@ -140,6 +140,13 @@ export interface PipelineConfig {
    * Enable backend sync on mount (default: true)
    */
     syncOnMount?: boolean;
+    
+    /**
+   * Use backend (save/load/sync) even when user is not authenticated.
+   * When true, send X-Session-Id header for per-session scope.
+   * Requires backend auth_mode "optional" or "disabled".
+   */
+    useBackendWithoutAuth?: boolean;
   };
 }
 
@@ -179,6 +186,7 @@ export const DEFAULT_CONFIG: Required<PipelineConfig> = {
     autoSave: true,
     autoSaveDelay: 1000,
     syncOnMount: true,
+    useBackendWithoutAuth: false,
   },
 };
 

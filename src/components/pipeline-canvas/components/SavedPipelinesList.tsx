@@ -2,13 +2,14 @@ import React, { useState } from 'react';
 import { usePipelineStore } from '../store/pipelineStore';
 import { usePipelineContext } from '../context/PipelineContext';
 import { Pipeline } from '../types/index';
-import { Trash2, Edit2, FolderOpen, Plus, X, Menu } from 'lucide-react';
+import { Trash2, Edit2, FolderOpen, Plus, X, Menu, RefreshCw } from 'lucide-react';
 
 export const SavedPipelinesList: React.FC = () => {
   const { 
     savedPipelines, 
     loadPipeline, 
     deletePipeline, 
+    syncPipelines,
     currentPipeline, 
     setCurrentPipeline,
     isPipelinesSidebarCollapsed,
@@ -17,6 +18,7 @@ export const SavedPipelinesList: React.FC = () => {
   const { apiClient, authState } = usePipelineContext();
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editName, setEditName] = useState('');
+  const [isSyncing, setIsSyncing] = useState(false);
 
   // Debug: Log when savedPipelines changes
   React.useEffect(() => {
@@ -83,6 +85,18 @@ export const SavedPipelinesList: React.FC = () => {
     setEditName('');
   };
 
+  const handleRefresh = async () => {
+    if (!apiClient || !authState) return;
+    setIsSyncing(true);
+    try {
+      await syncPipelines({ apiClient, authState });
+    } catch (err) {
+      console.error('[SavedPipelinesList] Sync failed:', err);
+    } finally {
+      setIsSyncing(false);
+    }
+  };
+
   // Collapsed sidebar view
   if (isPipelinesSidebarCollapsed) {
     return (
@@ -133,13 +147,23 @@ export const SavedPipelinesList: React.FC = () => {
           <FolderOpen className="w-4 h-4 text-[hsl(var(--pc-text-secondary))]" />
           <h3 className="text-sm font-semibold text-[hsl(var(--pc-text-primary))]">Saved Pipelines</h3>
         </div>
-        <button
-          onClick={togglePipelinesSidebar}
-          className="p-1 text-[hsl(var(--pc-text-muted))] hover:text-[hsl(var(--pc-text-secondary))] hover:bg-[hsl(var(--pc-muted)/0.5)] rounded transition-colors"
-          title="Collapse sidebar"
-        >
-          <X className="w-4 h-4" />
-        </button>
+        <div className="flex items-center gap-1">
+          <button
+            onClick={handleRefresh}
+            disabled={isSyncing || !apiClient || !authState?.user}
+            className="p-1 text-[hsl(var(--pc-text-muted))] hover:text-[hsl(var(--pc-text-secondary))] hover:bg-[hsl(var(--pc-muted)/0.5)] rounded transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+            title="Refresh list from server"
+          >
+            <RefreshCw className={`w-4 h-4 ${isSyncing ? 'animate-spin' : ''}`} />
+          </button>
+          <button
+            onClick={togglePipelinesSidebar}
+            className="p-1 text-[hsl(var(--pc-text-muted))] hover:text-[hsl(var(--pc-text-secondary))] hover:bg-[hsl(var(--pc-muted)/0.5)] rounded transition-colors"
+            title="Collapse sidebar"
+          >
+            <X className="w-4 h-4" />
+          </button>
+        </div>
       </div>
       
       {/* New Pipeline Button */}
