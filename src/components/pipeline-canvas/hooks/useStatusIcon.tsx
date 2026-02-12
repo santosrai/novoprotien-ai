@@ -8,10 +8,17 @@ import { NodeStatus } from '../types/index';
 export const useStatusIcon = (
   status: NodeStatus,
   isCompleted: boolean,
-  resultMetadata?: Record<string, any>
+  resultMetadata?: Record<string, any>,
+  error?: string
 ): React.ReactNode => {
   return useMemo(() => {
-    // Always show checkmark if node has been executed (has result_metadata)
+    // Error status or error message always takes precedence - show red X
+    // (error can persist when status is reset on pipeline load/reload)
+    if (status === 'error' || error) {
+      return <XCircle className="w-4 h-4 text-red-500" />;
+    }
+
+    // Show checkmark if node has been executed successfully (has result_metadata)
     if (isCompleted) {
       return <CheckCircle2 className="w-4 h-4 text-green-500" />;
     }
@@ -24,8 +31,6 @@ export const useStatusIcon = (
             <div className="absolute inset-0 bg-blue-400/30 rounded-full animate-ping" />
           </div>
         );
-      case 'error':
-        return <XCircle className="w-4 h-4 text-red-500" />;
       default:
         // Show checkmark if node has result_metadata (completed previously, even if status was reset)
         if (resultMetadata && Object.keys(resultMetadata).length > 0) {
@@ -33,5 +38,5 @@ export const useStatusIcon = (
         }
         return null;
     }
-  }, [status, isCompleted, resultMetadata]);
+  }, [status, isCompleted, resultMetadata, error]);
 };

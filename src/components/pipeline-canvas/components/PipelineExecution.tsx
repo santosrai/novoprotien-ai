@@ -1,5 +1,5 @@
 import React, { useEffect } from 'react';
-import { usePipelineStore } from '../store/pipelineStore';
+import { usePipelineStore, ExecutionLogEntry } from '../store/pipelineStore';
 import { usePipelineContext } from '../context/PipelineContext';
 import { Loader2, CheckCircle2, XCircle, AlertCircle } from 'lucide-react';
 import { executeNode } from '../utils/executionEngine';
@@ -44,6 +44,31 @@ function sanitizeFileData(fileData: any): any {
 interface ApiClient {
   post: (endpoint: string, data: any, config?: { headers?: Record<string, string>; method?: string }) => Promise<any>;
   get: (endpoint: string, config?: { headers?: Record<string, string> }) => Promise<any>;
+}
+
+/** Serialize ExecutionLogEntry for API (Dates → ISO strings) */
+function serializeLogForApi(log: ExecutionLogEntry): Record<string, unknown> {
+  const out: Record<string, unknown> = { ...log };
+  if (log.startedAt) out.startedAt = log.startedAt instanceof Date ? log.startedAt.toISOString() : log.startedAt;
+  if (log.completedAt) out.completedAt = log.completedAt instanceof Date ? log.completedAt.toISOString() : log.completedAt;
+  return out;
+}
+
+/** Persist execution logs to backend so they survive page refresh */
+async function persistExecutionToBackend(
+  apiClient: ApiClient,
+  pipelineId: string,
+  execution: { status: string; logs: ExecutionLogEntry[] },
+): Promise<void> {
+  try {
+    const executionLog = execution.logs.map(serializeLogForApi);
+    await apiClient.post(`/pipelines/${pipelineId}/executions`, {
+      execution_log: executionLog,
+      status: execution.status,
+    });
+  } catch (err) {
+    console.warn('[PipelineExecution] Failed to persist execution logs:', err);
+  }
 }
 
 interface PipelineExecutionProps {
@@ -124,6 +149,14 @@ export const PipelineExecution: React.FC<PipelineExecutionProps> = ({ apiClient 
         if (node.config) {
           inputDataForLog.config = node.config;
         }
+        // For input nodes, enrich with file info so logs show meaningful data
+        if (node.type === 'input_node' && node.config) {
+          inputDataForLog.file = {
+            filename: node.config.filename,
+            file_id: node.config.file_id,
+            file_url: node.config.file_url,
+          };
+        }
 
         try {
           updateNodeStatus(nodeId, 'running');
@@ -177,10 +210,10 @@ export const PipelineExecution: React.FC<PipelineExecutionProps> = ({ apiClient 
             try {
               const resultMetadata: Record<string, any> = {};
               
-              // For input nodes, store all file metadata
-              if (node.type === 'input_node' && result.data) {
+              // For input nodes, store all file metadata (result is the file data directly from file_check)
+              if (node.type === 'input_node' && result && typeof result === 'object') {
                 // Sanitize file data to ensure file_url is not a blob URL
-                const sanitizedData = sanitizeFileData(result.data);
+                const sanitizedData = sanitizeFileData(result);
                 
                 // Store the full file data including all metadata
                 resultMetadata.file_info = sanitizedData;
@@ -374,6 +407,8 @@ export const PipelineExecution: React.FC<PipelineExecutionProps> = ({ apiClient 
           const duration = startTime ? endTime - new Date(startTime).getTime() : 0;
 
           // Update node status first to sync with execution panel
+          // Clear result_metadata on error so stale success data doesn't cause display confusion
+          usePipelineStore.getState().updateNode(nodeId, { result_metadata: undefined });
           updateNodeStatus(nodeId, 'error', error.message || 'Execution failed');
           
           // Emit pipeline node error event
@@ -430,10 +465,11 @@ export const PipelineExecution: React.FC<PipelineExecutionProps> = ({ apiClient 
         // Mark execution as completed - update currentExecution to keep logs visible
         const state = usePipelineStore.getState();
         if (state.currentExecution) {
+          const hasErrors = state.currentExecution.logs.some((l) => l.status === 'error');
           const completedExecution = {
             ...state.currentExecution,
             completedAt: new Date(),
-            status: 'completed' as const,
+            status: (hasErrors ? 'failed' : 'completed') as const,
           };
           // Update execution history and keep currentExecution for viewing results
           usePipelineStore.setState({
@@ -441,6 +477,10 @@ export const PipelineExecution: React.FC<PipelineExecutionProps> = ({ apiClient 
             currentExecution: completedExecution, // Keep currentExecution so users can view results
             isExecuting: false,
           });
+          // Persist execution logs to backend for post-refresh viewing
+          if (apiClient && state.currentPipeline) {
+            persistExecutionToBackend(apiClient, state.currentPipeline.id, completedExecution);
+          }
         } else {
           usePipelineStore.getState().stopExecution();
         }

@@ -6,8 +6,15 @@ import { NodeStatus } from '../types/index';
 export const getStatusClasses = (
   status: NodeStatus,
   isExecuting: boolean,
-  hasResultMetadata?: boolean
+  hasResultMetadata?: boolean,
+  error?: string
 ): string => {
+  // Error status or error message always takes precedence - show red border
+  // (error can persist when status is reset on pipeline load/reload)
+  if (status === 'error' || error) {
+    return 'border-red-500 shadow-[0_0_10px_rgba(239,68,68,0.3)]';
+  }
+
   // If node has result_metadata, treat it as completed even if status is not explicitly set
   if (hasResultMetadata) {
     return 'border-green-500 shadow-[0_0_10px_rgba(34,197,94,0.3)]';
@@ -19,8 +26,6 @@ export const getStatusClasses = (
     case 'success':
     case 'completed':
       return 'border-green-500 shadow-[0_0_10px_rgba(34,197,94,0.3)]';
-    case 'error':
-      return 'border-red-500 shadow-[0_0_10px_rgba(239,68,68,0.3)]';
     case 'pending':
       return isExecuting ? 'border-gray-300 opacity-60' : 'border-gray-300';
     default:

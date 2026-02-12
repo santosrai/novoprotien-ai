@@ -2,7 +2,7 @@ import React, { createContext, useContext, ReactNode, useEffect, useMemo } from 
 import { PipelineDependencies } from '../types/dependencies';
 import { PipelinePersistenceAdapter, NodeExecutionAdapter } from '../types/adapters';
 import { PipelineConfig } from '../types/config';
-import { setPipelineDependencies, setPipelineAdapters, setPipelineConfig } from '../store/pipelineStore';
+import { setPipelineDependencies, setPipelineAdapters, setPipelineConfig, restoreExecutionLogsIfNeeded } from '../store/pipelineStore';
 
 const SESSION_STORAGE_KEY = 'pipeline-canvas-session-id';
 
@@ -144,6 +144,11 @@ export const PipelineProvider: React.FC<PipelineProviderProps> = ({
     // Set configuration if provided
     if (config) {
       setPipelineConfig(config);
+    }
+    // Restore execution logs when deps become available (fixes race on page refresh:
+    // store rehydrates before Provider sets apiClient, so onRehydrateStorage skips fetch)
+    if (apiClient) {
+      restoreExecutionLogsIfNeeded();
     }
     // Pipelines are not synced on mount - use persisted state on load.
     // Sync happens after sign-in (authStore) or when user clicks Refresh in pipeline sidebar.

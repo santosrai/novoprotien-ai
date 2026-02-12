@@ -86,16 +86,18 @@ const CompletionBadge: React.FC = () => (
 const NodeIconBadge: React.FC<{
   status: NodeStatus;
   isCompleted: boolean;
+  hasError?: boolean;
   defaultBg: string;
   defaultColor: string;
   children: React.ReactNode;
-}> = ({ status, isCompleted, defaultBg, defaultColor, children }) => {
+}> = ({ status, isCompleted, hasError, defaultBg, defaultColor, children }) => {
+  const isError = status === 'error' || hasError;
   const bgClass =
     status === 'running'
       ? 'bg-blue-100'
       : isCompleted
         ? 'bg-green-100'
-        : status === 'error'
+        : isError
           ? 'bg-red-100'
           : defaultBg;
 
@@ -104,7 +106,7 @@ const NodeIconBadge: React.FC<{
       ? 'text-blue-600'
       : isCompleted
         ? 'text-green-600'
-        : status === 'error'
+        : isError
           ? 'text-red-600'
           : defaultColor;
 
@@ -158,8 +160,8 @@ export const BaseNode: React.FC<BaseNodeProps> = ({
   const status = (data.status as NodeStatus) || 'idle';
   const isExecuting = data.isExecuting || false;
   const isCompleted = useNodeCompletionStatus(data);
-  const statusIcon = useStatusIcon(status, isCompleted, data.result_metadata);
-  const statusClasses = getStatusClasses(status, isExecuting, !!data.result_metadata);
+  const statusIcon = useStatusIcon(status, isCompleted, data.result_metadata, data.error);
+  const statusClasses = getStatusClasses(status, isExecuting, !!data.result_metadata, data.error);
 
   const handleClick = (e: React.MouseEvent) => {
     if (onClick) {
@@ -197,6 +199,7 @@ export const BaseNode: React.FC<BaseNodeProps> = ({
             <NodeIconBadge
               status={status}
               isCompleted={isCompleted}
+              hasError={!!data.error}
               defaultBg={defaultIconBg}
               defaultColor={defaultIconColor}
             >

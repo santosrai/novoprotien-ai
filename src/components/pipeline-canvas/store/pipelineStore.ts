@@ -160,6 +160,41 @@ export const setPipelineConfig = (config: PipelineConfig) => {
 const getDependencies = () => globalDependencies;
 
 /**
+ * Restore execution logs for the current pipeline from backend.
+ * Call when dependencies become available (e.g. after Provider mount) to fix
+ * the race where onRehydrateStorage runs before apiClient is set.
+ */
+export const restoreExecutionLogsIfNeeded = async (): Promise<void> => {
+  const deps = getDependencies();
+  if (!deps.apiClient) return;
+  const { currentPipeline, currentExecution } = usePipelineStore.getState();
+  if (!currentPipeline?.id || currentExecution) return;
+  try {
+    const res = await deps.apiClient.get(`/pipelines/${currentPipeline.id}/executions`);
+    const executions = res.data?.executions || [];
+    if (executions.length > 0) {
+      const latest = executions[0];
+      const logs: ExecutionLogEntry[] = (latest.execution_log || []).map((l: any) => ({
+        ...l,
+        startedAt: l.startedAt ? new Date(l.startedAt) : undefined,
+        completedAt: l.completedAt ? new Date(l.completedAt) : undefined,
+      }));
+      usePipelineStore.setState({
+        currentExecution: {
+          id: latest.id,
+          startedAt: latest.started_at ? new Date(latest.started_at) : new Date(),
+          completedAt: latest.completed_at ? new Date(latest.completed_at) : undefined,
+          status: latest.status || 'completed',
+          logs,
+        },
+      });
+    }
+  } catch {
+    // Pipeline may not exist in backend yet
+  }
+};
+
+/**
  * Helper to get user ID from dependencies
  * Uses dependency injection set via setPipelineDependencies()
  * When used in parent app, authState should be provided via PipelineProvider
@@ -639,7 +674,34 @@ export const usePipelineStore = create<PipelineState>()(
             set({ 
               currentPipeline: { ...backendPipeline },
               lastSavedAt: backendPipeline.updatedAt || new Date(),
+              currentExecution: null, // Clear stale execution; restore from backend if available
             });
+            // Fetch and restore latest execution logs for post-refresh viewing
+            if (effectiveDeps.apiClient) {
+              try {
+                const res = await effectiveDeps.apiClient.get(`/pipelines/${pipelineId}/executions`);
+                const executions = res.data?.executions || [];
+                if (executions.length > 0) {
+                  const latest = executions[0];
+                  const logs: ExecutionLogEntry[] = (latest.execution_log || []).map((l: any) => ({
+                    ...l,
+                    startedAt: l.startedAt ? new Date(l.startedAt) : undefined,
+                    completedAt: l.completedAt ? new Date(l.completedAt) : undefined,
+                  }));
+                  set({
+                    currentExecution: {
+                      id: latest.id,
+                      startedAt: latest.started_at ? new Date(latest.started_at) : new Date(),
+                      completedAt: latest.completed_at ? new Date(latest.completed_at) : undefined,
+                      status: latest.status || 'completed',
+                      logs,
+                    },
+                  });
+                }
+              } catch (err) {
+                console.warn('[PipelineStore] Failed to fetch execution logs:', err);
+              }
+            }
             return;
           } catch (error: any) {
             console.warn('Failed to load pipeline from backend, using local:', error);
@@ -658,7 +720,34 @@ export const usePipelineStore = create<PipelineState>()(
           set({ 
             currentPipeline: { ...pipeline },
             lastSavedAt: isNaN(updatedAt.getTime()) ? new Date() : updatedAt,
+            currentExecution: null, // Clear stale execution; restore from backend if available
           });
+          // Try to fetch execution logs from backend (pipeline may have been synced)
+          if (effectiveDeps.apiClient) {
+            try {
+              const res = await effectiveDeps.apiClient.get(`/pipelines/${pipelineId}/executions`);
+              const executions = res.data?.executions || [];
+              if (executions.length > 0) {
+                const latest = executions[0];
+                const logs: ExecutionLogEntry[] = (latest.execution_log || []).map((l: any) => ({
+                  ...l,
+                  startedAt: l.startedAt ? new Date(l.startedAt) : undefined,
+                  completedAt: l.completedAt ? new Date(l.completedAt) : undefined,
+                }));
+                set({
+                  currentExecution: {
+                    id: latest.id,
+                    startedAt: latest.started_at ? new Date(latest.started_at) : new Date(),
+                    completedAt: latest.completed_at ? new Date(latest.completed_at) : undefined,
+                    status: latest.status || 'completed',
+                    logs,
+                  },
+                });
+              }
+            } catch {
+              // Ignore - pipeline may not exist in backend
+            }
+          }
         }
       },
       
@@ -797,12 +886,31 @@ export const usePipelineStore = create<PipelineState>()(
         // Topological sort for execution order
         const executionOrder = topologicalSort(currentPipeline.nodes, currentPipeline.edges);
         
-        // Create new execution session
+        // Pre-populate logs for all nodes so execution panel shows complete picture
+        // and skipped nodes (already completed) still have log entries
+        const initialLogs: ExecutionLogEntry[] = executionOrder.map((nodeId) => {
+          const node = currentPipeline.nodes.find((n) => n.id === nodeId);
+          const isAlreadyCompleted = node && (node.status === 'success' || node.status === 'completed');
+          const output = node?.result_metadata?.data ?? node?.result_metadata?.file_info ?? node?.result_metadata;
+          return {
+            nodeId,
+            nodeLabel: node?.label || 'Unknown',
+            nodeType: node?.type || 'unknown',
+            status: (isAlreadyCompleted ? node?.status : 'pending') as NodeStatus,
+            startedAt: new Date(),
+            ...(isAlreadyCompleted && output && {
+              output: typeof output === 'object' ? output : { value: output },
+              input: node?.config ? { config: node.config, ...(node.type === 'input_node' && { file: { filename: node.config.filename, file_id: node.config.file_id } }) } : undefined,
+            }),
+          };
+        });
+        
+        // Create new execution session with pre-populated logs
         const newExecution: ExecutionSession = {
           id: `exec_${Date.now()}`,
           startedAt: new Date(),
           status: 'running',
-          logs: [],
+          logs: initialLogs,
         };
         
         set({
@@ -912,6 +1020,19 @@ export const usePipelineStore = create<PipelineState>()(
               status: 'completed',
             },
           });
+          // Persist execution logs to backend for post-refresh viewing
+          const deps = getDependencies();
+          if (deps.apiClient && currentPipeline) {
+            const logs = completedExecution.logs.map((log) => ({
+              ...log,
+              startedAt: log.startedAt instanceof Date ? log.startedAt.toISOString() : log.startedAt,
+              completedAt: log.completedAt instanceof Date ? log.completedAt.toISOString() : log.completedAt,
+            }));
+            deps.apiClient.post(`/pipelines/${currentPipeline.id}/executions`, {
+              execution_log: logs,
+              status: 'stopped',
+            }).catch((err) => console.warn('[PipelineStore] Failed to persist execution logs:', err));
+          }
         }
         
         set({ isExecuting: false });
@@ -1126,6 +1247,32 @@ export const usePipelineStore = create<PipelineState>()(
                 state.lastSavedAt = isNaN(updatedAt.getTime()) ? new Date() : updatedAt;
               } else {
                 state.lastSavedAt = new Date();
+              }
+              // Fetch execution logs for the restored pipeline (survives page refresh)
+              const { apiClient } = getDependencies();
+              if (parsed.id && apiClient) {
+                apiClient.get(`/pipelines/${parsed.id}/executions`)
+                  .then((res) => {
+                    const executions = res.data?.executions || [];
+                    if (executions.length > 0) {
+                      const latest = executions[0];
+                      const logs: ExecutionLogEntry[] = (latest.execution_log || []).map((l: any) => ({
+                        ...l,
+                        startedAt: l.startedAt ? new Date(l.startedAt) : undefined,
+                        completedAt: l.completedAt ? new Date(l.completedAt) : undefined,
+                      }));
+                      usePipelineStore.setState({
+                        currentExecution: {
+                          id: latest.id,
+                          startedAt: latest.started_at ? new Date(latest.started_at) : new Date(),
+                          completedAt: latest.completed_at ? new Date(latest.completed_at) : undefined,
+                          status: latest.status || 'completed',
+                          logs,
+                        },
+                      });
+                    }
+                  })
+                  .catch(() => {});
               }
             }
             } catch (error) {

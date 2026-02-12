@@ -201,7 +201,7 @@ const LogDetailsPanel: React.FC<LogDetailsPanelProps> = ({ log }) => {
         </button>
         <div className="mt-3 bg-[hsl(var(--pc-muted)/0.3)] rounded-lg p-3 text-xs font-mono text-[hsl(var(--pc-text-secondary))] overflow-x-auto border border-gray-200">
           <pre className="whitespace-pre-wrap">
-            {JSON.stringify(log.input || { query: { message: "..." } }, null, 2)}
+            {JSON.stringify(log.input ?? {}, null, 2) || '{}'}
           </pre>
         </div>
       </div>
@@ -216,7 +216,7 @@ const LogDetailsPanel: React.FC<LogDetailsPanelProps> = ({ log }) => {
           <pre className="whitespace-pre-wrap">
             {log.error 
               ? <span className="text-red-400">{JSON.stringify({ error: log.error }, null, 2)}</span>
-              : JSON.stringify(log.output || { message: "..." }, null, 2)
+              : (JSON.stringify(log.output ?? {}, null, 2) || '{}')
             }
           </pre>
         </div>
