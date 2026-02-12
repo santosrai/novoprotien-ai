@@ -43,35 +43,52 @@ export interface ExecutionSession {
   logs: ExecutionLogEntry[];
 }
 
+// File reference from pipeline_node_files table
+export interface NodeFileRef {
+  id: string;
+  pipeline_id: string;
+  node_id: string;
+  execution_id?: string | null;
+  node_execution_id?: string | null;
+  file_id?: string | null;
+  role: 'input' | 'output' | 'template' | 'reference';
+  file_type?: string;
+  filename?: string;
+  file_url?: string;
+  file_path?: string;
+  metadata?: Record<string, any> | null;
+  created_at?: string;
+}
+
 interface PipelineState {
   // Current active pipeline
   currentPipeline: Pipeline | null;
-  
+
   // Saved pipelines library
   savedPipelines: Pipeline[];
-  
+
   // Ghost blueprint (from agent)
   ghostBlueprint: PipelineBlueprint | null;
-  
+
   // Execution state
   isExecuting: boolean;
   executionOrder: string[]; // Topologically sorted node IDs
-  
+
   // Execution logs and history
   currentExecution: ExecutionSession | null;
   executionHistory: ExecutionSession[];
-  
+
   // View mode
   viewMode: 'editor' | 'executions';
   selectedLogNodeId: string | null;
-  
+
   // Sidebar state
   isPipelinesSidebarCollapsed: boolean;
-  
+
   // Auto-save state
   lastSavedAt: Date | null;
   isSaving: boolean;
-  
+
   // Actions
   setCurrentPipeline: (pipeline: Pipeline | null) => void;
   setGhostBlueprint: (blueprint: PipelineBlueprint | null) => void;
@@ -92,18 +109,23 @@ interface PipelineState {
   stopExecution: () => void;
   updateNodeStatus: (nodeId: string, status: NodeStatus, error?: string) => void;
   clearPipeline: () => void;
-  
+
   // View mode actions
   setViewMode: (mode: 'editor' | 'executions') => void;
   setSelectedLogNodeId: (nodeId: string | null) => void;
-  
+
   // Sidebar actions
   setPipelinesSidebarCollapsed: (collapsed: boolean) => void;
   togglePipelinesSidebar: () => void;
-  
+
   // Execution log actions
   addExecutionLog: (entry: Omit<ExecutionLogEntry, 'startedAt'>) => void;
   updateExecutionLog: (nodeId: string, updates: Partial<ExecutionLogEntry>) => void;
+
+  // Granular backend operations (normalized schema)
+  updateNodeOnBackend: (nodeId: string, updates: Partial<PipelineNode>) => Promise<void>;
+  getNodeFiles: (nodeId: string) => Promise<NodeFileRef[]>;
+  getPipelineFiles: () => Promise<NodeFileRef[]>;
 }
 
 // Module-level dependency store (set by PipelineProvider)
@@ -1164,19 +1186,85 @@ export const usePipelineStore = create<PipelineState>()(
       updateExecutionLog: (nodeId, updates) => {
         const { currentExecution } = get();
         if (!currentExecution) return;
-        
+
         const logIndex = currentExecution.logs.findIndex(l => l.nodeId === nodeId);
         if (logIndex === -1) return;
-        
+
         const updatedLogs = [...currentExecution.logs];
         updatedLogs[logIndex] = { ...updatedLogs[logIndex], ...updates };
-        
+
         set({
           currentExecution: {
             ...currentExecution,
             logs: updatedLogs,
           },
         });
+      },
+
+      updateNodeOnBackend: async (nodeId, updates) => {
+        const { currentPipeline } = get();
+        if (!currentPipeline) return;
+
+        const deps = getDependencies();
+        const apiClient = deps.apiClient;
+        if (!apiClient?.patch) {
+          console.warn('[PipelineStore] updateNodeOnBackend: No apiClient.patch available');
+          return;
+        }
+
+        const patchBody: Record<string, any> = {};
+        if (updates.config !== undefined) patchBody.config = updates.config;
+        if (updates.inputs !== undefined) patchBody.inputs = updates.inputs;
+        if (updates.status !== undefined) patchBody.status = updates.status;
+        if (updates.result_metadata !== undefined) patchBody.result_metadata = updates.result_metadata;
+        if (updates.error !== undefined) patchBody.error = updates.error;
+        if (updates.label !== undefined) patchBody.label = updates.label;
+        if (updates.position !== undefined) patchBody.position = updates.position;
+
+        try {
+          await apiClient.patch(
+            `/pipelines/${currentPipeline.id}/nodes/${nodeId}`,
+            patchBody,
+          );
+        } catch (error) {
+          console.error('[PipelineStore] updateNodeOnBackend failed:', error);
+        }
+      },
+
+      getNodeFiles: async (nodeId) => {
+        const { currentPipeline } = get();
+        if (!currentPipeline) return [];
+
+        const deps = getDependencies();
+        if (!deps.apiClient) return [];
+
+        try {
+          const res = await deps.apiClient.get(
+            `/pipelines/${currentPipeline.id}/nodes/${nodeId}/files`,
+          );
+          return (res.data?.files || []) as NodeFileRef[];
+        } catch (error) {
+          console.error('[PipelineStore] getNodeFiles failed:', error);
+          return [];
+        }
+      },
+
+      getPipelineFiles: async () => {
+        const { currentPipeline } = get();
+        if (!currentPipeline) return [];
+
+        const deps = getDependencies();
+        if (!deps.apiClient) return [];
+
+        try {
+          const res = await deps.apiClient.get(
+            `/pipelines/${currentPipeline.id}/files`,
+          );
+          return (res.data?.files || []) as NodeFileRef[];
+        } catch (error) {
+          console.error('[PipelineStore] getPipelineFiles failed:', error);
+          return [];
+        }
       },
     }),
     {

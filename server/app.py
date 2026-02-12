@@ -419,18 +419,47 @@ async def route(request: Request, user: Dict[str, Any] = Depends(get_current_use
                             (pipeline_id, user["id"]),
                         ).fetchone()
                         if row:
-                            # Parse pipeline JSON
-                            pipeline_data = json.loads(row["pipeline_json"])
-                            pipeline_data["id"] = row["id"]
-                            pipeline_data["name"] = row["name"]
-                            pipeline_data["description"] = row["description"]
-                            pipeline_data["status"] = row["status"]
-                            pipeline_data["created_at"] = row["created_at"]
-                            pipeline_data["updated_at"] = row["updated_at"]
+                            # Assemble pipeline from normalized tables
+                            node_rows = conn.execute(
+                                "SELECT * FROM pipeline_nodes WHERE pipeline_id = ? ORDER BY created_at",
+                                (pipeline_id,),
+                            ).fetchall()
+                            edge_rows = conn.execute(
+                                "SELECT * FROM pipeline_edges WHERE pipeline_id = ?",
+                                (pipeline_id,),
+                            ).fetchall()
+                            nodes = []
+                            for n in node_rows:
+                                nd = dict(n)
+                                nodes.append({
+                                    "id": nd["id"],
+                                    "type": nd["type"],
+                                    "label": nd["label"],
+                                    "config": json.loads(nd["config"]) if nd.get("config") else {},
+                                    "inputs": json.loads(nd["inputs"]) if nd.get("inputs") else {},
+                                    "status": nd["status"],
+                                    "result_metadata": json.loads(nd["result_metadata"]) if nd.get("result_metadata") else None,
+                                    "error": nd.get("error"),
+                                    "position": {"x": nd.get("position_x", 0), "y": nd.get("position_y", 0)},
+                                })
+                            edges = [
+                                {"source": dict(e)["source_node_id"], "target": dict(e)["target_node_id"]}
+                                for e in edge_rows
+                            ]
+                            pipeline_data = {
+                                "id": row["id"],
+                                "name": row["name"],
+                                "description": row["description"],
+                                "status": row["status"],
+                                "created_at": row["created_at"],
+                                "updated_at": row["updated_at"],
+                                "nodes": nodes,
+                                "edges": edges,
+                            }
                             log_line("agent_route:pipeline_fetched", {
                                 "pipeline_id": pipeline_id,
                                 "pipeline_name": pipeline_data.get("name"),
-                                "node_count": len(pipeline_data.get("nodes", [])),
+                                "node_count": len(nodes),
                                 "has_user": True,
                             })
                         else:

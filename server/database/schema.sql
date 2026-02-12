@@ -186,41 +186,208 @@ CREATE TABLE IF NOT EXISTS session_files (
 CREATE INDEX idx_session_files_session_id ON session_files(session_id);
 CREATE INDEX idx_session_files_file_id ON session_files(file_id);
 
--- Pipeline storage (migrate from localStorage)
+-- Pipeline storage (normalized schema)
 CREATE TABLE IF NOT EXISTS pipelines (
     id TEXT PRIMARY KEY,
     user_id TEXT NOT NULL,
-    message_id TEXT REFERENCES chat_messages(id), -- Links to message that created/triggered pipeline
-    conversation_id TEXT REFERENCES conversations(id), -- For gallery view
-    name TEXT,
+    message_id TEXT REFERENCES chat_messages(id) ON DELETE SET NULL,
+    conversation_id TEXT REFERENCES conversations(id) ON DELETE SET NULL,
+    name TEXT NOT NULL DEFAULT 'Untitled Pipeline',
     description TEXT,
-    pipeline_json TEXT NOT NULL, -- Full Pipeline definition as JSON
-    status TEXT DEFAULT 'draft', -- 'draft', 'running', 'completed', 'failed'
+    status TEXT NOT NULL DEFAULT 'draft'
+        CHECK (status IN ('draft', 'running', 'completed', 'failed')),
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
 );
 
-CREATE INDEX idx_pipelines_user_id ON pipelines(user_id);
-CREATE INDEX idx_pipelines_message_id ON pipelines(message_id);
-CREATE INDEX idx_pipelines_conversation_id ON pipelines(conversation_id);
-CREATE INDEX idx_pipelines_status ON pipelines(status);
+CREATE INDEX IF NOT EXISTS idx_pipelines_user_id ON pipelines(user_id);
+CREATE INDEX IF NOT EXISTS idx_pipelines_message_id ON pipelines(message_id);
+CREATE INDEX IF NOT EXISTS idx_pipelines_conversation_id ON pipelines(conversation_id);
+CREATE INDEX IF NOT EXISTS idx_pipelines_status ON pipelines(status);
+CREATE INDEX IF NOT EXISTS idx_pipelines_updated_at ON pipelines(updated_at);
 
--- Pipeline executions
+-- Pipeline nodes (individual node records)
+CREATE TABLE IF NOT EXISTS pipeline_nodes (
+    id TEXT NOT NULL,
+    pipeline_id TEXT NOT NULL,
+    type TEXT NOT NULL
+        CHECK (type IN (
+            'input_node', 'rfdiffusion_node', 'proteinmpnn_node',
+            'alphafold_node', 'openfold2_node', 'message_input_node',
+            'http_request_node'
+        )),
+    label TEXT NOT NULL,
+    config TEXT NOT NULL DEFAULT '{}',         -- JSON: node-specific configuration
+    inputs TEXT NOT NULL DEFAULT '{}',         -- JSON: map of input handle IDs to source node IDs
+    status TEXT NOT NULL DEFAULT 'idle'
+        CHECK (status IN ('idle', 'running', 'success', 'completed', 'error', 'pending')),
+    result_metadata TEXT,                      -- JSON: execution results
+    error TEXT,
+    position_x REAL DEFAULT 0,
+    position_y REAL DEFAULT 0,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (id, pipeline_id),
+    FOREIGN KEY (pipeline_id) REFERENCES pipelines(id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_pipeline_nodes_pipeline_id ON pipeline_nodes(pipeline_id);
+CREATE INDEX IF NOT EXISTS idx_pipeline_nodes_type ON pipeline_nodes(type);
+CREATE INDEX IF NOT EXISTS idx_pipeline_nodes_status ON pipeline_nodes(status);
+
+-- Pipeline edges (node-to-node connections)
+CREATE TABLE IF NOT EXISTS pipeline_edges (
+    id TEXT PRIMARY KEY,
+    pipeline_id TEXT NOT NULL,
+    source_node_id TEXT NOT NULL,
+    target_node_id TEXT NOT NULL,
+    source_handle TEXT DEFAULT 'source',
+    target_handle TEXT DEFAULT 'target',
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (pipeline_id) REFERENCES pipelines(id) ON DELETE CASCADE,
+    FOREIGN KEY (source_node_id, pipeline_id) REFERENCES pipeline_nodes(id, pipeline_id) ON DELETE CASCADE,
+    FOREIGN KEY (target_node_id, pipeline_id) REFERENCES pipeline_nodes(id, pipeline_id) ON DELETE CASCADE,
+    UNIQUE (pipeline_id, source_node_id, target_node_id, source_handle, target_handle)
+);
+
+CREATE INDEX IF NOT EXISTS idx_pipeline_edges_pipeline_id ON pipeline_edges(pipeline_id);
+CREATE INDEX IF NOT EXISTS idx_pipeline_edges_source ON pipeline_edges(source_node_id);
+CREATE INDEX IF NOT EXISTS idx_pipeline_edges_target ON pipeline_edges(target_node_id);
+
+-- Pipeline executions (execution sessions)
 CREATE TABLE IF NOT EXISTS pipeline_executions (
     id TEXT PRIMARY KEY,
     pipeline_id TEXT NOT NULL,
     user_id TEXT NOT NULL,
-    status TEXT DEFAULT 'running', -- 'running', 'completed', 'failed', 'cancelled'
+    status TEXT NOT NULL DEFAULT 'running'
+        CHECK (status IN ('running', 'completed', 'failed', 'stopped', 'cancelled')),
+    trigger_type TEXT DEFAULT 'manual'
+        CHECK (trigger_type IN ('manual', 'rerun', 'single_node', 'scheduled')),
     started_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     completed_at TIMESTAMP,
-    execution_log TEXT, -- JSON array of ExecutionLogEntry
+    total_duration_ms INTEGER,
+    error_summary TEXT,
+    metadata TEXT,                             -- JSON: additional execution metadata
     FOREIGN KEY (pipeline_id) REFERENCES pipelines(id) ON DELETE CASCADE,
     FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
 );
 
-CREATE INDEX idx_pipeline_executions_user_id ON pipeline_executions(user_id);
-CREATE INDEX idx_pipeline_executions_pipeline_id ON pipeline_executions(pipeline_id);
+CREATE INDEX IF NOT EXISTS idx_pipeline_executions_pipeline_id ON pipeline_executions(pipeline_id);
+CREATE INDEX IF NOT EXISTS idx_pipeline_executions_user_id ON pipeline_executions(user_id);
+CREATE INDEX IF NOT EXISTS idx_pipeline_executions_status ON pipeline_executions(status);
+CREATE INDEX IF NOT EXISTS idx_pipeline_executions_started_at ON pipeline_executions(started_at);
+
+-- Pipeline node executions (per-node execution results)
+CREATE TABLE IF NOT EXISTS pipeline_node_executions (
+    id TEXT PRIMARY KEY,
+    execution_id TEXT NOT NULL,
+    node_id TEXT NOT NULL,
+    pipeline_id TEXT NOT NULL,
+    node_label TEXT NOT NULL,
+    node_type TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'pending'
+        CHECK (status IN ('pending', 'running', 'success', 'completed', 'error', 'skipped')),
+    execution_order INTEGER,
+    started_at TIMESTAMP,
+    completed_at TIMESTAMP,
+    duration_ms INTEGER,
+    error TEXT,
+    input_data TEXT,                           -- JSON: config, file refs, upstream outputs
+    output_data TEXT,                          -- JSON: execution result (file refs only, no raw PDB)
+    request_method TEXT,
+    request_url TEXT,
+    request_headers TEXT,                      -- JSON
+    request_body TEXT,                         -- JSON
+    response_status INTEGER,
+    response_status_text TEXT,
+    response_headers TEXT,                     -- JSON
+    response_data TEXT,                        -- JSON (file refs only, raw PDB stays on disk)
+    FOREIGN KEY (execution_id) REFERENCES pipeline_executions(id) ON DELETE CASCADE,
+    FOREIGN KEY (node_id, pipeline_id) REFERENCES pipeline_nodes(id, pipeline_id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_pne_execution_id ON pipeline_node_executions(execution_id);
+CREATE INDEX IF NOT EXISTS idx_pne_node_id ON pipeline_node_executions(node_id);
+CREATE INDEX IF NOT EXISTS idx_pne_status ON pipeline_node_executions(status);
+CREATE INDEX IF NOT EXISTS idx_pne_execution_order ON pipeline_node_executions(execution_id, execution_order);
+
+-- Pipeline node files (file references per node)
+CREATE TABLE IF NOT EXISTS pipeline_node_files (
+    id TEXT PRIMARY KEY,
+    pipeline_id TEXT NOT NULL,
+    node_id TEXT NOT NULL,
+    execution_id TEXT,
+    node_execution_id TEXT,
+    file_id TEXT REFERENCES user_files(id) ON DELETE SET NULL,
+    role TEXT NOT NULL
+        CHECK (role IN ('input', 'output', 'template', 'reference')),
+    file_type TEXT DEFAULT 'pdb',              -- 'pdb', 'sequence', 'a3m', 'hhr', 'json'
+    filename TEXT,
+    file_url TEXT,
+    file_path TEXT,
+    metadata TEXT,                             -- JSON: atoms, chains, residues, etc.
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (pipeline_id) REFERENCES pipelines(id) ON DELETE CASCADE,
+    FOREIGN KEY (node_id, pipeline_id) REFERENCES pipeline_nodes(id, pipeline_id) ON DELETE CASCADE,
+    FOREIGN KEY (execution_id) REFERENCES pipeline_executions(id) ON DELETE SET NULL,
+    FOREIGN KEY (node_execution_id) REFERENCES pipeline_node_executions(id) ON DELETE SET NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_pnf_pipeline_id ON pipeline_node_files(pipeline_id);
+CREATE INDEX IF NOT EXISTS idx_pnf_node_id ON pipeline_node_files(node_id);
+CREATE INDEX IF NOT EXISTS idx_pnf_execution_id ON pipeline_node_files(execution_id);
+CREATE INDEX IF NOT EXISTS idx_pnf_file_id ON pipeline_node_files(file_id);
+CREATE INDEX IF NOT EXISTS idx_pnf_role ON pipeline_node_files(role);
+
+-- Typed views for querying node-specific config fields
+CREATE VIEW IF NOT EXISTS v_input_nodes AS
+SELECT
+    pn.id, pn.pipeline_id, pn.label, pn.status,
+    json_extract(pn.config, '$.filename') AS filename,
+    json_extract(pn.config, '$.file_id') AS file_id,
+    json_extract(pn.config, '$.atoms') AS atoms,
+    json_extract(pn.config, '$.chains') AS chains,
+    json_extract(pn.config, '$.total_residues') AS total_residues,
+    json_extract(pn.config, '$.suggested_contigs') AS suggested_contigs,
+    pn.result_metadata, pn.error, pn.position_x, pn.position_y
+FROM pipeline_nodes pn WHERE pn.type = 'input_node';
+
+CREATE VIEW IF NOT EXISTS v_rfdiffusion_nodes AS
+SELECT
+    pn.id, pn.pipeline_id, pn.label, pn.status,
+    json_extract(pn.config, '$.design_mode') AS design_mode,
+    json_extract(pn.config, '$.contigs') AS contigs,
+    json_extract(pn.config, '$.hotspot_res') AS hotspot_res,
+    json_extract(pn.config, '$.diffusion_steps') AS diffusion_steps,
+    json_extract(pn.config, '$.num_designs') AS num_designs,
+    json_extract(pn.config, '$.pdb_id') AS pdb_id,
+    pn.result_metadata, pn.error, pn.position_x, pn.position_y
+FROM pipeline_nodes pn WHERE pn.type = 'rfdiffusion_node';
+
+CREATE VIEW IF NOT EXISTS v_proteinmpnn_nodes AS
+SELECT
+    pn.id, pn.pipeline_id, pn.label, pn.status,
+    json_extract(pn.config, '$.num_sequences') AS num_sequences,
+    json_extract(pn.config, '$.temperature') AS temperature,
+    pn.result_metadata, pn.error, pn.position_x, pn.position_y
+FROM pipeline_nodes pn WHERE pn.type = 'proteinmpnn_node';
+
+CREATE VIEW IF NOT EXISTS v_alphafold_nodes AS
+SELECT
+    pn.id, pn.pipeline_id, pn.label, pn.status,
+    json_extract(pn.config, '$.recycle_count') AS recycle_count,
+    json_extract(pn.config, '$.num_relax') AS num_relax,
+    pn.result_metadata, pn.error, pn.position_x, pn.position_y
+FROM pipeline_nodes pn WHERE pn.type = 'alphafold_node';
+
+CREATE VIEW IF NOT EXISTS v_openfold2_nodes AS
+SELECT
+    pn.id, pn.pipeline_id, pn.label, pn.status,
+    json_extract(pn.config, '$.sequence') AS sequence,
+    json_extract(pn.config, '$.relax_prediction') AS relax_prediction,
+    pn.result_metadata, pn.error, pn.position_x, pn.position_y
+FROM pipeline_nodes pn WHERE pn.type = 'openfold2_node';
 
 -- Session state (canvas/viewer state, model settings)
 CREATE TABLE IF NOT EXISTS session_state (
