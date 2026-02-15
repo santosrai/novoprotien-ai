@@ -96,14 +96,16 @@ def recreate_schema(conn: sqlite3.Connection) -> None:
     conn.executescript(schema_sql)
     print("  ✓ Schema executed successfully")
     
-    # Verify tables were created
+    # Verify tables were created (must match schema.sql)
     tables = get_all_tables(conn)
     expected_tables = [
         "users", "user_credits", "credit_transactions", "usage_history",
         "user_reports", "email_verification_tokens", "password_reset_tokens",
         "refresh_tokens", "user_files", "chat_sessions", "conversations",
-        "chat_messages", "session_files", "pipelines", "pipeline_executions",
-        "session_state", "three_d_canvases", "attachments"
+        "chat_messages", "session_files", "pipelines", "pipeline_nodes",
+        "pipeline_edges", "pipeline_executions", "pipeline_node_executions",
+        "pipeline_node_files", "session_state", "three_d_canvases", "attachments",
+        "admin_audit_log", "admin_preferences", "alphafold_jobs",
     ]
     
     print(f"  ✓ Created {len(tables)} tables")
@@ -113,7 +115,7 @@ def recreate_schema(conn: sqlite3.Connection) -> None:
     if missing:
         print(f"  ⚠ Warning: Missing tables: {missing}")
     else:
-        print("  ✓ All 18 expected tables are present\n")
+        print(f"  ✓ All {len(expected_tables)} expected tables are present\n")
 
 
 def insert_test_user(conn: sqlite3.Connection) -> str:
@@ -179,15 +181,17 @@ def insert_initial_credits(conn: sqlite3.Connection, user_id: str) -> None:
 
 
 def verify_schema(conn: sqlite3.Connection) -> bool:
-    """Verify that all expected tables exist."""
+    """Verify that all expected tables exist (must match schema.sql)."""
     print("Verifying database schema...")
     
     expected_tables = [
         "users", "user_credits", "credit_transactions", "usage_history",
         "user_reports", "email_verification_tokens", "password_reset_tokens",
         "refresh_tokens", "user_files", "chat_sessions", "conversations",
-        "chat_messages", "session_files", "pipelines", "pipeline_executions",
-        "session_state", "three_d_canvases", "attachments"
+        "chat_messages", "session_files", "pipelines", "pipeline_nodes",
+        "pipeline_edges", "pipeline_executions", "pipeline_node_executions",
+        "pipeline_node_files", "session_state", "three_d_canvases", "attachments",
+        "admin_audit_log", "admin_preferences", "alphafold_jobs",
     ]
     
     tables = get_all_tables(conn)
