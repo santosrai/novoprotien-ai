@@ -281,6 +281,7 @@ export const ChatPanel: React.FC = () => {
   const clearSelections = useAppStore(state => state.clearSelections);
   const { setGhostBlueprint } = usePipelineStore();
 
+
   // Chat history store
   const { createSession, activeSessionId, saveVisualizationCode, getVisualizationCode, getLastCanvasCodeFromSession, saveViewerVisibility, getViewerVisibility } = useChatHistoryStore();
   const isViewerVisible = useAppStore(state => state.isViewerVisible);
@@ -328,6 +329,7 @@ export const ChatPanel: React.FC = () => {
   const [showPipelineModal, setShowPipelineModal] = useState(false);
   const [showServerFilesDialog, setShowServerFilesDialog] = useState(false);
   const [selectedPipeline, setSelectedPipeline] = useState<{ id: string; name: string } | null>(null);
+  const displayAttachedPipeline = selectedPipeline;
   // Refs to track latest values for session switching (avoid stale closures)
   const currentCodeRef = useRef<string | null>(currentCode);
   const isViewerVisibleRef = useRef<boolean>(isViewerVisible);
@@ -1971,6 +1973,10 @@ try {
     // Get uploaded file info (use first uploaded file)
     const uploadedFileInfo = fileUploads.find(f => f.status === 'uploaded' && f.fileInfo)?.fileInfo || null;
 
+    // Pipeline context: only include pipeline if user explicitly selected one
+    const { currentPipeline } = usePipelineStore.getState();
+    const attachedPipeline = selectedPipeline;
+
     // Create user message immediately and add to chat
     const userMessage: Message = {
       id: uuidv4(),
@@ -1978,9 +1984,9 @@ try {
       type: 'user',
       timestamp: new Date(),
       uploadedFile: uploadedFileInfo || undefined,
-      pipeline: selectedPipeline ? {
-        id: selectedPipeline.id,
-        name: selectedPipeline.name,
+      pipeline: attachedPipeline ? {
+        id: attachedPipeline.id,
+        name: attachedPipeline.name,
         workflowDefinition: null, // Will be fetched by backend if needed
         status: 'draft' as const,
       } : undefined,
@@ -1994,9 +2000,12 @@ try {
 
     // Clear uploaded files and pipeline from state after message is sent
     setFileUploads([]);
-    const pipelineIdToSend = selectedPipeline?.id;
+
+    // Build pipeline payload for backend (only when user explicitly attached a pipeline)
+    const pipelineIdToSend = attachedPipeline?.id ?? undefined;
+    const pipelineDataToSend = undefined;
     setSelectedPipeline(null);
-    
+
     try {
       const text = messageInput;
       let code = '';
@@ -2035,7 +2044,8 @@ try {
           structureMetadata: structureMetadata || undefined,
           agentId: agentSettings.selectedAgentId || undefined, // Only send if manually selected
           model: agentSettings.selectedModel || undefined, // Only send if manually selected
-          pipeline_id: pipelineIdToSend || undefined, // Pass pipeline ID to backend
+          pipeline_id: pipelineIdToSend, // Pass pipeline ID to backend
+          ...(pipelineDataToSend && { pipeline_data: pipelineDataToSend }),
           langsmith: langsmithSettings?.enabled
             ? {
                 enabled: true,
@@ -2807,13 +2817,13 @@ try {
             </div>
           )}
 
-          {/* Selected pipeline display */}
-          {selectedPipeline && (
+          {/* Pipeline context: selected or current canvas (Including: [name]) */}
+          {displayAttachedPipeline && (
             <div className="flex items-center space-x-1.5 px-2 py-1 bg-purple-50 border border-purple-200 rounded-lg flex-wrap gap-1.5 mb-1.5">
               <div className="flex items-center space-x-1 px-2 py-1 rounded-md bg-purple-100 border border-purple-300">
                 <span className="text-purple-600 mr-1">⚙️</span>
-                <span className="text-xs text-purple-700 truncate max-w-[200px]" title={selectedPipeline.name}>
-                  {selectedPipeline.name}
+                <span className="text-xs text-purple-700 truncate max-w-[200px]" title={displayAttachedPipeline.name}>
+                  {displayAttachedPipeline.name}
                 </span>
                 <button
                   type="button"

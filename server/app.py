@@ -116,6 +116,20 @@ except ImportError:
 DEBUG_API = os.getenv("DEBUG_API", "0") == "1"
 
 
+def _summarize_json(raw: str, max_len: int = 200) -> str:
+    """Truncate a JSON string for LLM context, preserving structure hints."""
+    if not raw:
+        return ""
+    try:
+        obj = json.loads(raw) if isinstance(raw, str) else raw
+        compact = json.dumps(obj, separators=(",", ":"))
+    except (json.JSONDecodeError, TypeError):
+        compact = str(raw)
+    if len(compact) <= max_len:
+        return compact
+    return compact[:max_len] + "…"
+
+
 def _langsmith_context(langsmith_config: Optional[Dict[str, Any]]):
     """
     Return a context manager for LangSmith tracing based on user settings.
@@ -405,75 +419,151 @@ async def route(request: Request, user: Dict[str, Any] = Depends(get_current_use
         manual_agent_id = body.get("agentId")
         model_override = body.get("model")
         pipeline_id = body.get("pipeline_id")  # Extract pipeline_id early for router
-        
-        # Fetch pipeline data if pipeline_id is provided and user is authenticated
-        pipeline_data = None
-        if pipeline_id:
-            if user:
-                try:
-                    from .database.db import get_db
-                    import json
-                    with get_db() as conn:
-                        row = conn.execute(
-                            "SELECT * FROM pipelines WHERE id = ? AND user_id = ?",
-                            (pipeline_id, user["id"]),
-                        ).fetchone()
-                        if row:
-                            # Assemble pipeline from normalized tables
-                            node_rows = conn.execute(
-                                "SELECT * FROM pipeline_nodes WHERE pipeline_id = ? ORDER BY created_at",
-                                (pipeline_id,),
-                            ).fetchall()
-                            edge_rows = conn.execute(
-                                "SELECT * FROM pipeline_edges WHERE pipeline_id = ?",
-                                (pipeline_id,),
-                            ).fetchall()
-                            nodes = []
-                            for n in node_rows:
-                                nd = dict(n)
-                                nodes.append({
-                                    "id": nd["id"],
-                                    "type": nd["type"],
-                                    "label": nd["label"],
-                                    "config": json.loads(nd["config"]) if nd.get("config") else {},
-                                    "inputs": json.loads(nd["inputs"]) if nd.get("inputs") else {},
-                                    "status": nd["status"],
-                                    "result_metadata": json.loads(nd["result_metadata"]) if nd.get("result_metadata") else None,
-                                    "error": nd.get("error"),
-                                    "position": {"x": nd.get("position_x", 0), "y": nd.get("position_y", 0)},
-                                })
-                            edges = [
-                                {"source": dict(e)["source_node_id"], "target": dict(e)["target_node_id"]}
-                                for e in edge_rows
-                            ]
-                            pipeline_data = {
-                                "id": row["id"],
-                                "name": row["name"],
-                                "description": row["description"],
-                                "status": row["status"],
-                                "created_at": row["created_at"],
-                                "updated_at": row["updated_at"],
-                                "nodes": nodes,
-                                "edges": edges,
+        # Use pipeline_data from body when provided (e.g. draft from frontend); else fetch by pipeline_id
+        pipeline_data = body.get("pipeline_data") if isinstance(body.get("pipeline_data"), dict) else None
+
+        # Fetch pipeline data from DB only if not already provided and user is authenticated
+        if pipeline_id and pipeline_data is None and user:
+            try:
+                from .database.db import get_db
+                import json
+                with get_db() as conn:
+                    row = conn.execute(
+                        "SELECT * FROM pipelines WHERE id = ? AND user_id = ?",
+                        (pipeline_id, user["id"]),
+                    ).fetchone()
+                    if row:
+                        # Assemble pipeline from normalized tables
+                        node_rows = conn.execute(
+                            "SELECT * FROM pipeline_nodes WHERE pipeline_id = ? ORDER BY created_at",
+                            (pipeline_id,),
+                        ).fetchall()
+                        edge_rows = conn.execute(
+                            "SELECT * FROM pipeline_edges WHERE pipeline_id = ?",
+                            (pipeline_id,),
+                        ).fetchall()
+                        nodes = []
+                        for n in node_rows:
+                            nd = dict(n)
+                            nodes.append({
+                                "id": nd["id"],
+                                "type": nd["type"],
+                                "label": nd["label"],
+                                "config": json.loads(nd["config"]) if nd.get("config") else {},
+                                "inputs": json.loads(nd["inputs"]) if nd.get("inputs") else {},
+                                "status": nd["status"],
+                                "result_metadata": json.loads(nd["result_metadata"]) if nd.get("result_metadata") else None,
+                                "error": nd.get("error"),
+                                "position": {"x": nd.get("position_x", 0), "y": nd.get("position_y", 0)},
+                            })
+                        edges = [
+                            {"source": dict(e)["source_node_id"], "target": dict(e)["target_node_id"]}
+                            for e in edge_rows
+                        ]
+                        pipeline_data = {
+                            "id": row["id"],
+                            "name": row["name"],
+                            "description": row["description"],
+                            "status": row["status"],
+                            "created_at": row["created_at"],
+                            "updated_at": row["updated_at"],
+                            "nodes": nodes,
+                            "edges": edges,
+                        }
+
+                        # --- Fetch execution history & file references ---
+                        # Last 5 pipeline executions
+                        exec_rows = conn.execute(
+                            """SELECT id, status, trigger_type, started_at, completed_at,
+                                      total_duration_ms, error_summary
+                               FROM pipeline_executions
+                               WHERE pipeline_id = ?
+                               ORDER BY started_at DESC
+                               LIMIT 5""",
+                            (pipeline_id,),
+                        ).fetchall()
+                        pipeline_data["recent_executions"] = [
+                            {
+                                "id": dict(r)["id"],
+                                "status": dict(r)["status"],
+                                "trigger_type": dict(r)["trigger_type"],
+                                "started_at": dict(r)["started_at"],
+                                "completed_at": dict(r)["completed_at"],
+                                "total_duration_ms": dict(r)["total_duration_ms"],
+                                "error_summary": dict(r)["error_summary"],
                             }
-                            log_line("agent_route:pipeline_fetched", {
-                                "pipeline_id": pipeline_id,
-                                "pipeline_name": pipeline_data.get("name"),
-                                "node_count": len(nodes),
-                                "has_user": True,
-                            })
+                            for r in exec_rows
+                        ]
+
+                        # Per-node details from the latest execution
+                        latest_exec_id = dict(exec_rows[0])["id"] if exec_rows else None
+                        if latest_exec_id:
+                            ne_rows = conn.execute(
+                                """SELECT node_id, node_label, node_type, status,
+                                          duration_ms, error, input_data, output_data,
+                                          execution_order
+                                   FROM pipeline_node_executions
+                                   WHERE execution_id = ?
+                                   ORDER BY execution_order""",
+                                (latest_exec_id,),
+                            ).fetchall()
+                            pipeline_data["latest_node_executions"] = [
+                                {
+                                    "node_id": dict(r)["node_id"],
+                                    "node_label": dict(r)["node_label"],
+                                    "node_type": dict(r)["node_type"],
+                                    "status": dict(r)["status"],
+                                    "duration_ms": dict(r)["duration_ms"],
+                                    "error": dict(r)["error"],
+                                    "input_summary": _summarize_json(dict(r)["input_data"]),
+                                    "output_summary": _summarize_json(dict(r)["output_data"]),
+                                    "execution_order": dict(r)["execution_order"],
+                                }
+                                for r in ne_rows
+                            ]
                         else:
-                            log_line("agent_route:pipeline_not_found", {
-                                "pipeline_id": pipeline_id,
-                                "user_id": user["id"],
-                            })
-                except Exception as e:
-                    log_line("agent_route:pipeline_fetch_error", {
-                        "pipeline_id": pipeline_id,
-                        "error": str(e),
-                        "traceback": traceback.format_exc(),
-                    })
-                    # Continue without pipeline data if fetch fails
+                            pipeline_data["latest_node_executions"] = []
+
+                        # File references for this pipeline
+                        file_rows = conn.execute(
+                            """SELECT node_id, filename, role, file_type, file_url
+                               FROM pipeline_node_files
+                               WHERE pipeline_id = ?
+                               ORDER BY created_at DESC""",
+                            (pipeline_id,),
+                        ).fetchall()
+                        pipeline_data["node_files"] = [
+                            {
+                                "node_id": dict(r)["node_id"],
+                                "filename": dict(r)["filename"],
+                                "role": dict(r)["role"],
+                                "file_type": dict(r)["file_type"],
+                                "file_url": dict(r)["file_url"],
+                            }
+                            for r in file_rows
+                        ]
+
+                        log_line("agent_route:pipeline_fetched", {
+                            "pipeline_id": pipeline_id,
+                            "pipeline_name": pipeline_data.get("name"),
+                            "node_count": len(nodes),
+                            "execution_count": len(pipeline_data["recent_executions"]),
+                            "node_execution_count": len(pipeline_data["latest_node_executions"]),
+                            "file_count": len(pipeline_data["node_files"]),
+                            "has_user": True,
+                        })
+                    else:
+                        log_line("agent_route:pipeline_not_found", {
+                            "pipeline_id": pipeline_id,
+                            "user_id": user["id"],
+                        })
+            except Exception as e:
+                log_line("agent_route:pipeline_fetch_error", {
+                    "pipeline_id": pipeline_id,
+                    "error": str(e),
+                    "traceback": traceback.format_exc(),
+                })
+                # Continue without pipeline data if fetch fails
         
         # Log the input for debugging
         log_line("agent_route_input", {

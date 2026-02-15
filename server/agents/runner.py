@@ -974,38 +974,77 @@ async def run_agent(
                 if pipeline_info.get("node_count"):
                     pipeline_context_parts.append(f"Nodes: {pipeline_info['node_count']}")
                 
-                # Add node details if available
+                # Add node details with actual config params
                 if pipeline_info.get("node_details"):
                     node_details = pipeline_info["node_details"]
                     node_list = []
                     for node in node_details:
-                        node_desc = f"{node.get('label', node.get('id'))} ({node.get('type')}, status: {node.get('status', 'idle')})"
-                        node_list.append(node_desc)
+                        parts = [f"{node.get('label', node.get('id'))} ({node.get('type')}, status: {node.get('status', 'idle')})"]
+                        cfg = node.get("config")
+                        if cfg:
+                            cfg_str = ", ".join(f"{k}={v}" for k, v in cfg.items())
+                            parts.append(f"config: {{{cfg_str}}}")
+                        if node.get("error"):
+                            parts.append(f"error: {node['error']}")
+                        node_list.append(" | ".join(parts))
                     if node_list:
-                        pipeline_context_parts.append(f"Node details: {', '.join(node_list)}")
-                
+                        pipeline_context_parts.append("Node details: " + "; ".join(node_list))
+
                 # Add execution flow if available
                 if pipeline_info.get("execution_flow"):
                     flow = pipeline_info["execution_flow"]
                     if isinstance(flow, list) and flow:
                         pipeline_context_parts.append(f"Execution flow: {'; '.join(flow)}")
-                
+
                 # Add nodes by type if available
                 if pipeline_info.get("nodes_by_type"):
                     nodes_by_type = pipeline_info["nodes_by_type"]
                     type_summary = []
-                    for node_type, nodes in nodes_by_type.items():
-                        type_summary.append(f"{len(nodes)} {node_type}")
+                    for node_type, nodes_of_type in nodes_by_type.items():
+                        type_summary.append(f"{len(nodes_of_type)} {node_type}")
                     if type_summary:
                         pipeline_context_parts.append(f"Node types: {', '.join(type_summary)}")
-                
+
                 # Add output files if available
                 if pipeline_info.get("output_files"):
                     output_files = pipeline_info["output_files"]
                     file_list = [f.get("node_label", f.get("node_id")) for f in output_files]
                     if file_list:
                         pipeline_context_parts.append(f"Output files from: {', '.join(file_list)}")
-                
+
+                # --- Enriched execution context ---
+                # Recent execution history
+                if pipeline_info.get("recent_executions"):
+                    exec_lines = []
+                    for ex in pipeline_info["recent_executions"]:
+                        dur = f", duration: {ex['total_duration_ms']}ms" if ex.get("total_duration_ms") else ""
+                        err = f", error: {ex['error_summary']}" if ex.get("error_summary") else ""
+                        exec_lines.append(
+                            f"{ex.get('status','?')} ({ex.get('trigger_type','?')}) at {ex.get('started_at','?')}{dur}{err}"
+                        )
+                    pipeline_context_parts.append("Recent executions: " + "; ".join(exec_lines))
+
+                # Latest execution per-node log
+                if pipeline_info.get("latest_node_executions"):
+                    ne_lines = []
+                    for ne in pipeline_info["latest_node_executions"]:
+                        dur = f", {ne['duration_ms']}ms" if ne.get("duration_ms") else ""
+                        err = f", error: {ne['error']}" if ne.get("error") else ""
+                        out = f", output: {ne['output_summary']}" if ne.get("output_summary") else ""
+                        ne_lines.append(
+                            f"[{ne.get('execution_order','-')}] {ne.get('node_label',ne.get('node_id'))} ({ne.get('node_type')}): {ne.get('status','?')}{dur}{err}{out}"
+                        )
+                    pipeline_context_parts.append("Latest run node log: " + "; ".join(ne_lines))
+
+                # Pipeline files
+                if pipeline_info.get("node_files"):
+                    file_lines = []
+                    for nf in pipeline_info["node_files"]:
+                        file_lines.append(
+                            f"{nf.get('filename','?')} ({nf.get('role','?')}/{nf.get('file_type','?')}) on node {nf.get('node_id','?')}"
+                        )
+                    pipeline_context_parts.append("Pipeline files: " + "; ".join(file_lines))
+
                 context_summary.append("; ".join(pipeline_context_parts))
             
             enhanced_user_text = user_text
@@ -1014,10 +1053,14 @@ async def run_agent(
             
             # Include context in the system message or as additional context
             # The agent will use this to generate appropriate blueprints or answer questions
+            p_info = context.get("pipeline") or {}
             log_line("agent:pipeline:context", {
                 "has_files": len(context.get("uploaded_files", [])) > 0,
                 "has_canvas": context.get("canvas_structure") is not None,
-                "has_pipeline": bool(context.get("pipeline")),
+                "has_pipeline": bool(p_info),
+                "has_executions": bool(p_info.get("recent_executions")),
+                "has_node_executions": bool(p_info.get("latest_node_executions")),
+                "has_node_files": bool(p_info.get("node_files")),
                 "pipeline_id": pipeline_id,
                 "userText": user_text
             })
@@ -1434,44 +1477,72 @@ async def run_agent(
                 if summary.get("node_count"):
                     pipeline_context_lines.append(f"Total nodes: {summary['node_count']}")
                 
-                # Add node details
+                # Add node details with actual configs
                 if summary.get("node_details"):
-                    node_details = summary["node_details"]
                     node_list = []
-                    for node in node_details:
-                        node_desc = f"{node.get('label', node.get('id'))} (type: {node.get('type')}, status: {node.get('status', 'idle')})"
-                        node_list.append(node_desc)
+                    for node in summary["node_details"]:
+                        parts = [f"{node.get('label', node.get('id'))} (type: {node.get('type')}, status: {node.get('status', 'idle')})"]
+                        cfg = node.get("config")
+                        if cfg:
+                            cfg_str = ", ".join(f"{k}={v}" for k, v in cfg.items())
+                            parts.append(f"config: {{{cfg_str}}}")
+                        if node.get("error"):
+                            parts.append(f"error: {node['error']}")
+                        node_list.append(" | ".join(parts))
                     if node_list:
-                        pipeline_context_lines.append(f"Nodes: {', '.join(node_list)}")
-                
+                        pipeline_context_lines.append("Nodes: " + "; ".join(node_list))
+
                 # Add execution flow
                 if summary.get("execution_flow"):
                     flow = summary["execution_flow"]
                     if isinstance(flow, list) and flow:
                         pipeline_context_lines.append(f"Execution flow: {' → '.join(flow)}")
-                
+
                 # Add nodes by type
                 if summary.get("nodes_by_type"):
-                    nodes_by_type = summary["nodes_by_type"]
                     type_summary = []
-                    for node_type, nodes in nodes_by_type.items():
-                        type_summary.append(f"{len(nodes)} {node_type}")
+                    for node_type, nodes_of_type in summary["nodes_by_type"].items():
+                        type_summary.append(f"{len(nodes_of_type)} {node_type}")
                     if type_summary:
                         pipeline_context_lines.append(f"Node types: {', '.join(type_summary)}")
-                
-                # Extract and add output files
+
+                # Extract and add output files from result_metadata
                 output_files = []
-                nodes = pipeline_data.get("nodes", [])
-                for node in nodes:
-                    result_metadata = node.get("result_metadata", {})
+                for node in pipeline_data.get("nodes", []):
+                    result_metadata = node.get("result_metadata") or {}
                     if result_metadata.get("output_file"):
                         output_files.append(f"{node.get('label', node.get('id'))}: {result_metadata['output_file'].get('filename', 'output file')}")
                     if result_metadata.get("sequence"):
                         output_files.append(f"{node.get('label', node.get('id'))}: sequence output")
-                
                 if output_files:
                     pipeline_context_lines.append(f"Output files: {', '.join(output_files)}")
-                
+
+                # Recent execution history
+                if summary.get("recent_executions"):
+                    exec_lines = []
+                    for ex in summary["recent_executions"]:
+                        dur = f", duration: {ex['total_duration_ms']}ms" if ex.get("total_duration_ms") else ""
+                        err = f", error: {ex['error_summary']}" if ex.get("error_summary") else ""
+                        exec_lines.append(f"{ex.get('status','?')} ({ex.get('trigger_type','?')}) at {ex.get('started_at','?')}{dur}{err}")
+                    pipeline_context_lines.append("Recent executions: " + "; ".join(exec_lines))
+
+                # Latest execution per-node log
+                if summary.get("latest_node_executions"):
+                    ne_lines = []
+                    for ne in summary["latest_node_executions"]:
+                        dur = f", {ne['duration_ms']}ms" if ne.get("duration_ms") else ""
+                        err = f", error: {ne['error']}" if ne.get("error") else ""
+                        out = f", output: {ne['output_summary']}" if ne.get("output_summary") else ""
+                        ne_lines.append(f"[{ne.get('execution_order','-')}] {ne.get('node_label',ne.get('node_id'))} ({ne.get('node_type')}): {ne.get('status','?')}{dur}{err}{out}")
+                    pipeline_context_lines.append("Latest run node log: " + "; ".join(ne_lines))
+
+                # Pipeline files
+                if summary.get("node_files"):
+                    file_lines = []
+                    for nf in summary["node_files"]:
+                        file_lines.append(f"{nf.get('filename','?')} ({nf.get('role','?')}/{nf.get('file_type','?')}) on node {nf.get('node_id','?')}")
+                    pipeline_context_lines.append("Pipeline files: " + "; ".join(file_lines))
+
                 pipeline_context_info = "Pipeline Context:\n" + "\n".join(pipeline_context_lines)
             except Exception as e:
                 log_line("agent:text:pipeline_context_error", {

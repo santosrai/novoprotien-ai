@@ -5,6 +5,24 @@ Collects information about available files, canvas state, and chat history.
 from typing import Dict, Any, List, Optional
 from ..storage.pdb_storage import get_uploaded_pdb, list_uploaded_pdbs
 
+# Keys whose values are too large / binary to include in LLM context
+_BINARY_CONFIG_KEYS = {"pdbContent", "pdb_content", "fileContent", "file_content", "a3m_content", "hhr_content"}
+
+
+def _truncate_config(config: dict, max_value_len: int = 150) -> dict:
+    """Return a config dict with binary fields stripped and long strings truncated."""
+    if not config:
+        return {}
+    out: dict = {}
+    for k, v in config.items():
+        if k in _BINARY_CONFIG_KEYS:
+            continue
+        if isinstance(v, str) and len(v) > max_value_len:
+            out[k] = v[:max_value_len] + "…"
+        else:
+            out[k] = v
+    return out
+
 
 async def get_pipeline_context(state: Dict[str, Any]) -> Dict[str, Any]:
     """
@@ -64,7 +82,7 @@ async def get_pipeline_context(state: Dict[str, Any]) -> Dict[str, Any]:
                 output_files = []
                 nodes = pipeline_data.get("nodes", [])
                 for node in nodes:
-                    result_metadata = node.get("result_metadata", {})
+                    result_metadata = node.get("result_metadata") or {}
                     if result_metadata.get("output_file"):
                         output_files.append({
                             "node_id": node.get("id"),
@@ -271,11 +289,20 @@ async def get_pipeline_summary(pipeline_id: str, pipeline_data: Dict[str, Any]) 
                 "type": node.get("type"),
                 "label": node.get("label"),
                 "status": node.get("status"),
-                "has_config": bool(node.get("config")),
+                "config": _truncate_config(node.get("config", {})),
+                "error": node.get("error"),
             }
             for node in nodes
         ],
     }
-    
+
+    # Pass through execution-enrichment data added by app.py
+    if pipeline_data.get("recent_executions") is not None:
+        summary["recent_executions"] = pipeline_data["recent_executions"]
+    if pipeline_data.get("latest_node_executions") is not None:
+        summary["latest_node_executions"] = pipeline_data["latest_node_executions"]
+    if pipeline_data.get("node_files") is not None:
+        summary["node_files"] = pipeline_data["node_files"]
+
     return summary
 
