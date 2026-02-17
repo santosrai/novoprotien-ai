@@ -10,19 +10,23 @@ export interface ProgressUpdate {
 interface ProgressTrackerProps {
   isVisible: boolean;
   initialMessage?: string;
-  onCancel?: () => void;
+  onCancel?: () => Promise<void> | void;
+  isCancelling?: boolean;
   className?: string;
   title?: string;
   eventName?: string;
+  cancelLabel?: string;
 }
 
 export const ProgressTracker: React.FC<ProgressTrackerProps> = ({
   isVisible,
   initialMessage = 'Initializing...',
   onCancel,
+  isCancelling = false,
   className = '',
   title = 'Structure Prediction',
-  eventName = 'alphafold-progress'
+  eventName = 'alphafold-progress',
+  cancelLabel = 'Cancel'
 }) => {
   const [progress, setProgress] = useState<ProgressUpdate>({
     message: initialMessage,
@@ -143,9 +147,10 @@ export const ProgressTracker: React.FC<ProgressTrackerProps> = ({
               {progress.status === 'running' && onCancel && (
                 <button
                   onClick={onCancel}
-                  className="text-xs text-red-600 hover:text-red-800 underline"
+                  disabled={isCancelling}
+                  className={`text-xs underline ${isCancelling ? 'text-red-300 cursor-not-allowed' : 'text-red-600 hover:text-red-800'}`}
                 >
-                  Cancel
+                  {isCancelling ? 'Cancelling…' : cancelLabel}
                 </button>
               )}
             </div>
@@ -232,11 +237,43 @@ const createProgressHook = ({
   const [isVisible, setIsVisible] = useState(false);
   const [currentJobId, setCurrentJobId] = useState<string | null>(null);
   const cancelledRef = React.useRef(false);
+  const storageKey = `${eventName}-activeJobId`;
+
+  // Restore in-flight job if component remounts (e.g., user navigates to Files and back)
+  useEffect(() => {
+    try {
+      const savedJobId = window.localStorage.getItem(storageKey);
+      if (savedJobId) {
+        setCurrentJobId(savedJobId);
+        setIsVisible(true);
+        sendProgressUpdate(
+          { message: startMessage, progress: 5, status: 'running' },
+          eventName
+        );
+      }
+    } catch {
+      /* ignore storage read errors */
+    }
+    // Clear persisted ID when component unmounts to avoid stale jobs
+    return () => {
+      try {
+        window.localStorage.removeItem(storageKey);
+      } catch {
+        /* ignore */
+      }
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const startProgress = (jobId: string, initialMessage?: string) => {
     cancelledRef.current = false;
     setCurrentJobId(jobId);
     setIsVisible(true);
+    try {
+      window.localStorage.setItem(storageKey, jobId);
+    } catch {
+      /* ignore storage write errors */
+    }
     sendProgressUpdate({
       message: initialMessage || startMessage,
       progress: 0,
@@ -252,12 +289,22 @@ const createProgressHook = ({
     sendProgressUpdate({ message, progress: 100, status: 'completed' }, eventName);
     setTimeout(() => setIsVisible(false), 3000);
     setCurrentJobId(null);
+    try {
+      window.localStorage.removeItem(storageKey);
+    } catch {
+      /* ignore */
+    }
   };
 
   const errorProgress = (message: string = errorMessage) => {
     sendProgressUpdate({ message, progress: 0, status: 'error' }, eventName);
     setTimeout(() => setIsVisible(false), 5000);
     setCurrentJobId(null);
+    try {
+      window.localStorage.removeItem(storageKey);
+    } catch {
+      /* ignore */
+    }
   };
 
   const cancelProgress = () => {
@@ -270,6 +317,11 @@ const createProgressHook = ({
       }, eventName);
       setCurrentJobId(null);
       setTimeout(() => setIsVisible(false), 2000);
+      try {
+        window.localStorage.removeItem(storageKey);
+      } catch {
+        /* ignore */
+      }
     }
   };
 

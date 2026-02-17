@@ -12,6 +12,7 @@ import { OpenFold2Dialog } from './OpenFold2Dialog';
 import { RFdiffusionDialog } from './RFdiffusionDialog';
 import { ProteinMPNNDialog } from './ProteinMPNNDialog';
 import { ProgressTracker, useAlphaFoldProgress, useProteinMPNNProgress } from './ProgressTracker';
+import { useAlphaFoldCancel } from '../hooks/mutations/useAlphaFold';
 import { ErrorDisplay } from './ErrorDisplay';
 import { ErrorDetails, AlphaFoldErrorHandler, OpenFold2ErrorHandler, RFdiffusionErrorHandler, ErrorCategory, ErrorSeverity } from '../utils/errorHandler';
 import { logAlphaFoldError } from '../utils/errorLogger';
@@ -489,6 +490,25 @@ export const ChatPanel: React.FC = () => {
   const [showAlphaFoldDialog, setShowAlphaFoldDialog] = useState(false);
   const [alphafoldData, setAlphafoldData] = useState<any>(null);
   const alphafoldProgress = useAlphaFoldProgress();
+  const alphafoldCancelMutation = useAlphaFoldCancel();
+  const [isCancellingAlphaFold, setIsCancellingAlphaFold] = useState(false);
+
+  const handleAlphaFoldCancel = async () => {
+    const jobId = alphafoldProgress.currentJobId;
+    if (!jobId || isCancellingAlphaFold) return;
+    const confirmed = window.confirm('Cancel AlphaFold job? This stops processing on NVIDIA and frees your slot.');
+    if (!confirmed) return;
+    try {
+      setIsCancellingAlphaFold(true);
+      await alphafoldCancelMutation.mutateAsync(jobId);
+      alphafoldProgress.cancelProgress();
+    } catch (err) {
+      console.error('[AlphaFold] Cancel failed', err);
+      alert('Cancel failed. Please try again.');
+    } finally {
+      setIsCancellingAlphaFold(false);
+    }
+  };
 
   // ProteinMPNN state
   const [showProteinMPNNDialog, setShowProteinMPNNDialog] = useState(false);
@@ -1169,6 +1189,9 @@ try {
               addMessage(errorMessage);
               alphafoldProgress.errorProgress(apiError.userMessage);
               return true;
+            } else if (st === 'cancelled') {
+              alphafoldProgress.cancelProgress();
+              return true;
             } else {
               // Update progress heuristically up to 90%
               const elapsed = (Date.now() - start) / 1000;
@@ -1208,8 +1231,8 @@ try {
           }
         };
 
-        // Poll every 3s until done or timeout (~15 minutes)
-        const timeoutSec = 15 * 60;
+        // Poll every 3s until done or timeout (~45 minutes) — user can cancel anytime
+        const timeoutSec = 45 * 60;
         let finished = false;
         while (!finished && (Date.now() - start) / 1000 < timeoutSec) {
           // eslint-disable-next-line no-await-in-loop
@@ -1220,10 +1243,11 @@ try {
         }
 
         if (!finished) {
+          const msg = 'AlphaFold is still running past 45 minutes. It may finish soon; you can cancel and retry later.';
           const apiError = AlphaFoldErrorHandler.createError(
             'FOLDING_FAILED',
             { jobId, sequenceLength: sequence.length, parameters },
-            'Folding timed out',
+            msg,
             undefined,
             jobId
           );
@@ -1974,7 +1998,6 @@ try {
     const uploadedFileInfo = fileUploads.find(f => f.status === 'uploaded' && f.fileInfo)?.fileInfo || null;
 
     // Pipeline context: only include pipeline if user explicitly selected one
-    const { currentPipeline } = usePipelineStore.getState();
     const attachedPipeline = selectedPipeline;
 
     // Create user message immediately and add to chat
@@ -2045,7 +2068,7 @@ try {
           agentId: agentSettings.selectedAgentId || undefined, // Only send if manually selected
           model: agentSettings.selectedModel || undefined, // Only send if manually selected
           pipeline_id: pipelineIdToSend, // Pass pipeline ID to backend
-          ...(pipelineDataToSend && { pipeline_data: pipelineDataToSend }),
+          ...(pipelineDataToSend ? { pipeline_data: pipelineDataToSend } : {}),
           langsmith: langsmithSettings?.enabled
             ? {
                 enabled: true,
@@ -2681,7 +2704,9 @@ try {
         {/* Progress Tracker */}
         <ProgressTracker
           isVisible={alphafoldProgress.isVisible}
-          onCancel={alphafoldProgress.cancelProgress}
+          onCancel={handleAlphaFoldCancel}
+          isCancelling={isCancellingAlphaFold}
+          cancelLabel="Cancel"
           className="mb-1.5"
           title={alphafoldProgress.title}
           eventName={alphafoldProgress.eventName}

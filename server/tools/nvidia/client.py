@@ -67,9 +67,8 @@ class NIMSClient:
         self.base_url = os.getenv("NIMS_URL") or "https://health.api.nvidia.com/v1/biology/deepmind/alphafold2"
         self.status_url = os.getenv("STATUS_URL") or "https://health.api.nvidia.com/v1/status"
         # Polling configuration
-        # Default to a much shorter interval for development so the server doesn't appear to hang
-        # Allows override via env: POLL_INTERVAL (seconds) and NIMS_MAX_POLLS / MAX_POLLS
-        self.poll_interval = max(5, int(os.getenv("POLL_INTERVAL", "10")))  # seconds
+        # Default to a more patient interval (closer to NVIDIA guidance ~30s) but overrideable
+        self.poll_interval = max(5, int(os.getenv("POLL_INTERVAL", "30")))  # seconds
         # Max polls cap; set to 0 or a negative value to disable (poll until completion)
         # Default to unlimited in dev-friendly mode
         self.max_polls = int(os.getenv("NIMS_MAX_POLLS", os.getenv("MAX_POLLS", "0")))
@@ -153,10 +152,13 @@ class NIMSClient:
         }
     
     async def submit_folding_request(
-        self, 
-        sequence: str, 
+        self,
+        sequence: str,
         progress_callback: Optional[Callable[[str, float], None]] = None,
-        **params
+        *,
+        job_id: Optional[str] = None,
+        active_jobs: Optional[Dict[str, str]] = None,
+        **params,
     ) -> Dict[str, Any]:
         """
         Submit protein folding request to NIMS API
@@ -247,7 +249,13 @@ class NIMSClient:
                             progress_callback("Request accepted, starting folding process...", 10)
                         
                         # Poll for results
-                        return await self._poll_for_results(session, req_id, progress_callback)
+                        return await self._poll_for_results(
+                            session,
+                            req_id,
+                            progress_callback,
+                            job_id=job_id,
+                            active_jobs=active_jobs,
+                        )
                     
                     elif response.status in (502, 503, 504):
                         # Transient upstream error. If we received a reqid, continue with polling.
@@ -257,7 +265,13 @@ class NIMSClient:
                         if req_id:
                             if progress_callback:
                                 progress_callback("Request accepted (via 5xx), polling for result...", 10)
-                            return await self._poll_for_results(session, req_id, progress_callback)
+                            return await self._poll_for_results(
+                                session,
+                                req_id,
+                                progress_callback,
+                                job_id=job_id,
+                                active_jobs=active_jobs,
+                            )
                         # No reqid; retry if attempts remain
                         if attempt <= self.post_retries:
                             backoff = min(2 ** attempt, 5)
@@ -286,10 +300,12 @@ class NIMSClient:
             return {"error": str(e), "status": "exception", "details": error_details}
     
     async def _poll_for_results(
-        self, 
-        session: aiohttp.ClientSession, 
-        req_id: str, 
-        progress_callback: Optional[Callable[[str, float], None]] = None
+        self,
+        session: aiohttp.ClientSession,
+        req_id: str,
+        progress_callback: Optional[Callable[[str, float], None]] = None,
+        job_id: Optional[str] = None,
+        active_jobs: Optional[Dict[str, str]] = None,
     ) -> Dict[str, Any]:
         """Poll the status endpoint until completion"""
         
@@ -302,6 +318,16 @@ class NIMSClient:
         transient_failures = 0
 
         while unlimited or poll_count < max_polls:
+            # Early exit if job was cancelled by handler
+            if job_id and active_jobs is not None and active_jobs.get(job_id) == "cancelled":
+                api_logger.info(
+                    "Polling stopped: job %s marked as cancelled by user before poll %s",
+                    job_id,
+                    poll_count,
+                )
+                if progress_callback:
+                    progress_callback("Job cancelled", min(95, 10 + poll_count * 2))
+                return {"status": "cancelled", "error": None}
             if self.max_poll_seconds > 0:
                 elapsed = time.monotonic() - start_time
                 if elapsed >= self.max_poll_seconds:
@@ -360,15 +386,18 @@ class NIMSClient:
                             }
 
                         transient_failures += 1
-                        if transient_failures >= 30:
+                        if self.max_poll_seconds > 0 and (time.monotonic() - start_time) >= self.max_poll_seconds:
                             api_logger.error(
-                                "Polling aborted after %s transient errors (last HTTP %s)",
+                                "Polling timeout after %.1fs with %s transient 5xx (last HTTP %s)",
+                                time.monotonic() - start_time,
                                 transient_failures,
                                 response.status,
                             )
                             return {
-                                "error": f"Polling aborted after {transient_failures} transient failures (last HTTP {response.status}).",
-                                "status": "polling_failed",
+                                "error": f"Polling timeout after {int(time.monotonic() - start_time)} seconds",
+                                "status": "timeout",
+                                "last_http_status": response.status,
+                                "transient_failures": transient_failures,
                             }
                         if progress_callback:
                             progress_callback(
@@ -387,7 +416,8 @@ class NIMSClient:
                         api_logger.error(f"Polling auth error {response.status}: {error_text}")
                         return {
                             "error": f"Polling failed: HTTP {response.status}: {error_text}",
-                            "status": "polling_failed"
+                            "status": "polling_failed",
+                            "last_http_status": response.status,
                         }
                     
                     else:
@@ -405,10 +435,18 @@ class NIMSClient:
                     # brief backoff, then keep polling
                     await asyncio.sleep(min(5, consecutive_errors))
                     continue
-                return {"error": f"Polling exception: {str(e)}", "status": "polling_exception"}
+                return {
+                    "error": f"Polling exception: {str(e)}",
+                    "status": "polling_exception",
+                    "last_http_status": None,
+                }
             except Exception as e:
                 logger.error(f"Polling error: {e}")
-                return {"error": f"Polling exception: {str(e)}", "status": "polling_exception"}
+                return {
+                    "error": f"Polling exception: {str(e)}",
+                    "status": "polling_exception",
+                    "last_http_status": None,
+                }
         
         # Timeout (only when capped)
         total_wait_sec = self.poll_interval * max_polls if max_polls > 0 else None

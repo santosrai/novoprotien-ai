@@ -313,6 +313,8 @@ class AlphaFoldHandler:
             result = await nims_client.submit_folding_request(
                 sequence=sequence,
                 progress_callback=progress_callback,
+                job_id=job_id,
+                active_jobs=self.active_jobs,
                 **parameters
             )
             
@@ -429,12 +431,23 @@ class AlphaFoldHandler:
             err = self.job_results.get(job_id, {}).get("error")
             if err:
                 response["error"] = err
+        elif status == "cancelled":
+            # Surface cancellation cleanly
+            response["status"] = "cancelled"
+            if self.job_results.get(job_id):
+                response.update(self.job_results[job_id])
         return response
     
     def cancel_job(self, job_id: str) -> Dict[str, Any]:
         """Cancel a running job"""
         if job_id in self.active_jobs:
             self.active_jobs[job_id] = "cancelled"
+            self.job_results[job_id] = {
+                "status": "cancelled",
+                "message": "Job was cancelled by user"
+            }
+            logger.info(f"[AlphaFold Handler] Received cancel for job {job_id}")
+            api_logger.info(f"Job {job_id} status: cancelled (user requested)")
             return {
                 "job_id": job_id,
                 "status": "cancelled"

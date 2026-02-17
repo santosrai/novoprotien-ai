@@ -469,7 +469,7 @@ export const PipelineExecution: React.FC<PipelineExecutionProps> = ({ apiClient 
           const completedExecution = {
             ...state.currentExecution,
             completedAt: new Date(),
-            status: (hasErrors ? 'failed' : 'completed') as const,
+            status: (hasErrors ? 'failed' : 'completed') as 'failed' | 'completed',
           };
           // Update execution history and keep currentExecution for viewing results
           usePipelineStore.setState({
