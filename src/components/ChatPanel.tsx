@@ -2160,7 +2160,6 @@ try {
           model: agentSettings.selectedModel || undefined, // Only send if manually selected
           pipeline_id: pipelineIdToSend, // Pass pipeline ID to backend
           ...(pipelineDataToSend ? { pipeline_data: pipelineDataToSend } : {}),
-          uploadedFile: uploadedFileInfo || undefined, // Pass uploaded file context for validation
           pdb_content: undefined as string | undefined, // TODO: populate when viewer exposes raw PDB content
           langsmith: langsmithSettings?.enabled
             ? {
