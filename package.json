@@ -10,7 +10,10 @@
     "preview": "vite preview",
     "start:server": "./.venv/bin/uvicorn server.app:app --host 0.0.0.0 --port 8787",
     "dev:all": "npm-run-all --parallel start:server dev",
-    "build:library": "cd src/components/pipeline-canvas && npm run build"
+    "build:library": "cd src/components/pipeline-canvas && npm run build",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage"
   },
   "dependencies": {
     "@modelcontextprotocol/server-puppeteer": "^2025.5.12",
@@ -55,10 +58,12 @@
     "eslint": "^8.57.0",
     "eslint-plugin-react-hooks": "^4.6.2",
     "eslint-plugin-react-refresh": "^0.4.7",
+    "jsdom": "^28.0.0",
     "npm-run-all": "^4.1.5",
     "postcss": "^8.4.41",
     "tailwindcss": "^3.4.7",
     "typescript": "^5.2.2",
-    "vite": "^5.3.4"
+    "vite": "^5.3.4",
+    "vitest": "^4.0.18"
   }
 }
