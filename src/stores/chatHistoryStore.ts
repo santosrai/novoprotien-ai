@@ -63,6 +63,12 @@ export interface Message {
     parameters?: any;
     metadata?: any;
   };
+  openfold2Result?: {
+    pdbContent?: string;
+    filename?: string;
+    job_id?: string;
+    message?: string;
+  };
   // File attachment for user messages (deprecated - use attachments array)
   uploadedFile?: {
     file_id: string;
@@ -324,6 +330,7 @@ const createSaveMessageToBackend = (getSessions: () => ChatSession[]) => async (
           alphafoldResult: message.alphafoldResult,
           proteinmpnnResult: message.proteinmpnnResult,
           rfdiffusionResult: message.rfdiffusionResult,
+          openfold2Result: message.openfold2Result,
           uploadedFile: message.uploadedFile,
           error: message.error,
           // Include blueprint data for persistence
@@ -1494,6 +1501,10 @@ export const useChatHistoryStore = create<ChatHistoryState>()(
                 ...(metadata.rfdiffusionResult != null && 
                     typeof metadata.rfdiffusionResult === 'object' && 
                     { rfdiffusionResult: metadata.rfdiffusionResult }),
+                // OpenFold2 result - check if it exists and is a valid object
+                ...(metadata.openfold2Result != null && 
+                    typeof metadata.openfold2Result === 'object' && 
+                    { openfold2Result: metadata.openfold2Result }),
                 ...(metadata.uploadedFile != null && { uploadedFile: metadata.uploadedFile }),
                 ...(metadata.error != null && { error: metadata.error }),
                 // Blueprint data - restore from metadata

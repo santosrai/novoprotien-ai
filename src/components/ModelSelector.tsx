@@ -10,6 +10,7 @@ interface ModelSelectorProps {
 
 // Popular models to show at the top
 const popularModelIds = [
+  'anthropic/claude-sonnet-4.6',
   'openai/gpt-4-turbo',
   'openai/gpt-4',
   'anthropic/claude-3.5-sonnet',

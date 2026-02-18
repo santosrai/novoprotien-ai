@@ -12,6 +12,7 @@ import { StructureElement, StructureProperties } from 'molstar/lib/mol-model/str
 // OrderedSet no longer needed after switching to getFirstLocation
 import { CodeExecutor } from '../utils/codeExecutor';
 import { MolstarToolbar } from './MolstarToolbar';
+import { ConfidenceScorePanel } from './ConfidenceScorePanel';
 import { getCodeToExecute } from '../utils/codeUtils';
 
 export const MolstarViewer: React.FC = () => {
@@ -21,7 +22,7 @@ export const MolstarViewer: React.FC = () => {
   const [plugin, setPlugin] = useState<PluginUIContext | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [isInitialized, setIsInitialized] = useState(false);
-  const { setPlugin: setStorePlugin, pendingCodeToRun, setPendingCodeToRun, setActivePane, setIsExecuting, currentCode, setCurrentCode } = useAppStore();
+  const { setPlugin: setStorePlugin, pendingCodeToRun, setPendingCodeToRun, setActivePane, setIsExecuting, currentCode, setCurrentCode, currentStructureOrigin } = useAppStore();
   const addSelection = useAppStore(state => state.addSelection);
   const lastLoadedPdb = useAppStore(state => state.lastLoadedPdb);
   const { activeSessionId, getActiveSession } = useChatHistoryStore();
@@ -365,6 +366,9 @@ export const MolstarViewer: React.FC = () => {
           </div>
         )}
       </div>
+
+      {/* Confidence score (pLDDT) panel below viewer when showing predicted structure */}
+      {currentStructureOrigin?.type === 'alphafold' && <ConfidenceScorePanel />}
     </div>
   );
 };

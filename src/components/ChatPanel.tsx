@@ -947,14 +947,14 @@ try {
 try {
   await builder.clearStructure();
   await builder.loadStructure('${blobUrl}');
-  await builder.addCartoonRepresentation({ color: 'secondary-structure' });
+  await builder.addCartoonRepresentation({ color: 'bfactor' });
   builder.focusView();
 } catch (e) { console.error('Failed to load OpenFold2 result:', e); }`;
         const savedCode = `
 try {
   await builder.clearStructure();
   await builder.loadStructure('${apiUrl}');
-  await builder.addCartoonRepresentation({ color: 'secondary-structure' });
+  await builder.addCartoonRepresentation({ color: 'bfactor' });
   builder.focusView();
 } catch (e) { console.error('Failed to load OpenFold2 result:', e); }`;
         await executor.executeCode(execCode);

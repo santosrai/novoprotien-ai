@@ -15,7 +15,6 @@
         "completion": "0.00003"
       }
     },
-    
     {
       "id": "anthropic/claude-3.5-sonnet",
       "name": "Claude 3.5 Sonnet",
@@ -38,7 +37,6 @@
         "completion": "0.000075"
       }
     },
-    
     {
       "id": "anthropic/claude-3-haiku",
       "name": "Claude 3 Haiku",
@@ -70,6 +68,17 @@
       "pricing": {
         "prompt": "0.000015",
         "completion": "0.000075"
+      }
+    },
+    {
+      "id": "anthropic/claude-sonnet-4.6",
+      "name": "Claude Sonnet 4.6",
+      "provider": "Anthropic",
+      "description": "Anthropic's most capable Sonnet-class model yet, with strong performance across coding, agents, and professional work. 1M context.",
+      "context_length": 1000000,
+      "pricing": {
+        "prompt": "0.000003",
+        "completion": "0.000015"
       }
     },
     {
