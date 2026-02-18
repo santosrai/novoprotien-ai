@@ -1,0 +1,63 @@
+{
+  "metadata": {
+    "type": "validation_node",
+    "label": "Validation",
+    "icon": "Shield",
+    "color": "#6366f1",
+    "borderColor": "border-indigo-500",
+    "bgColor": "bg-indigo-500",
+    "description": "Structure quality validation"
+  },
+  "schema": {
+    "min_score": {
+      "type": "number",
+      "required": false,
+      "default": 70,
+      "min": 0,
+      "max": 100,
+      "label": "Minimum Score",
+      "helpText": "Minimum overall quality score to pass validation (0-100)"
+    },
+    "max_outliers_pct": {
+      "type": "number",
+      "required": false,
+      "default": 5,
+      "min": 0,
+      "max": 100,
+      "label": "Max Ramachandran Outliers %",
+      "helpText": "Maximum percentage of Ramachandran outliers allowed"
+    }
+  },
+  "handles": {
+    "inputs": [
+      {
+        "id": "target",
+        "type": "target",
+        "position": "left",
+        "dataType": "pdb_file"
+      }
+    ],
+    "outputs": [
+      {
+        "id": "source",
+        "type": "source",
+        "position": "right",
+        "dataType": "validation_report"
+      }
+    ]
+  },
+  "execution": {
+    "type": "api_call",
+    "endpoint": "/validation/validate",
+    "method": "POST",
+    "payload": {
+      "pdb_content": "{{input.target}}",
+      "min_score": "{{config.min_score}}",
+      "max_outliers_pct": "{{config.max_outliers_pct}}"
+    }
+  },
+  "defaultConfig": {
+    "min_score": 70,
+    "max_outliers_pct": 5
+  }
+}

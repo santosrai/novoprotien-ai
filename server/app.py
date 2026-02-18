@@ -203,6 +203,7 @@ async def _invoke_route_and_agent(
         pipeline_data=pipeline_data,
         model_override=model_override,
         user_id=user.get("id") if user else None,
+        pdb_content=body.get("pdb_content"),
     )
     return {"agentId": agent_id, **res, "reason": reason}
 
@@ -1650,6 +1651,46 @@ async def openfold2_result(request: Request, job_id: str, user: Dict[str, Any] =
     except Exception as e:
         log_line("openfold2_result_failed", {"error": str(e), "job_id": job_id})
         raise HTTPException(status_code=404, detail="OpenFold2 result not found")
+
+
+# ── Validation Endpoints ─────────────────────────────────────────
+
+@app.post("/api/validation/validate")
+@limiter.limit("10/minute")
+async def validate_structure_endpoint(request: Request, user: Dict[str, Any] = Depends(get_current_user)):
+    """Validate a PDB structure and return quality metrics."""
+    try:
+        from agents.handlers.validation import validation_handler
+    except ImportError:
+        from .agents.handlers.validation import validation_handler
+
+    try:
+        body = await request.json()
+        pdb_content = body.get("pdb_content")
+        file_id = body.get("file_id")
+        user_id = user.get("id", "anonymous") if user else "anonymous"
+        session_id = body.get("session_id")
+
+        result = await validation_handler.process_validation_request(
+            input_text="validate structure",
+            context={
+                "current_pdb_content": pdb_content,
+                "file_id": file_id,
+                "user_id": user_id,
+                "session_id": session_id,
+            },
+        )
+
+        if result.get("action") == "error":
+            return JSONResponse(status_code=400, content=result)
+
+        return JSONResponse(status_code=200, content=result)
+    except Exception as e:
+        log_line("validation_failed", {"error": str(e), "trace": traceback.format_exc()})
+        content = {"error": "validation_failed"}
+        if DEBUG_API:
+            content["detail"] = str(e)
+        return JSONResponse(status_code=500, content=content)
 
 
 # Back-compat endpoints

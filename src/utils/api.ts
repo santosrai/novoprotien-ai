@@ -1,4 +1,5 @@
 import axios from 'axios';
+import type { ValidationReport } from '../types/validation';
 
 // Configure API base URL. Set VITE_API_BASE in your env, e.g.:
 // Prefer environment variable, fallback to relative path for flexibility
@@ -317,4 +318,21 @@ export async function* streamAgentRoute(payload: {
   } finally {
     reader.releaseLock();
   }
+}
+
+/**
+ * Validate a protein structure and return a detailed validation report.
+ * Provide either pdbContent (raw PDB string) or fileId (server-side file reference).
+ */
+export async function validateStructure(
+  pdbContent?: string,
+  fileId?: string,
+  sessionId?: string,
+): Promise<ValidationReport> {
+  const response = await api.post<ValidationReport>('/validation/validate', {
+    pdb_content: pdbContent,
+    file_id: fileId,
+    session_id: sessionId,
+  });
+  return response.data;
 }

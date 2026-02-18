@@ -206,7 +206,12 @@ class SimpleRouterGraph:
         # Exclude pipeline-related keywords from RFdiffusion
         if any(k in low for k in rfdiffusion_keywords) and not has_pipeline_intent:
             return {"routedAgentId": "rfdiffusion-agent", "reason": "rule:rfdiffusion-design"}
-        
+
+        # Validation agent keywords
+        validation_keywords = ["validate", "validation", "check quality", "assess structure", "assess quality", "plddt", "ramachandran", "clashes", "quality report", "check structure"]
+        if any(k in low for k in validation_keywords):
+            return {"routedAgentId": "validation-agent", "reason": "rule:validation-keywords"}
+
         # Bio-chat for selection questions, BUT NOT if explicit visualization command
         if has_selection and any(k in low for k in interrogatives) and not has_viz_command:
             return {"routedAgentId": "bio-chat", "reason": "rule:selection+question"}

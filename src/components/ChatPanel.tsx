@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
-import { Send, Sparkles, Download, Play, X, Copy, ChevronDown, ChevronUp } from 'lucide-react';
+import { Send, Sparkles, Download, Play, X, Copy, ChevronDown, ChevronUp, Shield } from 'lucide-react';
 import { PluginUIContext } from 'molstar/lib/mol-plugin-ui/context';
 import { useAppStore } from '../stores/appStore';
 import { useChatHistoryStore, useActiveSession, Message } from '../stores/chatHistoryStore';
@@ -25,6 +25,8 @@ import { JobLoadingPill } from './JobLoadingPill';
 import { PipelineBlueprintDisplay } from './PipelineBlueprintDisplay';
 import { PipelineSelectionModal } from './PipelineSelectionModal';
 import { ServerFilesDialog } from './ServerFilesDialog';
+import ValidationPanel from './ValidationPanel';
+import type { ValidationReport } from '../types/validation';
 import { usePipelineStore } from '../components/pipeline-canvas';
 import { PipelineBlueprint } from '../components/pipeline-canvas';
 import { extractStructureMetadata, summarizeForAgent } from '../utils/structureMetadata';
@@ -76,6 +78,7 @@ interface ExtendedMessage extends Message {
     isComplete: boolean;
     totalSteps: number;
   };
+  validationResult?: ValidationReport;
   error?: ErrorDetails;
   blueprint?: PipelineBlueprint;
   blueprintRationale?: string;
@@ -799,6 +802,63 @@ try {
     );
   };
 
+  const renderValidationResult = (report: ValidationReport) => (
+    <div className="mt-3 rounded-lg overflow-hidden border border-indigo-200 bg-gradient-to-br from-indigo-50 to-purple-50 p-4">
+      <ValidationPanel
+        report={report}
+        onColorByConfidence={() => {
+          const code = `
+async function colorByConfidence() {
+  const data = plugin.managers.structure.hierarchy.current.structures;
+  if (data.length > 0) {
+    const struct = data[0];
+    await plugin.builders.structure.representation.addRepresentation(struct.cell.obj?.data, {
+      type: 'cartoon',
+      color: 'uncertainty',
+    });
+  }
+}
+colorByConfidence();`;
+          setCurrentCode(code);
+          setPendingCodeToRun(code);
+        }}
+      />
+    </div>
+  );
+
+  const handleValidateStructure = async (pdbContent: string) => {
+    try {
+      const { validateStructure } = await import('../utils/api');
+
+      // Add a loading message
+      addMessage({
+        id: uuidv4(),
+        content: 'Running structure validation...',
+        type: 'ai',
+        timestamp: new Date(),
+      });
+
+      const report = await validateStructure(pdbContent);
+
+      // Add validation result message
+      const resultMsg: ExtendedMessage = {
+        id: uuidv4(),
+        content: `Structure validation complete - Grade: ${report.grade}`,
+        type: 'ai',
+        timestamp: new Date(),
+        validationResult: report,
+      };
+      addMessage(resultMsg);
+    } catch (error) {
+      addMessage({
+        id: uuidv4(),
+        content: `Validation failed: ${error instanceof Error ? error.message : 'Unknown error'}`,
+        type: 'ai',
+        timestamp: new Date(),
+      });
+    }
+  };
+
   const renderAlphaFoldResult = (result: ExtendedMessage['alphafoldResult'], message?: ExtendedMessage) => {
     if (!result) return null;
 
@@ -910,6 +970,15 @@ try {
             <Play className="w-4 h-4" />
             <span>View 3D</span>
           </button>
+
+          <button
+            onClick={() => handleValidateStructure(result.pdbContent!)}
+            className="flex items-center gap-1.5 px-3 py-1.5 bg-indigo-50 text-indigo-600 rounded-lg text-xs font-medium hover:bg-indigo-100 transition-colors"
+            disabled={!result.pdbContent}
+          >
+            <Shield className="w-3.5 h-3.5" />
+            Validate
+          </button>
         </div>
       </div>
     );
@@ -996,6 +1065,15 @@ try {
           >
             <Play className="w-4 h-4" />
             <span>View 3D</span>
+          </button>
+
+          <button
+            onClick={() => handleValidateStructure(result.pdbContent!)}
+            className="flex items-center gap-1.5 px-3 py-1.5 bg-indigo-50 text-indigo-600 rounded-lg text-xs font-medium hover:bg-indigo-100 transition-colors"
+            disabled={!result.pdbContent}
+          >
+            <Shield className="w-3.5 h-3.5" />
+            Validate
           </button>
         </div>
       </div>
@@ -1811,6 +1889,19 @@ try {
         setShowOpenFold2Dialog(true);
         return true;
       }
+
+      if (data.action === 'validation_result') {
+        console.log('[Validation] Validation result detected in agent response');
+        const validationMsg: ExtendedMessage = {
+          id: uuidv4(),
+          content: `Structure validation complete - Grade: ${data.grade}`,
+          type: 'ai',
+          timestamp: new Date(),
+          validationResult: data as ValidationReport,
+        };
+        addMessage(validationMsg);
+        return true;
+      }
     } catch (e) {
       console.log('[AlphaFold] Response parsing failed:', e);
       console.log('[AlphaFold] Raw response was:', responseData);
@@ -2069,6 +2160,8 @@ try {
           model: agentSettings.selectedModel || undefined, // Only send if manually selected
           pipeline_id: pipelineIdToSend, // Pass pipeline ID to backend
           ...(pipelineDataToSend ? { pipeline_data: pipelineDataToSend } : {}),
+          uploadedFile: uploadedFileInfo || undefined, // Pass uploaded file context for validation
+          pdb_content: undefined as string | undefined, // TODO: populate when viewer exposes raw PDB content
           langsmith: langsmithSettings?.enabled
             ? {
                 enabled: true,
@@ -2609,6 +2702,7 @@ try {
                   {renderOpenFold2Result(message.openfold2Result, message)}
                   {renderRFdiffusionResult(message.rfdiffusionResult, message)}
                   {renderProteinMPNNResult(message.proteinmpnnResult)}
+                  {message.validationResult && renderValidationResult(message.validationResult)}
                   {message.error && (
                     <div className="mt-3">
                       <ErrorDisplay 

@@ -835,6 +835,7 @@ async def run_agent(
     pipeline_data: Optional[Dict[str, Any]] = None,
     model_override: Optional[str] = None,
     user_id: Optional[str] = None,
+    pdb_content: Optional[str] = None,
 ) -> Dict[str, Any]:
     # Use model_override if provided, otherwise fall back to agent's default
     if model_override:
@@ -927,6 +928,28 @@ async def run_agent(
         except Exception as e:
             log_line("agent:proteinmpnn:failed", {"error": str(e), "userText": user_text})
             return {"type": "text", "text": f"ProteinMPNN processing failed: {str(e)}"}
+
+    # Special handling for Validation agent - use handler
+    if agent.get("id") == "validation-agent":
+        try:
+            from .handlers.validation import validation_handler
+            result = await validation_handler.process_validation_request(
+                user_text,
+                context={
+                    "current_pdb_content": pdb_content,
+                    "uploaded_file_context": uploaded_file_context,
+                    "file_id": uploaded_file_context.get("file_id") if uploaded_file_context else None,
+                    "session_id": None,
+                    "user_id": None,
+                },
+            )
+            if result.get("action") == "error":
+                log_line("agent:validation:error", {"error": result.get("error"), "userText": user_text})
+                return {"type": "text", "text": json.dumps(result)}
+            return {"type": "text", "text": json.dumps(result)}
+        except Exception as e:
+            log_line("agent:validation:failed", {"error": str(e), "userText": user_text})
+            return {"type": "text", "text": f"Validation failed: {str(e)}"}
 
     # Gather pipeline context for pipeline-agent and bio-chat (when pipeline_id is provided)
     # This allows agents to answer questions about attached pipelines
