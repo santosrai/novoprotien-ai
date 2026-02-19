@@ -310,6 +310,8 @@ export const ChatPanel: React.FC = () => {
     }
   }, [setViewerVisible, activeSessionId, saveViewerVisibility]);
   const { activeSession, addMessage, updateMessages } = useActiveSession();
+  // Stable primitive so restore effect doesn't re-run on every session object reference change
+  const activeSessionMessageCount = activeSession?.messages?.length ?? -1;
 
   // Agent and model settings
   const { settings: agentSettings } = useAgentSettings();
@@ -391,7 +393,7 @@ export const ChatPanel: React.FC = () => {
     if (activeSessionId && !previousSessionIdRef.current) {
       previousSessionIdRef.current = activeSessionId;
       // Check if this is a new session (no messages) - hide all panes
-      const isNewSession = !activeSession || activeSession.messages.length === 0;
+      const isNewSession = activeSessionMessageCount < 0 || activeSessionMessageCount === 0;
       if (isNewSession) {
         setViewerVisible(false);
         setActivePane(null);
@@ -403,7 +405,7 @@ export const ChatPanel: React.FC = () => {
         }
       }
     }
-  }, [activeSessionId, activeSession, getViewerVisibility, setViewerVisible, setActivePane]);
+  }, [activeSessionId, activeSessionMessageCount, getViewerVisibility, setViewerVisible, setActivePane]);
 
   // Keep refs updated with latest values (prevents stale closures)
   useEffect(() => {
@@ -489,7 +491,7 @@ export const ChatPanel: React.FC = () => {
 
     // Update previous session ID
     previousSessionIdRef.current = activeSessionId;
-  }, [activeSessionId, activeSession, getVisualizationCode, getLastCanvasCodeFromSession, saveVisualizationCode, getViewerVisibility, saveViewerVisibility, setCurrentCode, setViewerVisible]);
+  }, [activeSessionId, activeSessionMessageCount, getVisualizationCode, getLastCanvasCodeFromSession, saveVisualizationCode, getViewerVisibility, saveViewerVisibility, setCurrentCode, setViewerVisible]);
 
   // Use React Query for agents/models - deduplicates requests, avoids Strict Mode double-fetch
   const { data: agentsData } = useAgents();
