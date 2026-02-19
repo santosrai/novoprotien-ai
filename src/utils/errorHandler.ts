@@ -1043,4 +1043,142 @@ export class OpenFold2ErrorHandler {
     }
     return null;
   }
+
+  static getSeverityColor(severity: ErrorSeverity): string {
+    switch (severity) {
+      case ErrorSeverity.LOW: return 'text-yellow-700';
+      case ErrorSeverity.MEDIUM: return 'text-orange-700';
+      case ErrorSeverity.HIGH: return 'text-red-700';
+      case ErrorSeverity.CRITICAL: return 'text-red-900';
+      default: return 'text-gray-700';
+    }
+  }
+
+  static getSeverityIcon(severity: ErrorSeverity): string {
+    switch (severity) {
+      case ErrorSeverity.LOW: return '⚠️';
+      case ErrorSeverity.MEDIUM: return '🔶';
+      case ErrorSeverity.HIGH: return '🔴';
+      case ErrorSeverity.CRITICAL: return '💥';
+      default: return 'ℹ️';
+    }
+  }
+}
+
+export class DiffDockErrorHandler {
+  private static errorCatalog: Record<string, Partial<ErrorDetails>> = {
+    VALIDATION: {
+      category: ErrorCategory.VALIDATION,
+      severity: ErrorSeverity.MEDIUM,
+      userMessage: 'Invalid input for docking',
+      technicalMessage: 'Protein or ligand input is missing or invalid',
+      suggestions: [
+        { action: 'Provide protein PDB', description: 'Use an uploaded PDB or paste PDB content', type: 'fix', priority: 1 },
+        { action: 'Provide ligand SDF', description: 'Upload a valid SDF file for the small molecule', type: 'fix', priority: 2 },
+      ],
+    },
+    FILE_NOT_FOUND: {
+      category: ErrorCategory.API,
+      severity: ErrorSeverity.MEDIUM,
+      userMessage: 'Protein file not found or access denied',
+      technicalMessage: 'Uploaded protein file could not be read',
+      suggestions: [
+        { action: 'Re-upload protein', description: 'Upload the PDB file again', type: 'fix', priority: 1 },
+      ],
+    },
+    API_KEY_MISSING: {
+      category: ErrorCategory.AUTH,
+      severity: ErrorSeverity.CRITICAL,
+      userMessage: 'DiffDock service not available',
+      technicalMessage: 'NVCF_RUN_KEY not configured on server',
+      suggestions: [
+        { action: 'Contact administrator', description: 'API key must be configured on the server', type: 'contact', priority: 1 },
+      ],
+    },
+    API_ERROR: {
+      category: ErrorCategory.API,
+      severity: ErrorSeverity.HIGH,
+      userMessage: 'Docking failed',
+      technicalMessage: 'DiffDock API returned an error',
+      suggestions: [
+        { action: 'Try again', description: 'The error might be temporary', type: 'retry', priority: 1 },
+        { action: 'Check file formats', description: 'Ensure PDB and SDF are valid', type: 'fix', priority: 2 },
+      ],
+    },
+    TIMEOUT: {
+      category: ErrorCategory.TIMEOUT,
+      severity: ErrorSeverity.MEDIUM,
+      userMessage: 'Docking timed out',
+      technicalMessage: 'Request exceeded timeout limit',
+      suggestions: [
+        { action: 'Try again', description: 'Retry during off-peak hours', type: 'retry', priority: 1 },
+      ],
+    },
+  };
+
+  static createError(
+    code: string,
+    context: Record<string, any> = {},
+    technicalDetails?: string,
+    stack?: string,
+    requestId?: string
+  ): ErrorDetails {
+    const template = this.errorCatalog[code];
+    if (!template) {
+      return {
+        code: 'UNKNOWN_ERROR',
+        category: ErrorCategory.SYSTEM,
+        severity: ErrorSeverity.HIGH,
+        userMessage: 'An unexpected error occurred',
+        technicalMessage: technicalDetails || 'Unknown error',
+        context,
+        suggestions: [{ action: 'Try again', description: 'The error might be temporary', type: 'retry', priority: 1 }],
+        timestamp: new Date(),
+      };
+    }
+    return {
+      code,
+      category: template.category ?? ErrorCategory.SYSTEM,
+      severity: template.severity ?? ErrorSeverity.HIGH,
+      userMessage: template.userMessage ?? 'An error occurred',
+      technicalMessage: technicalDetails ?? template.technicalMessage ?? '',
+      context,
+      suggestions: template.suggestions ?? [],
+      timestamp: new Date(),
+      requestId,
+      stack,
+    };
+  }
+
+  static handleError(response: { data?: { errorCode?: string; userMessage?: string }; status?: number }, context: Record<string, any> = {}): ErrorDetails {
+    const code = response.data?.errorCode ?? (response.status === 503 ? 'API_KEY_MISSING' : 'API_ERROR');
+    const serverMsg = response.data?.userMessage;
+    // Use server message as technical details; for API_ERROR also use as user message when present so the real error is visible
+    const err = this.createError(code, context, serverMsg);
+    if (code === 'API_ERROR' && serverMsg && typeof serverMsg === 'string' && serverMsg.trim()) {
+      err.userMessage = serverMsg.length > 200 ? `${serverMsg.slice(0, 200)}…` : serverMsg;
+      err.technicalMessage = serverMsg;
+    }
+    return err;
+  }
+
+  static getSeverityColor(severity: ErrorSeverity): string {
+    switch (severity) {
+      case ErrorSeverity.LOW: return 'text-yellow-700';
+      case ErrorSeverity.MEDIUM: return 'text-orange-700';
+      case ErrorSeverity.HIGH: return 'text-red-700';
+      case ErrorSeverity.CRITICAL: return 'text-red-900';
+      default: return 'text-gray-700';
+    }
+  }
+
+  static getSeverityIcon(severity: ErrorSeverity): string {
+    switch (severity) {
+      case ErrorSeverity.LOW: return '⚠️';
+      case ErrorSeverity.MEDIUM: return '🔶';
+      case ErrorSeverity.HIGH: return '🔴';
+      case ErrorSeverity.CRITICAL: return '💥';
+      default: return 'ℹ️';
+    }
+  }
 }

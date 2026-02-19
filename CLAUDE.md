@@ -42,6 +42,7 @@ A molecular visualization application integrating MolStar viewer with AI-powered
 5. **Performance Optimizations**: Efficient MolstarBuilder instance reuse
 6. **RAG System**: Retrieval-augmented generation for protein data queries
 7. **AlphaFold2 Integration**: AI-powered protein structure prediction via NVIDIA NIMS API
+8. **DiffDock Integration**: Protein-ligand docking (PDB + SDF) via NVIDIA NIM; NVCF asset upload + predict
 
 ### Working Tree Status:
 - Clean working directory (no uncommitted changes)
@@ -125,6 +126,33 @@ A molecular visualization application integrating MolStar viewer with AI-powered
 - Max 1000 residues (suggest AlphaFold2 for longer)
 - Same NVCF_RUN_KEY as AlphaFold2/RFdiffusion
 - Pipeline canvas node: `openfold2_node`
+
+### DiffDock Integration Details:
+**DiffDock** predicts how a small molecule (ligand) binds to a protein (protein-ligand docking) via NVIDIA NIM.
+
+**New Components Added**:
+- `DiffDockDialog.tsx`: Dialog for protein (PDB) and ligand (SDF) input and parameters
+- `diffdock_client.py`: NVCF asset upload + DiffDock predict (health.api.nvidia.com/v1/biology/mit/diffdock)
+- `diffdock.py`: Server handler; returns `open_diffdock_dialog` and `submit_dock_job`
+- `DiffDockErrorHandler`: Error handling for docking validation and API errors
+
+**Agent System**:
+- `diffdock-agent` in registry; router keywords: "diffdock", "protein-ligand", "ligand docking", "dock ligand", "binding pose", etc.
+- Returns `{"action": "open_diffdock_dialog"}` to open dialog
+
+**API Endpoints**:
+- `POST /api/diffdock/predict`: Blocking docking (protein_file_id or protein_content, ligand_sdf_content, parameters)
+- `GET /api/diffdock/result/{job_id}`: Download result PDB
+
+**Features**:
+- Protein from uploaded PDB or pasted/uploaded PDB file; ligand from SDF file (required)
+- Parameters: num_poses, time_divisions, steps, save_trajectory, is_staged
+- Same NVCF_RUN_KEY (or NVIDIA_API_KEY) as AlphaFold2/OpenFold2/RFdiffusion
+- Result PDB shown in chat with Download and View 3D
+
+**Usage Examples**:
+- "Dock this ligand to my protein" → opens DiffDock dialog
+- "Run protein-ligand docking" → routes to diffdock-agent
 
 ### RFdiffusion Integration Details:
 **Branch**: `feature/rf-diffusion`

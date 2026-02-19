@@ -148,6 +148,8 @@ def save_result_file(
         result_dir = storage_dir / "alphafold_results"
     elif file_type == "openfold2":
         result_dir = storage_dir / "openfold2_results"
+    elif file_type == "diffdock":
+        result_dir = storage_dir / "diffdock_results"
     else:
         result_dir = storage_dir / "results"
     

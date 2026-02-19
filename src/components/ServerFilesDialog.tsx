@@ -2,16 +2,7 @@ import React from 'react';
 import { X, Folder } from 'lucide-react';
 import { FileBrowser } from './FileBrowser';
 import { getAuthHeaders } from '../utils/api';
-
-interface FileMetadata {
-  file_id: string;
-  type: 'upload' | 'rfdiffusion' | 'alphafold' | 'proteinmpnn';
-  filename: string;
-  size: number;
-  job_id?: string;
-  download_url: string;
-  metadata?: Record<string, any>;
-}
+import type { FileMetadata } from '../hooks/queries/useFiles';
 
 interface ServerFilesDialogProps {
   isOpen: boolean;

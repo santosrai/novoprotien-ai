@@ -14,11 +14,13 @@ const categoryLabels: Record<string, string> = {
   code: 'Code',
   fold: 'Fold',
   design: 'Design',
+  dock: 'Dock',
   workflow: 'Workflow',
+  analysis: 'Analysis',
   other: 'Other',
 };
 
-const categoryOrder = ['ask', 'plan', 'code', 'fold', 'design', 'workflow', 'other'];
+const categoryOrder = ['ask', 'plan', 'code', 'fold', 'design', 'dock', 'workflow', 'analysis', 'other'];
 
 export const AgentSelector: React.FC<AgentSelectorProps> = ({ agents, onAgentChange }) => {
   const { settings, updateSettings } = useAgentSettings();

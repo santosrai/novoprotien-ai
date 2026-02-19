@@ -141,6 +141,15 @@ class SimpleRouterGraph:
         if "uniprot" in low and ("search" in low or "find" in low):
             return {"routedAgentId": "uniprot-search", "reason": "rule:uniprot-search"}
         
+        # DiffDock protein-ligand docking (before AlphaFold so "dock ligand" etc. route here)
+        diffdock_keywords = [
+            "diffdock", "protein-ligand", "protein ligand", "ligand docking",
+            "dock ligand", "dock a ligand", "docking ligand", "binding pose",
+            "molecule binding", "small molecule", "ligand binding", "binding site",
+        ]
+        if any(k in low for k in diffdock_keywords):
+            return {"routedAgentId": "diffdock-agent", "reason": "rule:diffdock-docking"}
+
         # AlphaFold folding/docking rule
         alphafold_keywords = [
             "fold", "dock", "predict structure", "alphafold", "structure prediction",

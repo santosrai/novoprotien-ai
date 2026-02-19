@@ -15,7 +15,7 @@ export interface SelectionContext {
 }
 
 export interface StructureOrigin {
-  type: 'pdb' | 'rfdiffusion' | 'alphafold' | 'upload';
+  type: 'pdb' | 'rfdiffusion' | 'alphafold' | 'upload' | 'openfold2' | 'diffdock';
   pdbId?: string;
   jobId?: string;
   parameters?: any;

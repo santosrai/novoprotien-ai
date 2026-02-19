@@ -10,6 +10,7 @@ from .prompts.rfdiffusion import RFDIFFUSION_AGENT_SYSTEM_PROMPT
 from .prompts.proteinmpnn import PROTEINMPNN_AGENT_SYSTEM_PROMPT
 from .prompts.pipeline import PIPELINE_AGENT_SYSTEM_PROMPT
 from .prompts.validation import VALIDATION_AGENT_SYSTEM_PROMPT
+from .prompts.diffdock import DIFFDOCK_AGENT_SYSTEM_PROMPT
 
 
 agents = {
@@ -92,6 +93,16 @@ agents = {
         "defaultModel": os.getenv("CLAUDE_CHAT_MODEL", "claude-3-5-sonnet-20241022"),
         "kind": "proteinmpnn",
         "category": "design",
+    },
+    "diffdock-agent": {
+        "id": "diffdock-agent",
+        "name": "DiffDock Protein-Ligand Docking",
+        "description": "Predicts how a small molecule (ligand) binds to a protein using DiffDock via NVIDIA NIM. Inputs: protein PDB and ligand SDF. Output: binding poses for visualization in MolStar.",
+        "system": DIFFDOCK_AGENT_SYSTEM_PROMPT,
+        "modelEnv": "CLAUDE_CHAT_MODEL",
+        "defaultModel": os.getenv("CLAUDE_CHAT_MODEL", "claude-3-5-sonnet-20241022"),
+        "kind": "diffdock",
+        "category": "dock",
     },
     "pipeline-agent": {
         "id": "pipeline-agent",

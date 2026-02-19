@@ -38,7 +38,7 @@
 - PRs: include description, linked issues, screenshots/GIFs for UI, commands to reproduce, and risk/rollback notes. Keep diffs scoped and request review.
 
 ## Security & Configuration Tips
-- Env vars in `.env` (root) or `server/.env`. Common keys: `OPENROUTER_API_KEY`, `NVCF_RUN_KEY`, `APP_ORIGIN`, `DEBUG_API=0|1`, plus ProteinMPNN overrides like `PROTEINMPNN_URL`, `PROTEINMPNN_POLL_INTERVAL`, `PROTEINMPNN_MAX_WAIT_SECONDS`.
+- Env vars in `.env` (root) or `server/.env`. Common keys: `OPENROUTER_API_KEY`, `NVCF_RUN_KEY`, `APP_ORIGIN`, `DEBUG_API=0|1`, plus ProteinMPNN overrides like `PROTEINMPNN_URL`, `PROTEINMPNN_POLL_INTERVAL`, `PROTEINMPNN_MAX_WAIT_SECONDS`. DiffDock uses the same `NVCF_RUN_KEY` (or `NVIDIA_API_KEY`) as AlphaFold2/OpenFold2/RFdiffusion.
 - **LangSmith tracing** (optional): Set `LANGCHAIN_TRACING_V2=true`, `LANGCHAIN_API_KEY=<key>`, and `LANGCHAIN_PROJECT=<name>` to observe agent routing and execution traces at https://smith.langchain.com.
 - Never commit secrets. `.env` is ignored. Validate keys load at server start (FastAPI logs show masked values).
 

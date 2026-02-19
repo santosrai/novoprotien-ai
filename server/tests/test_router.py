@@ -36,6 +36,17 @@ class TestRuleBasedRouting:
         assert result["routedAgentId"] == "alphafold-agent"
 
     @pytest.mark.asyncio
+    async def test_diffdock_ligand_docking(self, router):
+        result = await router.ainvoke({"input": "dock this ligand to my protein"})
+        assert result["routedAgentId"] == "diffdock-agent"
+        assert "diffdock" in result["reason"]
+
+    @pytest.mark.asyncio
+    async def test_diffdock_protein_ligand_keyword(self, router):
+        result = await router.ainvoke({"input": "run protein-ligand docking"})
+        assert result["routedAgentId"] == "diffdock-agent"
+
+    @pytest.mark.asyncio
     async def test_alphafold_predict_structure(self, router):
         result = await router.ainvoke({"input": "predict 3d structure of this protein"})
         assert result["routedAgentId"] == "alphafold-agent"

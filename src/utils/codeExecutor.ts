@@ -188,6 +188,25 @@ export class CodeExecutor {
         }
       }
 
+      // Resolve /api/openfold2/result/{job_id} to data URL (auth required)
+      const openfold2Match = code.match(/loadStructure\s*\(\s*['"]([^'"]*\/api\/openfold2\/result\/([^'"]+))['"]/);
+      if (openfold2Match) {
+        try {
+          const jobId = openfold2Match[2];
+          const response = await api.get(`/openfold2/result/${jobId}`, { responseType: 'blob' });
+          const blob = new Blob([response.data], { type: 'chemical/x-pdb' });
+          const dataUrl = await new Promise<string>((resolve, reject) => {
+            const reader = new FileReader();
+            reader.onload = () => resolve(reader.result as string);
+            reader.onerror = reject;
+            reader.readAsDataURL(blob);
+          });
+          code = code.replace(openfold2Match[1], dataUrl);
+        } catch (e) {
+          console.warn('[CodeExecutor] Failed to resolve OpenFold2 result URL for execution:', e);
+        }
+      }
+
       // Extract structure info from code for AI context
       const structureInfo = this.extractStructureInfo(code);
       const setLastLoadedPdb = useAppStore.getState?.().setLastLoadedPdb;

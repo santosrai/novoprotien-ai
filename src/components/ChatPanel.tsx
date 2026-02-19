@@ -9,12 +9,14 @@ import { useModels, useAgents } from '../hooks/queries';
 import { v4 as uuidv4 } from 'uuid';
 import { AlphaFoldDialog } from './AlphaFoldDialog';
 import { OpenFold2Dialog } from './OpenFold2Dialog';
+import { DiffDockDialog } from './DiffDockDialog';
 import { RFdiffusionDialog } from './RFdiffusionDialog';
 import { ProteinMPNNDialog } from './ProteinMPNNDialog';
 import { ProgressTracker, useAlphaFoldProgress, useProteinMPNNProgress } from './ProgressTracker';
 import { useAlphaFoldCancel } from '../hooks/mutations/useAlphaFold';
+import { useDiffDockPredict } from '../hooks/mutations/useDiffDock';
 import { ErrorDisplay } from './ErrorDisplay';
-import { ErrorDetails, AlphaFoldErrorHandler, OpenFold2ErrorHandler, RFdiffusionErrorHandler, ErrorCategory, ErrorSeverity } from '../utils/errorHandler';
+import { ErrorDetails, AlphaFoldErrorHandler, OpenFold2ErrorHandler, RFdiffusionErrorHandler, DiffDockErrorHandler, ErrorCategory, ErrorSeverity } from '../utils/errorHandler';
 import { logAlphaFoldError } from '../utils/errorLogger';
 import { AgentSelector } from './AgentSelector';
 import { ModelSelector } from './ModelSelector';
@@ -30,6 +32,8 @@ import type { ValidationReport } from '../types/validation';
 import { usePipelineStore } from '../components/pipeline-canvas';
 import { PipelineBlueprint } from '../components/pipeline-canvas';
 import { extractStructureMetadata, summarizeForAgent } from '../utils/structureMetadata';
+import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
 
 // Extended message metadata for structured agent results
 interface ExtendedMessage extends Message {
@@ -44,6 +48,7 @@ interface ExtendedMessage extends Message {
     pdbContent?: string;
     filename?: string;
     job_id?: string;
+    pdb_url?: string;
     message?: string;
   };
   rfdiffusionResult?: {
@@ -66,6 +71,13 @@ interface ExtendedMessage extends Message {
       raw?: string;
     };
     metadata?: Record<string, any>;
+  };
+  diffdockResult?: {
+    pdbContent?: string;
+    filename?: string;
+    job_id?: string;
+    pdb_url?: string;
+    message?: string;
   };
   thinkingProcess?: {
     steps: Array<{
@@ -517,9 +529,13 @@ export const ChatPanel: React.FC = () => {
   const [showProteinMPNNDialog, setShowProteinMPNNDialog] = useState(false);
   const [proteinmpnnData, setProteinmpnnData] = useState<any>(null);
   const proteinmpnnProgress = useProteinMPNNProgress();
+  const diffdockPredictMutation = useDiffDockPredict();
 
   // OpenFold2 state
   const [showOpenFold2Dialog, setShowOpenFold2Dialog] = useState(false);
+
+  // DiffDock state
+  const [showDiffDockDialog, setShowDiffDockDialog] = useState(false);
 
   // RFdiffusion state
   const [showRFdiffusionDialog, setShowRFdiffusionDialog] = useState(false);
@@ -564,56 +580,12 @@ export const ChatPanel: React.FC = () => {
       // not JSON
     }
 
-    const lines = content.trim().split(/\r?\n/).filter(Boolean);
-    const looksLikeTable =
-      lines.length >= 2 &&
-      lines[0].includes("|") &&
-      (/^-+\|(-+\|?)+$/.test(lines[1].replace(/\s+/g, "")) || lines[1].includes("|"));
-
-    if (looksLikeTable) {
-      const header = lines[0].split("|").map(s => s.trim());
-      const dataRows = lines.slice(2).map(l => l.split("|").map(s => s.trim()));
-      return (
-        <div className="overflow-x-auto">
-          <table className="text-[10px] w-full border border-gray-200">
-            <thead className="bg-gray-50">
-              <tr>
-                {header.map((h, i) => (
-                  <th key={i} className="text-left px-1.5 py-0.5 border-b border-gray-200">{h}</th>
-                ))}
-              </tr>
-            </thead>
-            <tbody>
-              {dataRows.map((r, ri) => (
-                <tr key={ri} className={ri % 2 ? 'bg-gray-50' : ''}>
-                  {r.map((c, ci) => (
-                    <td key={ci} className="px-1.5 py-0.5 align-top border-b border-gray-100">{c || '-'}</td>
-                  ))}
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      );
-    }
-
-    // Handle multi-paragraph content with proper line breaks
-    // Split by double newlines for paragraphs, single newlines for line breaks
-    const paragraphs = content.split(/\n\n+/).filter(p => p.trim());
-    
-    if (paragraphs.length > 1) {
-      // Multi-paragraph content - render each paragraph separately
-      return (
-        <div className="text-sm space-y-1">
-          {paragraphs.map((para, idx) => (
-            <p key={idx} className="whitespace-pre-wrap leading-relaxed">{para.trim()}</p>
-          ))}
-        </div>
-      );
-    }
-    
-    // Single paragraph or no double newlines - preserve single newlines
-    return <p className="text-sm whitespace-pre-wrap leading-relaxed">{content}</p>;
+    // Render full markdown (headings, bold, tables, lists) via react-markdown + GFM
+    return (
+      <div className="markdown-content text-sm leading-relaxed [&_h1]:text-lg [&_h1]:font-semibold [&_h1]:mt-2 [&_h1]:mb-1 [&_h2]:text-base [&_h2]:font-semibold [&_h2]:mt-2 [&_h2]:mb-1 [&_h3]:text-sm [&_h3]:font-semibold [&_h3]:mt-1.5 [&_h3]:mb-0.5 [&_p]:my-1 [&_p]:whitespace-pre-wrap [&_ul]:my-1 [&_ul]:pl-5 [&_ol]:my-1 [&_ol]:pl-5 [&_strong]:font-semibold [&_table]:w-full [&_table]:border-collapse [&_table]:border [&_table]:border-gray-200 [&_th]:text-left [&_th]:px-2 [&_th]:py-1 [&_th]:border [&_th]:border-gray-200 [&_th]:bg-gray-50 [&_td]:px-2 [&_td]:py-1 [&_td]:border [&_td]:border-gray-200 [&_tr:nth-child(even)]:bg-gray-50">
+        <ReactMarkdown remarkPlugins={[remarkGfm]}>{content}</ReactMarkdown>
+      </div>
+    );
   };
 
   // Helper function to validate uploaded file info (type guard)
@@ -1002,14 +974,23 @@ try {
       try {
         setIsExecuting(true);
         const executor = new CodeExecutor(plugin);
-        const storeRes = await api.post('/upload/pdb/from-content', {
-          pdbContent: result.pdbContent,
-          filename: result.filename || 'openfold2_result.pdb',
-        });
-        const fileId = storeRes.data?.file_info?.file_id;
-        const apiUrl = fileId ? `/api/upload/pdb/${fileId}` : null;
-        if (!apiUrl) throw new Error('Failed to store PDB');
-        const blobRes = await api.get(`/upload/pdb/${fileId}`, { responseType: 'blob' });
+        // Use stored result URL when available to avoid creating duplicate uploads on every "View 3D"
+        const resultApiUrl = result.pdb_url ?? (result.job_id ? `/api/openfold2/result/${result.job_id}` : null);
+        let apiUrl: string;
+        let blobRes: { data: BlobPart };
+        if (resultApiUrl) {
+          apiUrl = resultApiUrl;
+          blobRes = await api.get(apiUrl.replace(/^\/api/, ''), { responseType: 'blob' });
+        } else {
+          const storeRes = await api.post('/upload/pdb/from-content', {
+            pdbContent: result.pdbContent,
+            filename: result.filename || 'openfold2_result.pdb',
+          });
+          const fileId = storeRes.data?.file_info?.file_id;
+          apiUrl = fileId ? `/api/upload/pdb/${fileId}` : '';
+          if (!apiUrl) throw new Error('Failed to store PDB');
+          blobRes = await api.get(`/upload/pdb/${fileId}`, { responseType: 'blob' });
+        }
         const blob = new Blob([blobRes.data], { type: 'chemical/x-pdb' });
         const blobUrl = URL.createObjectURL(blob);
         const execCode = `
@@ -1074,6 +1055,107 @@ try {
           >
             <Shield className="w-3.5 h-3.5" />
             Validate
+          </button>
+        </div>
+      </div>
+    );
+  };
+
+  const renderDiffDockResult = (result: ExtendedMessage['diffdockResult'], message?: ExtendedMessage) => {
+    if (!result?.pdbContent && !result?.pdb_url) return null;
+    const downloadPDB = () => {
+      if (result.pdbContent) {
+        const blob = new Blob([result.pdbContent], { type: 'text/plain' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = result.filename || 'diffdock_result.pdb';
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+      } else if (result.pdb_url) {
+        window.open(result.pdb_url, '_blank');
+      }
+    };
+    const loadInViewer = async () => {
+      if (!plugin) return;
+      try {
+        setIsExecuting(true);
+        const executor = new CodeExecutor(plugin);
+        const resultApiUrl = result.pdb_url ?? (result.job_id ? `/api/diffdock/result/${result.job_id}` : null);
+        let apiUrl: string;
+        let blobRes: { data: BlobPart };
+        if (resultApiUrl) {
+          apiUrl = resultApiUrl;
+          blobRes = await api.get(apiUrl.replace(/^\/api/, ''), { responseType: 'blob' });
+        } else if (result.pdbContent) {
+          const storeRes = await api.post('/upload/pdb/from-content', {
+            pdbContent: result.pdbContent,
+            filename: result.filename || 'diffdock_result.pdb',
+          });
+          const fileId = storeRes.data?.file_info?.file_id;
+          apiUrl = fileId ? `/api/upload/pdb/${fileId}` : '';
+          if (!apiUrl) throw new Error('Failed to store PDB');
+          blobRes = await api.get(`/upload/pdb/${fileId}`, { responseType: 'blob' });
+        } else {
+          return;
+        }
+        const blob = new Blob([blobRes.data], { type: 'chemical/x-pdb' });
+        const blobUrl = URL.createObjectURL(blob);
+        const execCode = `
+try {
+  await builder.clearStructure();
+  await builder.loadStructure('${blobUrl}');
+  await builder.addCartoonRepresentation({ color: 'bfactor' });
+  builder.focusView();
+} catch (e) { console.error('Failed to load DiffDock result:', e); }`;
+        const savedCode = `
+try {
+  await builder.clearStructure();
+  await builder.loadStructure('${apiUrl}');
+  await builder.addCartoonRepresentation({ color: 'bfactor' });
+  builder.focusView();
+} catch (e) { console.error('Failed to load DiffDock result:', e); }`;
+        await executor.executeCode(execCode);
+        setTimeout(() => URL.revokeObjectURL(blobUrl), 5000);
+        setCurrentCode(savedCode);
+        if (activeSessionId) saveVisualizationCode(activeSessionId, savedCode, message?.id);
+        setViewerVisibleAndSave(true);
+        setActivePane('viewer');
+        setCurrentStructureOrigin({ type: 'diffdock', filename: result.filename || 'diffdock_result.pdb' });
+      } catch (err) {
+        console.error('Failed to load DiffDock result in viewer:', err);
+      } finally {
+        setIsExecuting(false);
+      }
+    };
+    return (
+      <div className="mt-3 p-4 bg-gradient-to-r from-teal-50 to-cyan-50 border border-teal-200 rounded-lg dark:from-teal-900/20 dark:to-cyan-900/20 dark:border-teal-700">
+        <div className="flex items-center space-x-2 mb-3">
+          <div className="w-8 h-8 bg-teal-600 rounded-full flex items-center justify-center">
+            <span className="text-white text-sm font-bold">DD</span>
+          </div>
+          <div>
+            <h4 className="font-medium text-gray-900 dark:text-gray-100">DiffDock Protein-Ligand Docking</h4>
+            <p className="text-xs text-gray-600 dark:text-gray-400">Docking completed successfully</p>
+          </div>
+        </div>
+        <div className="flex space-x-2">
+          <button
+            onClick={downloadPDB}
+            className="flex items-center space-x-1 px-3 py-2 bg-teal-600 text-white rounded-md hover:bg-teal-700 text-sm"
+          >
+            <Download className="w-4 h-4" />
+            <span>Download PDB</span>
+          </button>
+          <button
+            onClick={loadInViewer}
+            disabled={!plugin}
+            className="flex items-center space-x-1 px-3 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed text-sm"
+          >
+            <Play className="w-4 h-4" />
+            <span>View 3D</span>
           </button>
         </div>
       </div>
@@ -1206,6 +1288,29 @@ try {
     alphafoldProgress.startProgress(jobId, 'Submitting protein folding request...');
     console.log('📡 [AlphaFold] Starting progress tracking for job:', jobId);
 
+    const pendingMessageId = uuidv4();
+    const pendingMessage: ExtendedMessage = {
+      id: pendingMessageId,
+      content: 'AlphaFold structure prediction in progress...',
+      type: 'ai',
+      timestamp: new Date(),
+    };
+    addMessage(pendingMessage);
+
+    const sessionId = activeSession?.id;
+    const updateAlphaFoldMessage = (content: string, update: Partial<ExtendedMessage>) => {
+      if (!sessionId) return;
+      const store = useChatHistoryStore.getState();
+      const session = store.sessions.find(s => s.id === sessionId);
+      if (!session) return;
+      const messages = session.messages || [];
+      const idx = messages.findIndex(m => m.id === pendingMessageId);
+      if (idx === -1) return;
+      const updated = [...messages];
+      updated[idx] = { ...updated[idx], content, ...update };
+      updateMessages(updated);
+    };
+
     try {
       console.log('🌐 [AlphaFold] Making API call to /api/alphafold/fold');
       console.log('📦 [AlphaFold] Payload:', { sequence: sequence.slice(0, 50) + '...', parameters, jobId });
@@ -1229,20 +1334,18 @@ try {
             const st = statusResp.data?.status;
             if (st === 'completed') {
               const result = statusResp.data?.data || {};
-              const aiMessage: ExtendedMessage = {
-                id: (Date.now() + 1).toString(),
-                content: `AlphaFold2 structure prediction completed successfully! The folded structure is ready for download and visualization.`,
-                type: 'ai',
-                timestamp: new Date(),
-                alphafoldResult: {
-                  pdbContent: result.pdbContent,
-                  filename: result.filename || `folded_${Date.now()}.pdb`,
-                  sequence,
-                  parameters,
-                  metadata: result.metadata
+              updateAlphaFoldMessage(
+                `AlphaFold2 structure prediction completed successfully! The folded structure is ready for download and visualization.`,
+                {
+                  alphafoldResult: {
+                    pdbContent: result.pdbContent,
+                    filename: result.filename || `folded_${Date.now()}.pdb`,
+                    sequence,
+                    parameters,
+                    metadata: result.metadata
+                  }
                 }
-              };
-              addMessage(aiMessage);
+              );
               alphafoldProgress.completeProgress();
               return true;
             } else if (st === 'error' || st === 'not_found') {
@@ -1257,17 +1360,11 @@ try {
                 jobId
               );
               logAlphaFoldError(apiError, { apiResponse: statusResp.data, sequence: sequence.slice(0, 100), parameters });
-              const errorMessage: ExtendedMessage = {
-                id: (Date.now() + 1).toString(),
-                content: apiError.userMessage,
-                type: 'ai',
-                timestamp: new Date(),
-                error: apiError
-              };
-              addMessage(errorMessage);
+              updateAlphaFoldMessage(apiError.userMessage, { error: apiError });
               alphafoldProgress.errorProgress(apiError.userMessage);
               return true;
             } else if (st === 'cancelled') {
+              updateAlphaFoldMessage('Folding was cancelled.', {});
               alphafoldProgress.cancelProgress();
               return true;
             } else {
@@ -1293,14 +1390,7 @@ try {
                 jobId
               );
               logAlphaFoldError(apiError, { httpStatus: status, sequence: sequence.slice(0, 100), parameters });
-              const errorMessage: ExtendedMessage = {
-                id: (Date.now() + 1).toString(),
-                content: apiError.userMessage,
-                type: 'ai',
-                timestamp: new Date(),
-                error: apiError
-              };
-              addMessage(errorMessage);
+              updateAlphaFoldMessage(apiError.userMessage, { error: apiError });
               alphafoldProgress.errorProgress(apiError.userMessage);
               return true;
             }
@@ -1330,14 +1420,7 @@ try {
             jobId
           );
           logAlphaFoldError(apiError, { sequence: sequence.slice(0, 100), parameters, timedOut: true });
-          const errorMessage: ExtendedMessage = {
-            id: (Date.now() + 1).toString(),
-            content: apiError.userMessage,
-            type: 'ai',
-            timestamp: new Date(),
-            error: apiError
-          };
-          addMessage(errorMessage);
+          updateAlphaFoldMessage(apiError.userMessage, { error: apiError });
           alphafoldProgress.errorProgress(apiError.userMessage);
         }
         return; // Exit after async flow
@@ -1345,23 +1428,18 @@ try {
 
       if (response.data.status === 'success') {
         const result = response.data.data;
-        
-        // Add result message to chat
-        const aiMessage: ExtendedMessage = {
-          id: (Date.now() + 1).toString(),
-          content: `AlphaFold2 structure prediction completed successfully! The folded structure is ready for download and visualization.`,
-          type: 'ai',
-          timestamp: new Date(),
-          alphafoldResult: {
-            pdbContent: result.pdbContent,
-            filename: result.filename || `folded_${Date.now()}.pdb`,
-            sequence,
-            parameters,
-            metadata: result.metadata
+        updateAlphaFoldMessage(
+          `AlphaFold2 structure prediction completed successfully! The folded structure is ready for download and visualization.`,
+          {
+            alphafoldResult: {
+              pdbContent: result.pdbContent,
+              filename: result.filename || `folded_${Date.now()}.pdb`,
+              sequence,
+              parameters,
+              metadata: result.metadata
+            }
           }
-        };
-        
-        addMessage(aiMessage);
+        );
         alphafoldProgress.completeProgress();
       } else {
         // Handle API errors with structured error display
@@ -1372,48 +1450,15 @@ try {
           undefined,
           jobId
         );
-        
-        // Log the API error
-        logAlphaFoldError(apiError, { 
-          apiResponse: response.data, 
-          sequence: sequence.slice(0, 100),
-          parameters 
-        });
-        
-        const errorMessage: ExtendedMessage = {
-          id: (Date.now() + 1).toString(),
-          content: apiError.userMessage,
-          type: 'ai',
-          timestamp: new Date(),
-          error: apiError
-        };
-        
-        addMessage(errorMessage);
+        logAlphaFoldError(apiError, { apiResponse: response.data, sequence: sequence.slice(0, 100), parameters });
+        updateAlphaFoldMessage(apiError.userMessage, { error: apiError });
         alphafoldProgress.errorProgress(apiError.userMessage);
       }
     } catch (error: any) {
       console.error('AlphaFold request failed:', error);
-      
-      // Handle different types of errors
       const structuredError = AlphaFoldErrorHandler.handleAPIError(error, jobId);
-      
-      // Log the network/system error
-      logAlphaFoldError(structuredError, { 
-        originalError: error.message,
-        sequence: sequence.slice(0, 100),
-        parameters,
-        networkError: true
-      });
-      
-      const errorMessage: ExtendedMessage = {
-        id: (Date.now() + 1).toString(),
-        content: structuredError.userMessage,
-        type: 'ai',
-        timestamp: new Date(),
-        error: structuredError
-      };
-      
-      addMessage(errorMessage);
+      logAlphaFoldError(structuredError, { originalError: error.message, sequence: sequence.slice(0, 100), parameters, networkError: true });
+      updateAlphaFoldMessage(structuredError.userMessage, { error: structuredError });
       alphafoldProgress.errorProgress(structuredError.userMessage);
     }
   };
@@ -1432,12 +1477,29 @@ try {
       });
       return;
     }
-    addMessage({
-      id: (Date.now()).toString(),
+    const pendingMessageId = uuidv4();
+    const pendingMessage: ExtendedMessage = {
+      id: pendingMessageId,
       content: 'OpenFold2 structure prediction in progress...',
       type: 'ai',
       timestamp: new Date(),
-    });
+    };
+    addMessage(pendingMessage);
+
+    const sessionId = activeSession?.id;
+    const updateOpenFold2Message = (content: string, update: Partial<ExtendedMessage>) => {
+      if (!sessionId) return;
+      const store = useChatHistoryStore.getState();
+      const session = store.sessions.find(s => s.id === sessionId);
+      if (!session) return;
+      const messages = session.messages || [];
+      const idx = messages.findIndex(m => m.id === pendingMessageId);
+      if (idx === -1) return;
+      const updated = [...messages];
+      updated[idx] = { ...updated[idx], content, ...update };
+      updateMessages(updated);
+    };
+
     try {
       const response = await api.post('/openfold2/predict', {
         sequence,
@@ -1449,38 +1511,106 @@ try {
       });
       const data = response.data;
       if (data.status === 'completed' && data.pdbContent) {
-        const aiMessage: ExtendedMessage = {
-          id: (Date.now() + 1).toString(),
-          content: 'OpenFold2 structure prediction completed successfully! The structure is ready for visualization.',
-          type: 'ai',
-          timestamp: new Date(),
-          openfold2Result: {
-            pdbContent: data.pdbContent,
-            filename: data.filename || `openfold2_${jobId}.pdb`,
-            job_id: data.job_id,
-            message: data.message,
-          },
-        };
-        addMessage(aiMessage);
+        updateOpenFold2Message(
+          'OpenFold2 structure prediction completed successfully! The structure is ready for visualization.',
+          {
+            openfold2Result: {
+              pdbContent: data.pdbContent,
+              filename: data.filename || `openfold2_${jobId}.pdb`,
+              job_id: data.job_id,
+              pdb_url: data.pdb_url ?? (data.job_id ? `/api/openfold2/result/${data.job_id}` : undefined),
+              message: data.message,
+            },
+          }
+        );
       } else {
-        const err = OpenFold2ErrorHandler.createError(data.code || 'API_ERROR', { jobId }, data.error);
-        addMessage({
-          id: (Date.now() + 1).toString(),
-          content: err.userMessage,
-          type: 'ai',
-          timestamp: new Date(),
-          error: err,
-        });
+        const err = OpenFold2ErrorHandler.createError(data.code || 'API_ERROR', { jobId, feature: 'OpenFold2' }, data.error);
+        updateOpenFold2Message(err.userMessage, { error: err });
       }
     } catch (error: any) {
-      const err = OpenFold2ErrorHandler.createError('API_ERROR', { jobId }, error?.response?.data?.error || error?.message);
-      addMessage({
-        id: (Date.now() + 1).toString(),
-        content: err.userMessage,
-        type: 'ai',
-        timestamp: new Date(),
-        error: err,
+      const err = OpenFold2ErrorHandler.createError('API_ERROR', { jobId, feature: 'OpenFold2' }, error?.response?.data?.error || error?.message);
+      updateOpenFold2Message(err.userMessage, { error: err });
+    }
+  };
+
+  const handleDiffDockClose = () => {
+    setShowDiffDockDialog(false);
+    addMessage({
+      id: uuidv4(),
+      content: "You've closed the DiffDock dialog. Ask to dock a ligand when you're ready.",
+      type: 'ai',
+      timestamp: new Date(),
+    });
+  };
+
+  const handleDiffDockConfirm = async (params: {
+    protein_file_id?: string;
+    protein_content?: string;
+    ligand_sdf_content: string;
+    parameters: { num_poses?: number; time_divisions?: number; steps?: number; save_trajectory?: boolean; is_staged?: boolean };
+  }) => {
+    setShowDiffDockDialog(false);
+    const jobId = `diffdock_${Date.now()}`;
+    const pendingMessageId = uuidv4();
+    const pendingMessage: ExtendedMessage = {
+      id: pendingMessageId,
+      content: 'DiffDock docking in progress...',
+      type: 'ai',
+      timestamp: new Date(),
+    };
+    addMessage(pendingMessage);
+
+    const sessionId = activeSession?.id;
+    const updateDiffDockMessage = (content: string, update: Partial<ExtendedMessage>) => {
+      if (!sessionId) return;
+      const store = useChatHistoryStore.getState();
+      const session = store.sessions.find(s => s.id === sessionId);
+      if (!session) return;
+      const messages = session.messages || [];
+      const idx = messages.findIndex(m => m.id === pendingMessageId);
+      if (idx === -1) return;
+      const updated = [...messages];
+      updated[idx] = { ...updated[idx], content, ...update };
+      updateMessages(updated);
+    };
+
+    try {
+      const data = await diffdockPredictMutation.mutateAsync({
+        protein_file_id: params.protein_file_id,
+        protein_content: params.protein_content,
+        ligand_sdf_content: params.ligand_sdf_content,
+        parameters: params.parameters ?? {},
+        job_id: jobId,
+        jobId,
+        session_id: activeSessionId ?? undefined,
+        sessionId: activeSessionId ?? undefined,
       });
+      if (data.status === 'completed' && (data.pdbContent || data.pdb_url)) {
+        updateDiffDockMessage(
+          data.message ?? 'DiffDock docking completed successfully! The structure is ready for visualization.',
+          {
+            diffdockResult: {
+              pdbContent: data.pdbContent,
+              filename: data.job_id ? `diffdock_${data.job_id}.pdb` : 'diffdock_result.pdb',
+              job_id: data.job_id,
+              pdb_url: data.pdb_url ?? (data.job_id ? `/api/diffdock/result/${data.job_id}` : undefined),
+              message: data.message,
+            },
+          }
+        );
+      } else {
+        const err = DiffDockErrorHandler.handleError(
+          { data: { errorCode: data.errorCode, userMessage: data.userMessage }, status: 400 },
+          { jobId, feature: 'DiffDock' }
+        );
+        updateDiffDockMessage(err.userMessage, { error: err });
+      }
+    } catch (error: any) {
+      const err = DiffDockErrorHandler.handleError(
+        error?.response ?? { data: error?.response?.data, status: error?.response?.status },
+        { jobId, feature: 'DiffDock' }
+      );
+      updateDiffDockMessage(err.userMessage, { error: err });
     }
   };
 
@@ -1512,6 +1642,29 @@ try {
       parameters: config.parameters,
     };
 
+    const pendingMessageId = uuidv4();
+    const pendingMessage: ExtendedMessage = {
+      id: pendingMessageId,
+      content: 'ProteinMPNN sequence design in progress...',
+      type: 'ai',
+      timestamp: new Date(),
+    };
+    addMessage(pendingMessage);
+
+    const sessionId = activeSession?.id;
+    const updateProteinMPNNMessage = (content: string, update: Partial<ExtendedMessage>) => {
+      if (!sessionId) return;
+      const store = useChatHistoryStore.getState();
+      const session = store.sessions.find(s => s.id === sessionId);
+      if (!session) return;
+      const messages = session.messages || [];
+      const idx = messages.findIndex(m => m.id === pendingMessageId);
+      if (idx === -1) return;
+      const updated = [...messages];
+      updated[idx] = { ...updated[idx], content, ...update };
+      updateMessages(updated);
+    };
+
     try {
       proteinmpnnProgress.startProgress(jobId, 'Submitting ProteinMPNN design request...');
       const response = await api.post('/proteinmpnn/design', payload);
@@ -1524,14 +1677,7 @@ try {
           response.data?.error || 'Unexpected response from ProteinMPNN submission endpoint.',
           context,
         );
-        const errorMessage: ExtendedMessage = {
-          id: uuidv4(),
-          content: errorDetails.userMessage,
-          type: 'ai',
-          timestamp: new Date(),
-          error: errorDetails,
-        };
-        addMessage(errorMessage);
+        updateProteinMPNNMessage(errorDetails.userMessage, { error: errorDetails });
         proteinmpnnProgress.errorProgress(errorDetails.userMessage);
         return;
       }
@@ -1568,11 +1714,7 @@ try {
               ? `ProteinMPNN generated ${sequenceEntries.length} candidate sequence${sequenceEntries.length === 1 ? '' : 's'}.`
               : 'ProteinMPNN job completed, but no sequences were returned.';
 
-            const resultMessage: ExtendedMessage = {
-              id: uuidv4(),
-              content: messageContent,
-              type: 'ai',
-              timestamp: new Date(),
+            updateProteinMPNNMessage(messageContent, {
               proteinmpnnResult: {
                 jobId,
                 sequences: sequenceEntries,
@@ -1583,9 +1725,7 @@ try {
                 },
                 metadata: resultData,
               },
-            };
-
-            addMessage(resultMessage);
+            });
             proteinmpnnProgress.completeProgress(
               sequenceEntries.length ? 'Sequence design completed successfully!' : 'ProteinMPNN job completed.'
             );
@@ -1599,14 +1739,7 @@ try {
               statusData.error || status || 'Job failed',
               { ...context, status },
             );
-            const errorMessage: ExtendedMessage = {
-              id: uuidv4(),
-              content: errorDetails.userMessage,
-              type: 'ai',
-              timestamp: new Date(),
-              error: errorDetails,
-            };
-            addMessage(errorMessage);
+            updateProteinMPNNMessage(errorDetails.userMessage, { error: errorDetails });
             proteinmpnnProgress.errorProgress(errorDetails.userMessage);
             return true;
           }
@@ -1657,14 +1790,7 @@ try {
           'Job exceeded client-side timeout threshold.',
           context,
         );
-        const errorMessage: ExtendedMessage = {
-          id: uuidv4(),
-          content: errorDetails.userMessage,
-          type: 'ai',
-          timestamp: new Date(),
-          error: errorDetails,
-        };
-        addMessage(errorMessage);
+        updateProteinMPNNMessage(errorDetails.userMessage, { error: errorDetails });
         proteinmpnnProgress.errorProgress(errorDetails.userMessage);
       }
     } catch (error: any) {
@@ -1676,14 +1802,7 @@ try {
         technicalMessage,
         context,
       );
-      const errorMessage: ExtendedMessage = {
-        id: uuidv4(),
-        content: errorDetails.userMessage,
-        type: 'ai',
-        timestamp: new Date(),
-        error: errorDetails,
-      };
-      addMessage(errorMessage);
+      updateProteinMPNNMessage(errorDetails.userMessage, { error: errorDetails });
       proteinmpnnProgress.errorProgress(errorDetails.userMessage);
     }
   };
@@ -1691,10 +1810,7 @@ try {
   // RFdiffusion handling functions
   const handleRFdiffusionConfirm = async (parameters: any) => {
     setShowRFdiffusionDialog(false);
-    
     const jobId = `rf_${Date.now()}`;
-    
-    // Create pending message immediately with jobId and jobType
     const pendingMessageId = uuidv4();
     const pendingMessage: ExtendedMessage = {
       id: pendingMessageId,
@@ -1705,95 +1821,47 @@ try {
       jobType: 'rfdiffusion'
     };
     addMessage(pendingMessage);
-    
-    // Make API call in background (it will wait for completion)
+
+    const sessionId = activeSession?.id;
+    const updateRFdiffusionMessage = (content: string, update: Partial<ExtendedMessage>) => {
+      if (!sessionId) return;
+      const store = useChatHistoryStore.getState();
+      const session = store.sessions.find(s => s.id === sessionId);
+      if (!session) return;
+      const messages = session.messages || [];
+      const idx = messages.findIndex(m => m.id === pendingMessageId);
+      if (idx === -1) return;
+      const updated = [...messages];
+      updated[idx] = { ...updated[idx], content, ...update, jobId: undefined, jobType: undefined };
+      updateMessages(updated);
+    };
+
     try {
-      const response = await api.post('/rfdiffusion/design', {
-        parameters,
-        jobId
-      });
+      const response = await api.post('/rfdiffusion/design', { parameters, jobId });
 
       if (response.data.status === 'success') {
         const result = response.data.data;
-        
-        // Update the pending message with the result
-        if (activeSession) {
-          const messages = activeSession.messages || [];
-          const messageIndex = messages.findIndex(m => m.id === pendingMessageId);
-          if (messageIndex !== -1) {
-            const updatedMessages = [...messages];
-            updatedMessages[messageIndex] = {
-              ...updatedMessages[messageIndex],
-              content: `RFdiffusion protein design completed successfully! The designed structure is ready for download and visualization.`,
-              rfdiffusionResult: {
-                pdbContent: result.pdbContent,
-                filename: result.filename || `designed_${Date.now()}.pdb`,
-                parameters,
-                metadata: result.metadata
-              },
-              jobId: undefined,
-              jobType: undefined
-            };
-            updateMessages(updatedMessages);
+        updateRFdiffusionMessage(
+          `RFdiffusion protein design completed successfully! The designed structure is ready for download and visualization.`,
+          {
+            rfdiffusionResult: {
+              pdbContent: result.pdbContent,
+              filename: result.filename || `designed_${Date.now()}.pdb`,
+              parameters,
+              metadata: result.metadata
+            }
           }
-        }
+        );
       } else {
-        // Handle API error response (non-error HTTP status but status !== 'success')
-        const apiError = RFdiffusionErrorHandler.handleError(response.data, {
-          jobId,
-          parameters,
-          feature: 'RFdiffusion'
-        });
-        
-        // Use AI summary as the primary chat message if available
+        const apiError = RFdiffusionErrorHandler.handleError(response.data, { jobId, parameters, feature: 'RFdiffusion' });
         const displayContent = apiError.aiSummary || apiError.userMessage;
-        
-        // Update the pending message with error
-        if (activeSession) {
-          const messages = activeSession.messages || [];
-          const messageIndex = messages.findIndex(m => m.id === pendingMessageId);
-          if (messageIndex !== -1) {
-            const updatedMessages = [...messages];
-            updatedMessages[messageIndex] = {
-              ...updatedMessages[messageIndex],
-              content: displayContent,
-              error: apiError,
-              jobId: undefined,
-              jobType: undefined
-            };
-            updateMessages(updatedMessages);
-          }
-        }
+        updateRFdiffusionMessage(displayContent, { error: apiError });
       }
     } catch (error: any) {
       console.error('RFdiffusion request failed:', error);
-      
-      // Handle different types of errors (Axios throws on 4xx/5xx)
-      const structuredError = RFdiffusionErrorHandler.handleError(error, {
-        jobId,
-        parameters,
-        feature: 'RFdiffusion'
-      });
-      
-      // Use AI summary as the primary chat message if available
+      const structuredError = RFdiffusionErrorHandler.handleError(error, { jobId, parameters, feature: 'RFdiffusion' });
       const displayContent = structuredError.aiSummary || structuredError.userMessage;
-      
-      // Update the pending message with error
-      if (activeSession) {
-        const messages = activeSession.messages || [];
-        const messageIndex = messages.findIndex(m => m.id === pendingMessageId);
-        if (messageIndex !== -1) {
-          const updatedMessages = [...messages];
-          updatedMessages[messageIndex] = {
-            ...updatedMessages[messageIndex],
-            content: displayContent,
-            error: structuredError,
-            jobId: undefined,
-            jobType: undefined
-          };
-          updateMessages(updatedMessages);
-        }
-      }
+      updateRFdiffusionMessage(displayContent, { error: structuredError });
     }
   };
 
@@ -1887,6 +1955,11 @@ try {
 
       if (data.action === 'open_openfold2_dialog') {
         setShowOpenFold2Dialog(true);
+        return true;
+      }
+
+      if (data.action === 'open_diffdock_dialog') {
+        setShowDiffDockDialog(true);
         return true;
       }
 
@@ -2299,6 +2372,14 @@ try {
             return;
           }
 
+          if (agentId === 'diffdock-agent') {
+            if (handleAlphaFoldResponse(aiText)) {
+              return;
+            }
+            setShowDiffDockDialog(true);
+            return;
+          }
+
           // Check if this is an RFdiffusion response
           if (agentId === 'rfdiffusion-agent') {
             if (handleAlphaFoldResponse(aiText)) {
@@ -2699,6 +2780,7 @@ try {
                   })()}
                   {renderAlphaFoldResult(message.alphafoldResult, message)}
                   {renderOpenFold2Result(message.openfold2Result, message)}
+                  {renderDiffDockResult(message.diffdockResult, message)}
                   {renderRFdiffusionResult(message.rfdiffusionResult, message)}
                   {renderProteinMPNNResult(message.proteinmpnnResult)}
                   {message.validationResult && renderValidationResult(message.validationResult)}
@@ -3066,6 +3148,13 @@ try {
                 OpenFold2
               </button>
               <button
+                onClick={() => setShowDiffDockDialog(true)}
+                className="px-4 py-2 bg-teal-50 hover:bg-teal-100 text-teal-800 rounded-lg border border-teal-200 text-sm font-medium transition-colors"
+                title="DiffDock protein-ligand docking"
+              >
+                DiffDock
+              </button>
+              <button
                 onClick={() => {}}
                 className="px-4 py-2 bg-white hover:bg-gray-50 text-gray-700 rounded-lg border border-gray-200 text-sm font-medium transition-colors"
               >
@@ -3103,6 +3192,12 @@ try {
         isOpen={showOpenFold2Dialog}
         onClose={handleOpenFold2Close}
         onConfirm={handleOpenFold2Confirm}
+      />
+
+      <DiffDockDialog
+        isOpen={showDiffDockDialog}
+        onClose={handleDiffDockClose}
+        onConfirm={handleDiffDockConfirm}
       />
 
       {/* Pipeline Selection Modal */}

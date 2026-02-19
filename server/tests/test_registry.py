@@ -14,6 +14,7 @@ class TestAgentRegistry:
             "openfold2-agent",
             "rfdiffusion-agent",
             "proteinmpnn-agent",
+            "diffdock-agent",
             "pipeline-agent",
         ]
         for agent_id in expected_ids:
@@ -35,7 +36,7 @@ class TestAgentRegistry:
             assert agent["description"], f"Agent '{agent_id}' has empty description"
 
     def test_agent_kinds_are_valid(self):
-        valid_kinds = {"code", "text", "alphafold", "openfold2", "rfdiffusion", "proteinmpnn", "pipeline"}
+        valid_kinds = {"code", "text", "alphafold", "openfold2", "rfdiffusion", "proteinmpnn", "diffdock", "pipeline"}
         for agent_id, agent in agents.items():
             assert agent["kind"] in valid_kinds, (
                 f"Agent '{agent_id}' has unexpected kind '{agent['kind']}'"

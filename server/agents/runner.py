@@ -877,6 +877,13 @@ async def run_agent(
         log_line("agent:openfold2:open_dialog", {"userText": user_text[:100]})
         return {"type": "text", "text": json.dumps(result)}
 
+    # Special handling for DiffDock agent - open dialog (protein-ligand docking)
+    if agent.get("id") == "diffdock-agent":
+        import json
+        result = {"action": "open_diffdock_dialog"}
+        log_line("agent:diffdock:open_dialog", {"userText": user_text[:100]})
+        return {"type": "text", "text": json.dumps(result)}
+
     # Special handling for RFdiffusion agent - use handler instead of LLM
     if agent.get("id") == "rfdiffusion-agent":
         try:
@@ -1582,6 +1589,17 @@ async def run_agent(
                 "note": "Using basic context without full pipeline data",
             })
     
+    # Build conversation history so the model can understand "previous chat" / "earlier in this conversation"
+    conversation_history: List[Dict[str, Any]] = []
+    if history:
+        for msg in history[-6:]:
+            msg_type = msg.get("type", "")
+            msg_content = msg.get("content", "")
+            if msg_type == "user":
+                conversation_history.append({"role": "user", "content": msg_content})
+            elif msg_type == "ai":
+                conversation_history.append({"role": "assistant", "content": msg_content})
+
     messages: List[Dict[str, Any]] = []
     context_parts = []
     if uploaded_file_info:
@@ -1609,11 +1627,12 @@ async def run_agent(
     # Map model ID to OpenRouter format
     openrouter_model = _map_model_id(model)
     
-    # Prepare messages with system prompt
-    openrouter_messages = []
+    # Prepare messages: system, then conversation history (so "previous chat" is understood), then current context + request
+    openrouter_messages: List[Dict[str, Any]] = []
     system_prompt = agent.get("system")
     if system_prompt:
         openrouter_messages.append({"role": "system", "content": system_prompt})
+    openrouter_messages.extend(conversation_history)
     openrouter_messages.extend(messages)
     
     # Try the requested model, with automatic fallback to default if rate limited
@@ -2081,6 +2100,17 @@ async def run_agent_stream(
         greeting_patterns = ["hi", "hello", "hey", "greetings", "good morning", "good afternoon", "good evening", "thanks", "thank you", "ok", "okay"]
         is_greeting = any(pattern in user_text_lower for pattern in greeting_patterns) and len(user_text.strip()) < 30
         
+        # Build conversation history so the model can understand "previous chat" / "earlier in this conversation"
+        conversation_history_stream: List[Dict[str, Any]] = []
+        if history:
+            for msg in history[-6:]:
+                msg_type = msg.get("type", "")
+                msg_content = msg.get("content", "")
+                if msg_type == "user":
+                    conversation_history_stream.append({"role": "user", "content": msg_content})
+                elif msg_type == "ai":
+                    conversation_history_stream.append({"role": "assistant", "content": msg_content})
+        
         messages: List[Dict[str, Any]] = []
         context_parts = []
         if uploaded_file_info:
@@ -2098,11 +2128,12 @@ async def run_agent_stream(
             messages.append({"role": "user", "content": "\n\n".join(context_parts)})
         messages.append({"role": "user", "content": user_text})
         
-        # Prepare messages with system prompt
-        openrouter_messages = []
+        # Prepare messages: system, then conversation history, then current context + request
+        openrouter_messages: List[Dict[str, Any]] = []
         system_prompt = agent.get("system")
         if system_prompt:
             openrouter_messages.append({"role": "system", "content": system_prompt})
+        openrouter_messages.extend(conversation_history_stream)
         openrouter_messages.extend(messages)
         
         # Map model ID to OpenRouter format
