@@ -16,3 +16,4 @@ passlib[bcrypt]==1.7.4
 PyJWT==2.8.0
 biopython>=1.83
 numpy>=1.26.0
+rdkit>=2023.0.0

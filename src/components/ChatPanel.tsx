@@ -691,6 +691,69 @@ try {
     }
   };
 
+  const loadSmilesInViewer = async (smilesData: { smiles: string; format?: string }) => {
+    const format = (smilesData.format || 'pdb').toLowerCase() === 'sdf' ? 'sdf' : 'pdb';
+    let response: { content: string; filename: string; format: string };
+    try {
+      const res = await api.post<{ content: string; filename: string; format: string }>(
+        '/smiles/to-structure',
+        { smiles: smilesData.smiles.trim(), format }
+      );
+      response = res.data;
+    } catch (err: any) {
+      const userMessage =
+        err?.response?.data?.userMessage ||
+        err?.response?.data?.detail ||
+        err?.message ||
+        'Failed to convert SMILES to structure.';
+      throw new Error(userMessage);
+    }
+
+    setCurrentCode('');
+    setCurrentStructureOrigin({
+      type: 'smiles',
+      filename: response.filename,
+      metadata: { smiles: smilesData.smiles },
+    });
+    setViewerVisibleAndSave(true);
+    setActivePane('viewer');
+
+    const waitForPlugin = async (maxWait = 15000, retryInterval = 200): Promise<PluginUIContext | null> => {
+      const startTime = Date.now();
+      while (Date.now() - startTime < maxWait) {
+        const currentPlugin = useAppStore.getState().plugin;
+        if (currentPlugin?.builders?.data && currentPlugin?.builders?.structure) {
+          return currentPlugin;
+        }
+        await new Promise((resolve) => setTimeout(resolve, retryInterval));
+      }
+      return null;
+    };
+
+    const readyPlugin = await waitForPlugin();
+    if (!readyPlugin) {
+      setCurrentCode('// SMILES loaded – viewer initializing');
+      setPendingCodeToRun('// SMILES structure will load when viewer is ready');
+      return;
+    }
+
+    try {
+      setIsExecuting(true);
+      const { createMolstarBuilder } = await import('../utils/molstarBuilder');
+      const builder = createMolstarBuilder(readyPlugin);
+      await builder.loadStructureFromContent(response.content, response.format as 'pdb' | 'sdf');
+      setCurrentCode('// SMILES structure loaded in 3D (ball-and-stick)');
+      if (activeSessionId) {
+        saveVisualizationCode(activeSessionId, '// SMILES structure loaded in 3D');
+      }
+    } catch (err) {
+      console.error('[ChatPanel] Failed to load SMILES in viewer:', err);
+      throw err;
+    } finally {
+      setIsExecuting(false);
+    }
+  };
+
   const renderFileAttachment = (fileInfo: ExtendedMessage['uploadedFile'], isUserMessage: boolean = false) => {
     if (!isValidUploadedFile(fileInfo)) return null;
 
@@ -1962,6 +2025,21 @@ try {
 
       if (data.action === 'open_diffdock_dialog') {
         setShowDiffDockDialog(true);
+        return true;
+      }
+
+      if (data.action === 'show_smiles_in_viewer' && data.smiles) {
+        loadSmilesInViewer({
+          smiles: data.smiles,
+          format: data.format || 'pdb',
+        }).catch((err) => {
+          addMessage({
+            id: uuidv4(),
+            content: err?.message ?? 'Failed to load SMILES in 3D viewer.',
+            type: 'ai',
+            timestamp: new Date(),
+          });
+        });
         return true;
       }
 

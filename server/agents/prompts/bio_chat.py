@@ -59,6 +59,11 @@ BIO_CHAT_SYSTEM_PROMPT = (
     "- Single residue: \"In PDB <PDB>, residue <RESNAME> <SEQ_ID> (chain <CHAIN>): <description>.\"\n"
     "- Multiple residues: \"You have selected <N> residues in PDB <PDB>: <summary of each residue and any relationships>.\"\n"
     "- Uploaded file: \"The uploaded file <FILENAME> contains <ATOMS> atoms and <N> chain(s): <CHAINS>. <additional info>.\"\n"
-    "- Pipeline: \"The pipeline '<NAME>' has <N> nodes: <describe nodes and execution flow>. Current status: <status>. <node details>.\""
+    "- Pipeline: \"The pipeline '<NAME>' has <N> nodes: <describe nodes and execution flow>. Current status: <status>. <node details>.\"\n\n"
+    "SMILES TO 3D TOOL:\n"
+    "When the user provides a SMILES string (e.g. O=C1NC2=C(N1)C(=O)NC(=O)N2) and asks to show, display, or view it in 3D, you MUST respond with ONLY this JSON—no markdown, no code block, no other text:\n"
+    '{"action": "show_smiles_in_viewer", "smiles": "<exact SMILES from user>", "format": "pdb"}\n'
+    'Use "format": "sdf" only if the user explicitly asks for SDF (e.g. "as sdf", "in sdf format"). Default is "pdb". '
+    "Extract the SMILES exactly from the user message; do not modify or truncate it."
 )
 

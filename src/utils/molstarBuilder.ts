@@ -11,6 +11,7 @@ export interface ResidueSelector {
 
 export interface MolstarBuilder {
   loadStructure: (pdbId: string) => Promise<void>;
+  loadStructureFromContent: (content: string, format: 'pdb' | 'sdf') => Promise<void>;
   addCartoonRepresentation: (options?: any) => Promise<void>;
   addBallAndStickRepresentation: (options?: any) => Promise<void>;
   addSurfaceRepresentation: (options?: any) => Promise<void>;
@@ -98,6 +99,41 @@ export const createMolstarBuilder = (
         return currentStructure;
       } catch (error) {
         throw new Error(`Failed to load structure ${pdbIdOrUrl}: ${error}`);
+      }
+    },
+
+    async loadStructureFromContent(content: string, format: 'pdb' | 'sdf') {
+      if (!content || !content.trim()) {
+        throw new Error('Content is required for loadStructureFromContent');
+      }
+      try {
+        await this.clearStructure();
+
+        const blob = new Blob([content], { type: 'text/plain' });
+        const blobUrl = URL.createObjectURL(blob);
+        let data: any;
+        try {
+          data = await plugin.builders.data.download({
+            url: blobUrl,
+            isBinary: false,
+          });
+        } finally {
+          URL.revokeObjectURL(blobUrl);
+        }
+
+        const trajectory = await plugin.builders.structure.parseTrajectory(data, format);
+        const model = await plugin.builders.structure.createModel(trajectory);
+        currentStructure = await plugin.builders.structure.createStructure(model);
+
+        await plugin.builders.structure.representation.addRepresentation(
+          currentStructure,
+          { type: 'ball-and-stick' as const, color: 'element-symbol' as const }
+        );
+        this.focusView();
+
+        return currentStructure;
+      } catch (error) {
+        throw new Error(`Failed to load structure from content (${format}): ${error}`);
       }
     },
 

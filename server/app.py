@@ -82,6 +82,7 @@ try:
     from .agents.handlers.diffdock import diffdock_handler
     from .domain.storage.pdb_storage import save_uploaded_pdb, get_uploaded_pdb
     from .domain.storage.file_access import list_user_files, verify_file_ownership, get_file_metadata, get_user_file_path
+    from .tools.smiles_converter import smiles_to_structure
     from .database.db import get_db
     from .api.middleware.auth import get_current_user, get_current_user_optional
     from .api.routes import auth, chat_sessions, chat_messages, pipelines, credits, reports, admin, three_d_canvases, attachments
@@ -111,6 +112,7 @@ except ImportError:
     from agents.handlers.diffdock import diffdock_handler
     from domain.storage.pdb_storage import save_uploaded_pdb, get_uploaded_pdb
     from domain.storage.file_access import list_user_files, verify_file_ownership, get_file_metadata, get_user_file_path
+    from tools.smiles_converter import smiles_to_structure
     from database.db import get_db
     from api.middleware.auth import get_current_user, get_current_user_optional
     from api.routes import auth, chat_sessions, chat_messages, pipelines, credits, reports, admin, three_d_canvases, attachments
@@ -923,6 +925,64 @@ async def upload_pdb_from_content(
     except Exception as e:
         log_line("pdb_from_content_failed", {"error": str(e), "trace": traceback.format_exc()})
         raise HTTPException(status_code=500, detail="Failed to store PDB content")
+
+
+@app.post("/api/smiles/to-structure")
+@limiter.limit("30/minute")
+async def smiles_to_structure_endpoint(
+    request: Request,
+    user: Dict[str, Any] = Depends(get_current_user),
+):
+    """Convert SMILES to 3D structure (PDB or SDF) for loading in the MolStar viewer."""
+    try:
+        body = await request.json()
+        smiles = (body.get("smiles") or "").strip()
+        fmt = (body.get("format") or "pdb").lower()
+        if fmt not in ("pdb", "sdf"):
+            fmt = "pdb"
+        if not smiles:
+            return JSONResponse(
+                status_code=400,
+                content={
+                    "userMessage": "SMILES string is required.",
+                    "technicalMessage": "Request body must include a non-empty 'smiles' field.",
+                },
+            )
+        content, filename = smiles_to_structure(smiles, fmt)
+        return {
+            "content": content,
+            "filename": filename,
+            "format": fmt,
+        }
+    except ValueError as e:
+        log_line("smiles_conversion_validation_failed", {"error": str(e), "smiles_len": len(smiles)})
+        return JSONResponse(
+            status_code=400,
+            content={
+                "userMessage": str(e) or "Invalid SMILES or conversion failed.",
+                "technicalMessage": str(e),
+            },
+        )
+    except RuntimeError as e:
+        log_line("smiles_conversion_runtime_failed", {"error": str(e)})
+        return JSONResponse(
+            status_code=503,
+            content={
+                "userMessage": "SMILES conversion is not available (RDKit not installed).",
+                "technicalMessage": str(e),
+            },
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        log_line("smiles_conversion_failed", {"error": str(e), "trace": traceback.format_exc()})
+        return JSONResponse(
+            status_code=500,
+            content={
+                "userMessage": "Failed to convert SMILES to structure.",
+                "technicalMessage": str(e),
+            },
+        )
 
 
 @app.get("/api/upload/pdb/{file_id}")
