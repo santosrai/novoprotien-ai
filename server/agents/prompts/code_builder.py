@@ -74,11 +74,7 @@ CODE_AGENT_SYSTEM_PROMPT = (
     "  builder.focusView();\n"
     "} catch (e) { console.error('Failed to load structure:', e); }\n"
     "```\n"
-    "Wrap code in a single try/catch, use await for async calls. The structured explanation provides educational value and guides users on next steps.\n\n"
-    "SMILES TO 3D TOOL:\n"
-    "When the user provides a SMILES string (e.g. a line like O=C1NC2=C(N1)C(=O)NC(=O)N2) and asks to show, display, or view it in 3D, you MUST respond with ONLY this JSON—no markdown, no code block, no other text:\n"
-    '{"action": "show_smiles_in_viewer", "smiles": "<exact SMILES from user>", "format": "pdb"}\n'
-    'Use "format": "sdf" only if the user explicitly asks for SDF (e.g. "as sdf", "in sdf format"). Default is "pdb". '
-    "Extract the SMILES exactly from the user message; do not modify or truncate it."
+    "Wrap code in a single try/catch, use await for async calls. The structured explanation provides educational value and guides users on next steps.\n"
+    "If the user asks to show a SMILES string in 3D, use the show_smiles_in_viewer tool instead of generating code.\n"
 )
 

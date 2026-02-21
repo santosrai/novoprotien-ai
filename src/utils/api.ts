@@ -219,7 +219,7 @@ export interface StreamChunk {
  * Stream agent route responses for thinking models.
  * Yields chunks as they arrive from the server.
  */
-export async function* streamAgentRoute(payload: {
+export interface StreamAgentRoutePayload {
   input: string;
   currentCode?: string;
   history?: Array<{ type: string; content: string }>;
@@ -228,21 +228,44 @@ export async function* streamAgentRoute(payload: {
   agentId?: string;
   model?: string;
   uploadedFileId?: string;
-}): AsyncGenerator<StreamChunk, void, unknown> {
+  currentStructureOrigin?: any;
+  uploadedFile?: any;
+  structureMetadata?: any;
+  pipeline_id?: string;
+  pipeline_data?: any;
+}
+
+export async function* streamAgentRoute(payload: StreamAgentRoutePayload): AsyncGenerator<StreamChunk, void, unknown> {
   // Build headers with auth (required for all API calls)
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
     ...getAuthHeaders(),
   };
 
-  // Make streaming request
-  const response = await fetch(`${baseURL}/agents/route-stream`, {
-    method: 'POST',
-    headers,
-    body: JSON.stringify(payload),
-  });
+  // Abort controller with 90s timeout to prevent infinite loading
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 90_000);
+
+  let response: Response;
+  try {
+    // Make streaming request
+    response = await fetch(`${baseURL}/agents/route/stream`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify(payload),
+      signal: controller.signal,
+    });
+  } catch (error: any) {
+    clearTimeout(timeoutId);
+    yield {
+      type: 'error',
+      data: { error: error.name === 'AbortError' ? 'Request timed out' : 'Network error', detail: error.message },
+    };
+    return;
+  }
 
   if (!response.ok) {
+    clearTimeout(timeoutId);
     const errorData = await response.json().catch(() => ({ error: 'Unknown error' }));
     yield {
       type: 'error',
@@ -254,6 +277,7 @@ export async function* streamAgentRoute(payload: {
   // Read stream
   const reader = response.body?.getReader();
   if (!reader) {
+    clearTimeout(timeoutId);
     yield {
       type: 'error',
       data: { error: 'No response body' },
@@ -267,7 +291,7 @@ export async function* streamAgentRoute(payload: {
   try {
     while (true) {
       const { done, value } = await reader.read();
-      
+
       if (done) {
         break;
       }
@@ -311,11 +335,13 @@ export async function* streamAgentRoute(payload: {
     }
   } catch (error: any) {
     console.error('[Stream] Error reading stream:', error);
+    const isTimeout = error.name === 'AbortError';
     yield {
       type: 'error',
-      data: { error: 'Stream read error', detail: error.message },
+      data: { error: isTimeout ? 'Request timed out' : 'Stream read error', detail: error.message },
     };
   } finally {
+    clearTimeout(timeoutId);
     reader.releaseLock();
   }
 }

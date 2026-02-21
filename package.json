@@ -16,6 +16,8 @@
     "test:coverage": "vitest run --coverage"
   },
   "dependencies": {
+    "@langchain/core": "^1.1.16",
+    "@langchain/langgraph-sdk": "^1.6.4",
     "@modelcontextprotocol/server-puppeteer": "^2025.5.12",
     "@monaco-editor/react": "^4.6.0",
     "@radix-ui/react-dialog": "^1.1.15",

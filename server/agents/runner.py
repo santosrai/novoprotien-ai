@@ -18,84 +18,30 @@ try:
     from ..infrastructure.utils import log_line, get_text_from_completion, strip_code_fences, trim_history, extract_code_and_text
     from ..infrastructure.safety import violates_whitelist, ensure_clear_on_change
     from ..domain.protein.uniprot import search_uniprot
+    from .runner_utils import map_model_id
 except ImportError:
     from infrastructure.utils import log_line, get_text_from_completion, strip_code_fences, trim_history, extract_code_and_text
     from infrastructure.safety import violates_whitelist, ensure_clear_on_change
     from domain.protein.uniprot import search_uniprot
+    from agents.runner_utils import map_model_id
 
 
 _openrouter_api_key: Optional[str] = None
-_model_map: Optional[Dict[str, str]] = None
-
-
-def _load_model_map() -> Dict[str, str]:
-    """Load model ID mappings from models_config.json.
-    Maps legacy Anthropic model IDs to OpenRouter model IDs.
-    """
-    global _model_map
-    if _model_map is not None:
-        return _model_map
-    
-    _model_map = {}
-    
-    # Try to load from models_config.json (in server/ root)
-    config_path = Path(__file__).parent.parent / "models_config.json"
-    try:
-        if config_path.exists():
-            with open(config_path, 'r') as f:
-                config = json.load(f)
-                models = config.get("models", [])
-                
-                # Create mapping from legacy IDs to OpenRouter IDs
-                # Map common legacy Anthropic model IDs to their OpenRouter equivalents
-                legacy_to_openrouter = {
-                    "claude-3-5-sonnet-20241022": "anthropic/claude-3.5-sonnet",
-                    "claude-3-5-sonnet-20240620": "anthropic/claude-3.5-sonnet",
-                    "claude-3-opus-20240229": "anthropic/claude-3-opus",
-                    "claude-3-sonnet-20240229": "anthropic/claude-3-sonnet",
-                    "claude-3-haiku-20240307": "anthropic/claude-3-haiku",
-                }
-                
-                # Add mappings from config file models (if they have legacy IDs)
-                for model in models:
-                    model_id = model.get("id", "")
-                    # If model ID is already in OpenRouter format, use it as-is
-                    if "/" in model_id:
-                        _model_map[model_id] = model_id
-                
-                # Add legacy mappings
-                _model_map.update(legacy_to_openrouter)
-                
-                log_line("runner:model_map", {"loaded": True, "count": len(_model_map)})
-        else:
-            log_line("runner:model_map", {"error": "models_config.json not found"})
-    except Exception as e:
-        log_line("runner:model_map", {"error": str(e)})
-        # Fallback to basic mappings
-        _model_map = {
-            "claude-3-5-sonnet-20241022": "anthropic/claude-3.5-sonnet",
-            "claude-3-5-sonnet-20240620": "anthropic/claude-3.5-sonnet",
-            "claude-3-opus-20240229": "anthropic/claude-3-opus",
-            "claude-3-sonnet-20240229": "anthropic/claude-3-sonnet",
-            "claude-3-haiku-20240307": "anthropic/claude-3-haiku",
-        }
-    
-    return _model_map
 
 
 def _get_openrouter_api_key(api_key: Optional[str] = None) -> Optional[str]:    
     """Get OpenRouter API key from OPENROUTER_API_KEY env var."""
     global _openrouter_api_key
     
-    # If a specific key is provided (e.g. from client request), use it
+    # If a specific key is provided (e.g. from client request), use it (strip whitespace)
     if api_key:
-        return api_key
+        return (api_key or "").strip() or None
 
     # Return cached key if available
     if _openrouter_api_key:
         return _openrouter_api_key
 
-    openrouter_key = os.getenv("OPENROUTER_API_KEY")
+    openrouter_key = (os.getenv("OPENROUTER_API_KEY") or "").strip()
     if openrouter_key:
         _openrouter_api_key = openrouter_key
         return _openrouter_api_key
@@ -204,7 +150,9 @@ def _call_openrouter_api_stream(
     """
     key = _get_openrouter_api_key(api_key)
     if not key:
-        raise RuntimeError("OpenRouter API key is missing. Please set OPENROUTER_API_KEY in your .env file.")
+        raise RuntimeError(
+            "OpenRouter API key is missing. Please set OPENROUTER_API_KEY in server/.env (see https://openrouter.ai)"
+        )
     
     url = "https://openrouter.ai/api/v1/chat/completions"
     headers = {
@@ -290,6 +238,7 @@ def _call_openrouter_api(
     api_key: Optional[str] = None,
     max_retries: int = 3,
     retry_delay: float = 1.0,
+    tools: Optional[List[Dict[str, Any]]] = None,
 ) -> Any:
     """Make a direct API call to OpenRouter using requests with retry logic.
     
@@ -303,10 +252,13 @@ def _call_openrouter_api(
         api_key: Optional API key override
         max_retries: Maximum number of retries for rate limit errors (default: 3)
         retry_delay: Initial delay between retries in seconds (default: 1.0)
+        tools: Optional list of OpenRouter tool definitions (function-calling format).
     """
     key = _get_openrouter_api_key(api_key)
     if not key:
-        raise RuntimeError("OpenRouter API key is missing. Please set OPENROUTER_API_KEY in your .env file.")
+        raise RuntimeError(
+            "OpenRouter API key is missing. Please set OPENROUTER_API_KEY in server/.env (see https://openrouter.ai)"
+        )
     
     url = "https://openrouter.ai/api/v1/chat/completions"
     headers = {
@@ -322,6 +274,8 @@ def _call_openrouter_api(
         "max_tokens": max_tokens,
         "temperature": temperature,
     }
+    if tools:
+        payload["tools"] = tools
     
     # Request reasoning tokens for thinking models
     is_thinking = _is_thinking_model(model)
@@ -455,7 +409,9 @@ def _call_openrouter_api(
                     self.thinking = thinking if thinking is not None else message_data.get("reasoning")
                     self.reasoning = message_data.get("reasoning") if thinking is None else thinking
             
-            return CompletionResponse(data, thinking_data)
+            resp = CompletionResponse(data, thinking_data)
+            resp._raw_data = data  # So caller can read tool_calls from choices[0].message
+            return resp
         except requests.exceptions.HTTPError as e:
             # Extract the actual error message from OpenRouter's response
             error_detail = str(e)
@@ -470,7 +426,10 @@ def _call_openrouter_api(
                 if status_code == 429:
                     user_message = "Rate limit exceeded. Please wait a moment and try again, or use a different model."
                 elif status_code == 401:
-                    user_message = "API key is invalid or missing. Please check your OpenRouter API key."
+                    user_message = (
+                        "OpenRouter API key is invalid or missing. "
+                        "Set OPENROUTER_API_KEY in server/.env with a valid key from https://openrouter.ai"
+                    )
                 elif status_code == 403:
                     user_message = "Access forbidden. The API key may not have permission for this model."
                 elif status_code == 404:
@@ -484,7 +443,7 @@ def _call_openrouter_api(
                 try:
                     error_data = e.response.json()
                     if isinstance(error_data, dict):
-                        # OpenRouter error format: {"error": {"message": "...", "type": "...", ...}}
+                        # OpenRouter error format: {"error": {"message": "...", "type": "...", ...}} or {"error": "User not found."}
                         if 'error' in error_data:
                             error_obj = error_data['error']
                             if isinstance(error_obj, dict):
@@ -499,6 +458,9 @@ def _call_openrouter_api(
                                     user_message = f"Rate limit exceeded. Please wait {retry_after} seconds before trying again."
                             elif isinstance(error_obj, str):
                                 error_detail = error_obj
+                                # OpenRouter returns "User not found." for invalid/missing key; keep 401 user_message
+                                if status_code == 401 and "user not found" in (error_detail or "").lower():
+                                    pass  # user_message already set above for 401
                         # Sometimes the error is at the top level
                         elif 'message' in error_data:
                             error_detail = error_data['message']
@@ -581,10 +543,44 @@ def _call_openrouter_api(
     raise RuntimeError(f"OpenRouter API call failed for model '{model}'")
 
 
-def _map_model_id(model_id: str) -> str:
-    """Map legacy model ID to OpenRouter model ID using models_config.json"""
-    model_map = _load_model_map()
-    return model_map.get(model_id, model_id)
+def _invoke_llm_agent(
+    agent: Dict[str, Any],
+    messages: List[Dict[str, Any]],
+    model_override: Optional[str] = None,
+    *,
+    current_code: Optional[str] = None,
+    temperature: float = 0.5,
+    max_tokens: int = 1000,
+) -> Dict[str, Any]:
+    """Single LLM path: convert messages, invoke compiled agent, return app result.
+    Used by text and code agents after message building.
+    """
+    model = model_override or os.getenv(agent.get("modelEnv", "")) or agent.get("defaultModel")
+    api_key = _get_openrouter_api_key()
+    try:
+        from .llm.messages import openrouter_to_langchain
+        from .langchain_agent import get_agent, agent_output_to_app_result
+        lc_messages = openrouter_to_langchain(messages)
+        compiled = get_agent(agent["id"], model, api_key=api_key, temperature=temperature, max_tokens=max_tokens)
+        final_state = compiled.invoke({"messages": lc_messages}, config={"recursion_limit": 25})
+        return agent_output_to_app_result(final_state, agent["kind"], current_code=current_code)
+    except Exception as e:
+        if "Rate limit exceeded" in str(e) and not model_override:
+            default_model = os.getenv(agent.get("modelEnv", "")) or agent.get("defaultModel")
+            if default_model != model:
+                log_line("runner:model:fallback", {"from": model, "to": default_model, "reason": "rate_limit", "agentId": agent.get("id")})
+                try:
+                    from .llm.messages import openrouter_to_langchain
+                    from .langchain_agent import get_agent, agent_output_to_app_result
+                    lc_messages = openrouter_to_langchain(messages)
+                    compiled = get_agent(agent["id"], default_model, api_key=api_key, temperature=temperature, max_tokens=max_tokens)
+                    final_state = compiled.invoke({"messages": lc_messages}, config={"recursion_limit": 25})
+                    return agent_output_to_app_result(final_state, agent["kind"], current_code=current_code)
+                except Exception as fallback_error:
+                    raise RuntimeError(
+                        f"Rate limit exceeded for model '{model}'. Fallback to '{default_model}' also failed: {str(fallback_error)}"
+                    ) from fallback_error
+        raise
 
 
 def _parse_thinking_data(completion: Any) -> Optional[Dict[str, Any]]:
@@ -817,6 +813,605 @@ def _build_summarized_structure_context(
     if len(full) > max_chars:
         full = full[: max_chars - 3] + "..."
     return full
+
+
+async def _run_code_agent(
+    *,
+    agent: Dict[str, Any],
+    user_text: str,
+    current_code: Optional[str],
+    history: Optional[List[Dict[str, Any]]],
+    selection: Optional[Dict[str, Any]],
+    selections: Optional[List[Dict[str, Any]]] = None,
+    current_structure_origin: Optional[Dict[str, Any]] = None,
+    uploaded_file_context: Optional[Dict[str, Any]] = None,
+    structure_metadata: Optional[Dict[str, Any]] = None,
+    pipeline_id: Optional[str] = None,
+    pipeline_data: Optional[Dict[str, Any]] = None,
+    model_override: Optional[str] = None,
+    user_id: Optional[str] = None,
+    pdb_content: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Reusable code-generation agent path (code-builder, mvs-builder)."""
+    if model_override:
+        model = model_override
+    else:
+        model = os.getenv(agent.get("modelEnv", "")) or agent.get("defaultModel")
+    base_log = {"model": model, "agentId": agent.get("id"), "model_override": bool(model_override)}
+    import re
+    code_pdb_id = None
+    if current_code and str(current_code).strip():
+        pdb_match = re.search(r"loadStructure\s*\(\s*['\"]([0-9A-Za-z]{4})['\"]", str(current_code))
+        if pdb_match:
+            code_pdb_id = pdb_match.group(1).upper()
+            structure_metadata = f"\n\nStructure Context: The current code loads PDB ID {code_pdb_id}. "
+            representations = []
+            if re.search(r"addCartoonRepresentation", str(current_code)):
+                color_match = re.search(r"color:\s*['\"]([^'\"]+)['\"]", str(current_code))
+                color = color_match.group(1) if color_match else "default"
+                representations.append(f"cartoon ({color})")
+            if re.search(r"addBallAndStickRepresentation", str(current_code)):
+                representations.append("ball-and-stick")
+            if re.search(r"addSurfaceRepresentation", str(current_code)):
+                representations.append("surface")
+            if re.search(r"highlightLigands", str(current_code)):
+                representations.append("ligands highlighted")
+            if representations:
+                structure_metadata += f"Current representations: {', '.join(representations)}. "
+            structure_metadata += "When generating your response, confirm what structure is being loaded and explain what visual elements will be shown."
+    uploaded_file_info = ""
+    if uploaded_file_context:
+        file_url = uploaded_file_context.get("file_url", "")
+        filename = uploaded_file_context.get("filename", "uploaded file")
+        atoms = uploaded_file_context.get("atoms", 0)
+        chains = uploaded_file_context.get("chains", [])
+        uploaded_file_info = f"\n\nIMPORTANT: User has uploaded a PDB file ({filename}, {atoms} atoms, chains: {', '.join(chains) if chains else 'N/A'}). "
+        uploaded_file_info += f"To load this file, use: await builder.loadStructure('{file_url}');\n"
+        uploaded_file_info += "The file is available at the API endpoint shown above. Use this URL instead of a PDB ID.\n"
+        if not structure_metadata:
+            structure_metadata = f"\n\nStructure Context: User has uploaded a PDB file '{filename}' ({atoms} atoms, {len(chains)} chain{'s' if len(chains) != 1 else ''}). "
+            structure_metadata += "When generating your response, confirm what structure is being loaded and explain what visual elements will be shown."
+    context_prefix = (
+        f"You may MODIFY the existing Molstar builder code below to satisfy the new request. Prefer editing in-place if it does not change the loaded PDB. Always return the full updated code.\n\n"
+        f"Existing code:\n\n```js\n{str(current_code)}\n```\n\nRequest: {user_text}{uploaded_file_info}{structure_metadata or ''}"
+        if current_code and str(current_code).strip()
+        else f"Generate Molstar builder code for: {user_text}{uploaded_file_info}{structure_metadata or ''}"
+    )
+    conversation_history = []
+    if history:
+        for msg in history[-6:]:
+            msg_type = msg.get("type", "")
+            msg_content = msg.get("content", "")
+            if msg_type == "user":
+                conversation_history.append({"role": "user", "content": msg_content})
+            elif msg_type == "ai":
+                conversation_history.append({"role": "assistant", "content": msg_content})
+    system_prompt = agent.get("system")
+    if agent.get("id") == "mvs-builder":
+        try:
+            from ..memory.rag.mvs_rag import enhance_mvs_prompt_with_rag
+            system_prompt = await enhance_mvs_prompt_with_rag(user_text, system_prompt)
+            log_line("agent:mvs:rag", {"enhanced": True, "userText": user_text})
+        except Exception as e:
+            log_line("agent:mvs:rag_error", {"error": str(e)})
+    messages = []
+    if system_prompt:
+        messages.append({"role": "system", "content": system_prompt})
+    messages.extend(conversation_history)
+    messages.append({"role": "user", "content": context_prefix})
+    log_line("agent:code:req", {**base_log, "hasCurrentCode": bool(current_code and str(current_code).strip()), "userText": user_text})
+    result = _invoke_llm_agent(
+        agent, messages, model_override,
+        current_code=current_code,
+        temperature=0.2,
+        max_tokens=1200,
+    )
+    log_line("agent:code:res", {"length": len(result.get("code", "")), "has_text": bool(result.get("text"))})
+    return result
+
+
+async def _run_llm_text_agent(
+    *,
+    agent: Dict[str, Any],
+    user_text: str,
+    current_code: Optional[str],
+    history: Optional[List[Dict[str, Any]]],
+    selection: Optional[Dict[str, Any]],
+    selections: Optional[List[Dict[str, Any]]] = None,
+    current_structure_origin: Optional[Dict[str, Any]] = None,
+    uploaded_file_context: Optional[Dict[str, Any]] = None,
+    structure_metadata: Optional[Dict[str, Any]] = None,
+    pipeline_id: Optional[str] = None,
+    pipeline_data: Optional[Dict[str, Any]] = None,
+    model_override: Optional[str] = None,
+    user_id: Optional[str] = None,
+    pdb_content: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Reusable LLM text agent path (bio-chat, pipeline-agent). Handles SMILES tools via LangGraph when applicable."""
+    if model_override:
+        model = model_override
+    else:
+        model = os.getenv(agent.get("modelEnv", "")) or agent.get("defaultModel")
+    base_log = {"model": model, "agentId": agent.get("id"), "model_override": bool(model_override)}
+    # Enrich uploaded_file_context with full metadata from DB if we have file_id but missing chain_residue_counts
+    if uploaded_file_context and user_id:
+        file_id = uploaded_file_context.get("file_id")
+        if file_id and not uploaded_file_context.get("chain_residue_counts"):
+            try:
+                from ..domain.storage.pdb_storage import get_uploaded_pdb
+                db_meta = get_uploaded_pdb(file_id, user_id)
+                if db_meta:
+                    uploaded_file_context = dict(uploaded_file_context)
+                    uploaded_file_context["chain_residue_counts"] = db_meta.get("chain_residue_counts", {})
+                    uploaded_file_context["total_residues"] = db_meta.get("total_residues")
+            except Exception as e:
+                log_line("agent:text:upload_metadata_fetch_error", {"error": str(e), "file_id": file_id})
+    uploaded_file_info = ""
+    if uploaded_file_context:
+        filename = uploaded_file_context.get("filename", "uploaded file")
+        atoms = uploaded_file_context.get("atoms", 0)
+        chains = uploaded_file_context.get("chains", [])
+        file_url = uploaded_file_context.get("file_url", "")
+        uploaded_file_info = (
+            f"UploadedFileContext: User has uploaded a PDB file named '{filename}' "
+            f"({atoms} atoms, {len(chains)} chain{'s' if len(chains) != 1 else ''}: {', '.join(chains) if chains else 'N/A'}). "
+            f"The file is available at: {file_url}. "
+            f"When answering questions about this structure, refer to it as the uploaded file '{filename}'.\n\n"
+        )
+    code_pdb_id = None
+    structure_origin_context = None
+    if current_code and str(current_code).strip():
+        import re
+        blob_match = re.search(r"loadStructure\s*\(\s*['\"](blob:[^'\"]+)['\"]", str(current_code))
+        if blob_match:
+            if current_structure_origin:
+                origin_type = current_structure_origin.get("type", "unknown")
+                if origin_type == "rfdiffusion":
+                    params = current_structure_origin.get("parameters", {})
+                    structure_origin_context = (
+                        f"Current Structure: This is a protein structure generated using RFdiffusion protein design. "
+                        f"Design mode: {params.get('design_mode', 'unknown')}. "
+                    )
+                    if params.get("contigs"):
+                        structure_origin_context += f"Contigs: {params.get('contigs')}. "
+                    if params.get("diffusion_steps"):
+                        structure_origin_context += f"Diffusion steps: {params.get('diffusion_steps')}. "
+                    if current_structure_origin.get("filename"):
+                        structure_origin_context += f"Filename: {current_structure_origin.get('filename')}. "
+                    structure_origin_context += (
+                        "This structure does not have a PDB ID because it was computationally generated, "
+                        "not retrieved from the Protein Data Bank."
+                    )
+                elif origin_type == "alphafold":
+                    structure_origin_context = (
+                        f"Current Structure: This is a protein structure predicted using AlphaFold2. "
+                    )
+                    if current_structure_origin.get("filename"):
+                        structure_origin_context += f"Filename: {current_structure_origin.get('filename')}. "
+                    structure_origin_context += (
+                        "This structure does not have a PDB ID because it was computationally predicted, "
+                        "not retrieved from the Protein Data Bank."
+                    )
+                elif origin_type == "upload":
+                    structure_origin_context = (
+                        f"Current Structure: This is a protein structure loaded from an uploaded PDB file. "
+                    )
+                    if current_structure_origin.get("filename"):
+                        structure_origin_context += f"Filename: {current_structure_origin.get('filename')}. "
+            else:
+                if history:
+                    for msg in reversed(history):
+                        if msg.get("type") == "ai" and msg.get("alphafoldResult"):
+                            res = msg["alphafoldResult"]
+                            job_type = res.get("jobType", "unknown")
+                            params = res.get("parameters", {})
+                            if job_type == "rfdiffusion":
+                                structure_origin_context = (
+                                    f"Current Structure: This structure was generated using RFdiffusion protein design. "
+                                    f"Design mode: {params.get('design_mode', 'unknown')}. "
+                                )
+                                if params.get("contigs"):
+                                    structure_origin_context += f"Contigs: {params.get('contigs')}. "
+                                structure_origin_context += (
+                                    "This structure does not have a PDB ID because it was computationally generated."
+                                )
+                                break
+                            elif job_type == "alphafold":
+                                structure_origin_context = (
+                                    "Current Structure: This structure was predicted using AlphaFold2. "
+                                    "This structure does not have a PDB ID because it was computationally predicted."
+                                )
+                                break
+        pdb_match = re.search(r"loadStructure\s*\(\s*['\"]([0-9A-Za-z]{4})['\"]", str(current_code))
+        if pdb_match:
+            code_pdb_id = pdb_match.group(1).upper()
+            if not structure_origin_context:
+                structure_origin_context = f"Current Structure: PDB ID {code_pdb_id} (from Protein Data Bank)."
+    if code_pdb_id and not structure_metadata:
+        try:
+            from ..domain.protein.sequence import SequenceExtractor
+            extractor = SequenceExtractor()
+            sequences = extractor.extract_from_pdb_id(code_pdb_id)
+            if sequences:
+                structure_metadata = {
+                    "sequences": [{"chain": c, "sequence": s, "length": len(s)} for c, s in sequences.items()],
+                    "chains": list(sequences.keys()),
+                    "residueCount": sum(len(s) for s in sequences.values()),
+                }
+        except Exception as e:
+            log_line("agent:text:pdb_metadata_fetch_error", {"error": str(e), "pdb_id": code_pdb_id})
+    structure_label = None
+    summarized_structure_context = ""
+    if current_structure_origin:
+        origin_type = current_structure_origin.get("type", "")
+        if origin_type == "upload" and current_structure_origin.get("filename"):
+            structure_label = f"uploaded file '{current_structure_origin['filename']}'"
+        elif origin_type == "pdb" and current_structure_origin.get("pdbId"):
+            code_pdb_id = code_pdb_id or current_structure_origin.get("pdbId")
+    if code_pdb_id and not structure_label:
+        structure_label = f"PDB {code_pdb_id}"
+    if structure_metadata or (uploaded_file_context and (uploaded_file_context.get("chain_residue_counts") or uploaded_file_context.get("chains"))):
+        summarized_structure_context = _build_summarized_structure_context(
+            structure_metadata=structure_metadata,
+            uploaded_file_context=uploaded_file_context,
+            pdb_id=code_pdb_id,
+            structure_label=structure_label,
+        )
+    active_selections = selections if selections and len(selections) > 0 else ([selection] if selection else [])
+    selection_lines = []
+    if active_selections:
+        selection_lines.append(f"SelectedResiduesContext ({len(active_selections)} residue{'s' if len(active_selections) != 1 else ''}):")
+        for i, sel in enumerate(active_selections):
+            chain = sel.get("labelAsymId") or sel.get("authAsymId") or "?"
+            seq_id = sel.get("labelSeqId") if sel.get("labelSeqId") is not None else sel.get("authSeqId")
+            comp_id = sel.get("compId") or "?"
+            pdb_id = sel.get("pdbId") or code_pdb_id or "unknown"
+            selection_lines.append(f"  {i+1}. {comp_id}{seq_id} (Chain {chain}) in PDB {pdb_id}")
+            selection_lines.append(f"     - Residue Type: {comp_id}")
+            selection_lines.append(f"     - Position: {seq_id}")
+            selection_lines.append(f"     - Chain: {chain}")
+            selection_lines.append(f"     - PDB Structure: {pdb_id}")
+            if sel.get("insCode"):
+                selection_lines.append(f"     - Insertion Code: {sel.get('insCode')}")
+        if len(active_selections) > 1:
+            selection_lines.append(f"Note: User has selected {len(active_selections)} residues for analysis or comparison.")
+        else:
+            selection_lines.append("Note: User has selected this specific residue for analysis.")
+    selection_context = "Context:\n" + "\n".join(selection_lines) if selection_lines else ""
+    code_context = (
+        f"CodeContext (Current PDB: {code_pdb_id or 'unknown'}):\n" + str(current_code)[:3000]
+        if current_code and str(current_code).strip()
+        else ""
+    )
+    if structure_origin_context:
+        code_context = structure_origin_context + ("\n\n" + code_context if code_context else "")
+    history_context_lines = []
+    if history:
+        for msg in history[-3:]:
+            if msg.get("type") == "ai" and msg.get("alphafoldResult"):
+                res = msg["alphafoldResult"]
+                job_type = res.get("jobType", "unknown")
+                if job_type == "rfdiffusion":
+                    params = res.get("parameters", {})
+                    history_context_lines.append(
+                        f"Recent RFdiffusion result: {res.get('filename', 'unknown')} "
+                        f"(design mode: {params.get('design_mode', 'unknown')})"
+                    )
+                elif job_type == "alphafold":
+                    history_context_lines.append(f"Recent AlphaFold2 prediction: {res.get('filename', 'unknown')}")
+    user_text_lower = user_text.lower().strip()
+    greeting_patterns = ["hi", "hello", "hey", "greetings", "good morning", "good afternoon", "good evening", "thanks", "thank you", "ok", "okay"]
+    is_greeting = any(p in user_text_lower for p in greeting_patterns) and len(user_text.strip()) < 30
+    pipeline_context_info = ""
+    if pipeline_id and pipeline_data:
+        try:
+            from ..domain.pipeline.context import get_pipeline_summary
+            summary = await get_pipeline_summary(pipeline_id, pipeline_data)
+            pipeline_context_lines = [
+                f"Pipeline Context: {summary.get('name', 'Unnamed Pipeline')} (ID: {summary.get('pipeline_id')})"
+            ]
+            if summary.get("status"):
+                pipeline_context_lines.append(f"Status: {summary['status']}")
+            if summary.get("node_count"):
+                pipeline_context_lines.append(f"Total nodes: {summary['node_count']}")
+            if summary.get("node_details"):
+                node_list = []
+                for node in summary["node_details"]:
+                    parts = [f"{node.get('label', node.get('id'))} (type: {node.get('type')}, status: {node.get('status', 'idle')})"]
+                    cfg = node.get("config")
+                    if cfg:
+                        parts.append("config: {" + ", ".join(f"{k}={v}" for k, v in cfg.items()) + "}")
+                    if node.get("error"):
+                        parts.append(f"error: {node['error']}")
+                    node_list.append(" | ".join(parts))
+                if node_list:
+                    pipeline_context_lines.append("Nodes: " + "; ".join(node_list))
+            if summary.get("execution_flow") and isinstance(summary["execution_flow"], list) and summary["execution_flow"]:
+                pipeline_context_lines.append(f"Execution flow: {' → '.join(summary['execution_flow'])}")
+            if summary.get("nodes_by_type"):
+                type_summary = [f"{len(nodes)} {t}" for t, nodes in summary["nodes_by_type"].items()]
+                if type_summary:
+                    pipeline_context_lines.append(f"Node types: {', '.join(type_summary)}")
+            output_files = []
+            for node in pipeline_data.get("nodes", []):
+                result_metadata = node.get("result_metadata") or {}
+                if result_metadata.get("output_file"):
+                    output_files.append(f"{node.get('label', node.get('id'))}: {result_metadata['output_file'].get('filename', 'output file')}")
+                if result_metadata.get("sequence"):
+                    output_files.append(f"{node.get('label', node.get('id'))}: sequence output")
+            if output_files:
+                pipeline_context_lines.append(f"Output files: {', '.join(output_files)}")
+            if summary.get("recent_executions"):
+                exec_lines = [f"{ex.get('status','?')} ({ex.get('trigger_type','?')}) at {ex.get('started_at','?')}" for ex in summary["recent_executions"]]
+                pipeline_context_lines.append("Recent executions: " + "; ".join(exec_lines))
+            if summary.get("latest_node_executions"):
+                ne_lines = [f"[{ne.get('execution_order','-')}] {ne.get('node_label',ne.get('node_id'))} ({ne.get('node_type')}): {ne.get('status','?')}" for ne in summary["latest_node_executions"]]
+                pipeline_context_lines.append("Latest run node log: " + "; ".join(ne_lines))
+            if summary.get("node_files"):
+                file_lines = [f"{nf.get('filename','?')} ({nf.get('role','?')}/{nf.get('file_type','?')}) on node {nf.get('node_id','?')}" for nf in summary["node_files"]]
+                pipeline_context_lines.append("Pipeline files: " + "; ".join(file_lines))
+            pipeline_context_info = "Pipeline Context:\n" + "\n".join(pipeline_context_lines)
+        except Exception as e:
+            log_line("agent:text:pipeline_context_error", {"error": str(e), "pipeline_id": pipeline_id, "has_pipeline_data": bool(pipeline_data)})
+    elif pipeline_id:
+        pipeline_context_info = f"Pipeline Context: Pipeline ID {pipeline_id} is attached to this message. Full pipeline details could not be loaded."
+    conversation_history = []
+    if history:
+        for msg in history[-6:]:
+            msg_type = msg.get("type", "")
+            msg_content = msg.get("content", "")
+            if msg_type == "user":
+                conversation_history.append({"role": "user", "content": msg_content})
+            elif msg_type == "ai":
+                conversation_history.append({"role": "assistant", "content": msg_content})
+    messages = []
+    context_parts = []
+    if uploaded_file_info:
+        context_parts.append(uploaded_file_info)
+    if pipeline_context_info:
+        context_parts.append(pipeline_context_info)
+    if history_context_lines:
+        context_parts.append("Recent Structure Generation History:\n" + "\n".join(history_context_lines))
+    if selection_context:
+        context_parts.append(selection_context)
+    if summarized_structure_context and not is_greeting:
+        context_parts.append(summarized_structure_context)
+    if code_context and not is_greeting:
+        context_parts.append(code_context)
+    if context_parts:
+        messages.append({"role": "user", "content": "\n\n".join(context_parts)})
+    messages.append({"role": "user", "content": user_text})
+    log_line("agent:text:req", {**base_log, "hasSelection": bool(selection), "userText": user_text})
+    openrouter_messages = []
+    system_prompt = agent.get("system")
+    if system_prompt:
+        openrouter_messages.append({"role": "system", "content": system_prompt})
+    openrouter_messages.extend(conversation_history)
+    openrouter_messages.extend(messages)
+    result = _invoke_llm_agent(agent, openrouter_messages, model_override, temperature=0.5, max_tokens=1000)
+    log_line("agent:text:res", {"length": len(result.get("text", "")), "tool_count": len(result.get("toolResults") or [])})
+    return result
+
+
+def _build_react_messages(
+    *,
+    user_text: str,
+    current_code: Optional[str] = None,
+    history: Optional[List[Dict[str, Any]]] = None,
+    selection: Optional[Dict[str, Any]] = None,
+    selections: Optional[List[Dict[str, Any]]] = None,
+    uploaded_file_context: Optional[Dict[str, Any]] = None,
+    structure_metadata: Optional[Dict[str, Any]] = None,
+    pipeline_id: Optional[str] = None,
+    pipeline_data: Optional[Dict[str, Any]] = None,
+) -> List[Dict[str, Any]]:
+    """Build OpenRouter-style message list for the ReAct agent (system + context + history + user)."""
+    context_parts = []
+    if uploaded_file_context:
+        fn = uploaded_file_context.get("filename", "uploaded file")
+        chains = uploaded_file_context.get("chains", [])
+        context_parts.append(f"UploadedFileContext: User has uploaded '{fn}' (chains: {', '.join(chains) or 'N/A'}).")
+    if pipeline_id and pipeline_data:
+        context_parts.append(f"Pipeline Context: Pipeline '{pipeline_data.get('name', pipeline_id)}' is attached.")
+    if selection or (selections and len(selections) > 0):
+        sel_list = selections if selections and len(selections) > 0 else ([selection] if selection else [])
+        for s in sel_list:
+            chain = (s or {}).get("labelAsymId") or (s or {}).get("authAsymId") or "?"
+            seq_id = (s or {}).get("labelSeqId") if (s or {}).get("labelSeqId") is not None else (s or {}).get("authSeqId")
+            comp = (s or {}).get("compId") or "?"
+            context_parts.append(f"SelectedResiduesContext: {comp}{seq_id} (Chain {chain}).")
+    if structure_metadata:
+        summary = _build_summarized_structure_context(structure_metadata=structure_metadata)
+        if summary:
+            context_parts.append(summary)
+    if current_code and str(current_code).strip():
+        context_parts.append(f"CodeContext (current viewer code):\n{str(current_code)[:2000]}")
+    openrouter_messages = [{"role": "system", "content": ""}]
+    try:
+        from .prompts.bio_chat import REACT_SYSTEM_PROMPT
+        openrouter_messages[0]["content"] = REACT_SYSTEM_PROMPT
+    except Exception:
+        pass
+    if history:
+        for msg in history[-6:]:
+            if msg.get("type") == "user":
+                openrouter_messages.append({"role": "user", "content": msg.get("content", "")})
+            elif msg.get("type") == "ai":
+                openrouter_messages.append({"role": "assistant", "content": msg.get("content", "")})
+    if context_parts:
+        openrouter_messages.append({"role": "user", "content": "Context:\n" + "\n".join(context_parts)})
+    openrouter_messages.append({"role": "user", "content": user_text})
+    return openrouter_messages
+
+
+@traceable(name="RunReactAgent", run_type="chain")
+async def run_react_agent(
+    *,
+    user_text: str,
+    current_code: Optional[str] = None,
+    history: Optional[List[Dict[str, Any]]] = None,
+    selection: Optional[Dict[str, Any]] = None,
+    selections: Optional[List[Dict[str, Any]]] = None,
+    current_structure_origin: Optional[Dict[str, Any]] = None,
+    uploaded_file_context: Optional[Dict[str, Any]] = None,
+    structure_metadata: Optional[Dict[str, Any]] = None,
+    pipeline_id: Optional[str] = None,
+    pipeline_data: Optional[Dict[str, Any]] = None,
+    model_override: Optional[str] = None,
+    temperature: float = 0.5,
+    max_tokens: int = 1000,
+) -> Dict[str, Any]:
+    """Run the ReAct agent (LLM + tool calling). No keyword routing; LLM decides tools from descriptions."""
+    from .llm.messages import openrouter_to_langchain
+    from .langchain_agent import get_react_agent
+    from .langchain_agent.result import react_state_to_app_result
+
+    model = model_override or os.getenv("CLAUDE_CHAT_MODEL", "claude-3-5-sonnet-20241022")
+    api_key = _get_openrouter_api_key()
+    openrouter_messages = _build_react_messages(
+        user_text=user_text,
+        current_code=current_code,
+        history=history,
+        selection=selection,
+        selections=selections,
+        uploaded_file_context=uploaded_file_context,
+        structure_metadata=structure_metadata,
+        pipeline_id=pipeline_id,
+        pipeline_data=pipeline_data,
+    )
+    lc_messages = openrouter_to_langchain(openrouter_messages)
+    graph = get_react_agent(model, api_key=api_key, temperature=temperature, max_tokens=max_tokens)
+    if hasattr(graph, "ainvoke"):
+        final_state = await graph.ainvoke(
+            {"messages": lc_messages},
+            config={"recursion_limit": 25},
+        )
+    else:
+        final_state = graph.invoke({"messages": lc_messages}, config={"recursion_limit": 25})
+    return react_state_to_app_result(final_state)
+
+
+@traceable(name="RunReactAgentStream", run_type="chain")
+async def run_react_agent_stream(
+    *,
+    user_text: str,
+    current_code: Optional[str] = None,
+    history: Optional[List[Dict[str, Any]]] = None,
+    selection: Optional[Dict[str, Any]] = None,
+    selections: Optional[List[Dict[str, Any]]] = None,
+    uploaded_file_context: Optional[Dict[str, Any]] = None,
+    structure_metadata: Optional[Dict[str, Any]] = None,
+    pipeline_id: Optional[str] = None,
+    pipeline_data: Optional[Dict[str, Any]] = None,
+    model_override: Optional[str] = None,
+    temperature: float = 0.5,
+    max_tokens: int = 1000,
+) -> AsyncGenerator[Dict[str, Any], None]:
+    """Stream ReAct agent: yield content chunks (text-by-text) then complete with full result.
+    Uses LangGraph astream(stream_mode="messages") when available for token-level streaming."""
+    from .llm.messages import openrouter_to_langchain
+    from .langchain_agent import get_react_agent
+    from .langchain_agent.result import react_state_to_app_result
+
+    model = model_override or os.getenv("CLAUDE_CHAT_MODEL", "claude-3-5-sonnet-20241022")
+    api_key = _get_openrouter_api_key()
+    openrouter_messages = _build_react_messages(
+        user_text=user_text,
+        current_code=current_code,
+        history=history,
+        selection=selection,
+        selections=selections,
+        uploaded_file_context=uploaded_file_context,
+        structure_metadata=structure_metadata,
+        pipeline_id=pipeline_id,
+        pipeline_data=pipeline_data,
+    )
+    lc_messages = openrouter_to_langchain(openrouter_messages)
+    graph = get_react_agent(model, api_key=api_key, temperature=temperature, max_tokens=max_tokens)
+    config = {"recursion_limit": 25}
+    inputs = {"messages": lc_messages}
+    last_state: Optional[Dict[str, Any]] = None
+    streamed_content: list = []
+
+    def _content_from_event(event: Any) -> Optional[str]:
+        """Extract text content from a LangGraph stream event (AI messages only).
+        stream_mode='messages' yields (chunk, metadata) tuples where chunk is an
+        AIMessageChunk, ToolMessageChunk, etc. We only want AI message content."""
+        # Tuple/list: e.g. (chunk, metadata) from messages mode
+        if isinstance(event, (list, tuple)) and len(event) >= 1:
+            chunk = event[0]
+            # Only extract content from AI messages (not tool/human messages)
+            chunk_type = getattr(chunk, "type", None) or ""
+            if chunk_type not in ("ai", "AIMessageChunk"):
+                return None
+            if hasattr(chunk, "content"):
+                c = chunk.content
+                return c if isinstance(c, str) and c else None
+            return None
+        # Direct message object (AIMessageChunk / BaseMessage) with .content
+        if hasattr(event, "content"):
+            event_type = getattr(event, "type", None) or ""
+            if event_type not in ("ai", "AIMessageChunk"):
+                return None
+            c = event.content
+            return c if isinstance(c, str) and c else None
+        # Dict shape
+        if isinstance(event, dict):
+            if event.get("type") not in ("ai", "AIMessageChunk", None):
+                return None
+            return event.get("content") or (event.get("chunk") or {}).get("content")
+        return None
+
+    try:
+        if hasattr(graph, "astream"):
+            try:
+                print(f"[runner] Starting astream with stream_mode='messages', {len(lc_messages)} input messages")
+                event_idx = 0
+                # Use stream_mode="messages" for token-level AIMessageChunk events
+                async for event in graph.astream(inputs, config=config, stream_mode="messages"):
+                    event_idx += 1
+                    event_type_str = type(event).__name__
+                    if event_idx <= 3:
+                        print(f"[runner] astream event #{event_idx}: {event_type_str}, repr={repr(event)[:200]}")
+                    content = _content_from_event(event)
+                    if isinstance(content, str) and content:
+                        streamed_content.append(content)
+                        yield {"type": "content", "data": {"text": content}}
+                print(f"[runner] astream finished, {event_idx} events, {len(streamed_content)} content chunks, total chars: {sum(len(c) for c in streamed_content)}")
+            except (TypeError, ValueError) as e:
+                print(f"[runner] astream fallback due to: {e}")
+                log_line("agent:react_stream:astream_fallback", {"error": str(e)})
+                # Fall through to ainvoke below
+
+        # If astream yielded content, we already ran the graph — DON'T re-run.
+        # Build a minimal state from the streamed content for result extraction.
+        if streamed_content:
+            from langchain_core.messages import AIMessage as _AIMessage
+            full_text = "".join(streamed_content)
+            last_state = {"messages": lc_messages + [_AIMessage(content=full_text)]}
+            print(f"[runner] Built state from streamed content, full_text len={len(full_text)}")
+        else:
+            # Only run ainvoke if streaming produced nothing (fallback)
+            print("[runner] No streamed content, falling back to ainvoke")
+            if hasattr(graph, "ainvoke"):
+                last_state = await graph.ainvoke(inputs, config=config)
+            else:
+                last_state = graph.invoke(inputs, config=config)
+            print(f"[runner] ainvoke done, state has {len(last_state.get('messages', []))} messages")
+    except Exception as e:
+        print(f"[runner] EXCEPTION: {e}")
+        log_line("agent:react_stream:error", {"error": str(e)})
+        yield {"type": "error", "data": {"error": str(e)}}
+        return
+
+    if last_state is None:
+        print("[runner] ERROR: last_state is None")
+        yield {"type": "error", "data": {"error": "No response from agent"}}
+        return
+
+    result = react_state_to_app_result(last_state)
+    print(f"[runner] Result type={result.get('type')}, text len={len(result.get('text', ''))}, code len={len(result.get('code', ''))}")
+    yield {"type": "complete", "data": {"agentId": "react", **result, "reason": "tool_calling"}}
 
 
 @traceable(name="RunAgent", run_type="chain")
@@ -1143,554 +1738,41 @@ async def run_agent(
         return {"type": "text", "text": text}
 
     if agent.get("kind") == "code":
-        # Extract PDB ID and structure metadata from current code for better context
-        import re
-        code_pdb_id = None
-        structure_metadata = ""
-        
-        if current_code and str(current_code).strip():
-            # Extract PDB ID from loadStructure calls
-            pdb_match = re.search(r"loadStructure\s*\(\s*['\"]([0-9A-Za-z]{4})['\"]", str(current_code))
-            if pdb_match:
-                code_pdb_id = pdb_match.group(1).upper()
-                structure_metadata = f"\n\nStructure Context: The current code loads PDB ID {code_pdb_id}. "
-                # Extract representation types and colors for context
-                representations = []
-                if re.search(r"addCartoonRepresentation", str(current_code)):
-                    color_match = re.search(r"color:\s*['\"]([^'\"]+)['\"]", str(current_code))
-                    color = color_match.group(1) if color_match else "default"
-                    representations.append(f"cartoon ({color})")
-                if re.search(r"addBallAndStickRepresentation", str(current_code)):
-                    representations.append("ball-and-stick")
-                if re.search(r"addSurfaceRepresentation", str(current_code)):
-                    representations.append("surface")
-                if re.search(r"highlightLigands", str(current_code)):
-                    representations.append("ligands highlighted")
-                if representations:
-                    structure_metadata += f"Current representations: {', '.join(representations)}. "
-                structure_metadata += "When generating your response, confirm what structure is being loaded and explain what visual elements will be shown."
-        
-        # Include uploaded file context if available
-        uploaded_file_info = ""
-        if uploaded_file_context:
-            file_url = uploaded_file_context.get("file_url", "")
-            filename = uploaded_file_context.get("filename", "uploaded file")
-            atoms = uploaded_file_context.get("atoms", 0)
-            chains = uploaded_file_context.get("chains", [])
-            uploaded_file_info = f"\n\nIMPORTANT: User has uploaded a PDB file ({filename}, {atoms} atoms, chains: {', '.join(chains) if chains else 'N/A'}). "
-            uploaded_file_info += f"To load this file, use: await builder.loadStructure('{file_url}');\n"
-            uploaded_file_info += "The file is available at the API endpoint shown above. Use this URL instead of a PDB ID.\n"
-            if not structure_metadata:
-                structure_metadata = f"\n\nStructure Context: User has uploaded a PDB file '{filename}' ({atoms} atoms, {len(chains)} chain{'s' if len(chains) != 1 else ''}). "
-                structure_metadata += "When generating your response, confirm what structure is being loaded and explain what visual elements will be shown."
-        
-        context_prefix = (
-            f"You may MODIFY the existing Molstar builder code below to satisfy the new request. Prefer editing in-place if it does not change the loaded PDB. Always return the full updated code.\n\n"
-            f"Existing code:\n\n```js\n{str(current_code)}\n```\n\nRequest: {user_text}{uploaded_file_info}{structure_metadata}"
-            if current_code and str(current_code).strip()
-            else f"Generate Molstar builder code for: {user_text}{uploaded_file_info}{structure_metadata}"
-        )
-
-        # Build proper conversation history for context awareness
-        # Convert history to proper message format so AI understands previous conversation
-        conversation_history = []
-        if history:
-            for msg in history[-6:]:  # Last 6 messages for better context
-                msg_type = msg.get('type', '')
-                msg_content = msg.get('content', '')
-                if msg_type == 'user':
-                    conversation_history.append({"role": "user", "content": msg_content})
-                elif msg_type == 'ai':
-                    # Include full AI response content so AI understands what it previously suggested
-                    conversation_history.append({"role": "assistant", "content": msg_content})
-        
-        # Enhanced system prompt with RAG for MVS agent
-        system_prompt = agent.get("system")
-        if agent.get("id") == "mvs-builder":
-            print("[RAG] MVS agent triggered, enhancing prompt with Pinecone examples...")
-            try:
-                from ..memory.rag.mvs_rag import enhance_mvs_prompt_with_rag
-                system_prompt = await enhance_mvs_prompt_with_rag(user_text, system_prompt)
-                print("[RAG] Successfully enhanced MVS prompt")
-                log_line("agent:mvs:rag", {"enhanced": True, "userText": user_text})
-            except Exception as e:
-                print(f"[RAG] Failed to enhance prompt: {e}")
-                log_line("agent:mvs:rag_error", {"error": str(e)})
-                # Fallback to base prompt if RAG fails
-        
-        # Map model ID to OpenRouter format
-        openrouter_model = _map_model_id(model)
-        
-        # Prepare messages with system prompt, conversation history, and current request
-        messages = []
-        if system_prompt:
-            messages.append({"role": "system", "content": system_prompt})
-        # Add conversation history for context awareness
-        messages.extend(conversation_history)
-        # Add current request with context
-        messages.append({"role": "user", "content": context_prefix})
-        
-        log_line("agent:code:req", {**base_log, "hasCurrentCode": bool(current_code and str(current_code).strip()), "userText": user_text})
-        completion = _call_openrouter_api(
-            model=openrouter_model,
-            messages=messages,
-            max_tokens=1200,
-            temperature=0.2,
-        )
-        content_text = get_text_from_completion(completion)
-        code, explanation_text = extract_code_and_text(content_text)
-        final_completion = completion  # Track which completion to use for thinking data
-
-        # Safety pass
-        if violates_whitelist(code):
-            log_line("safety:whitelist", {"blocked": True})
-            # Ask once to regenerate within constraints
-            safety_messages = []
-            if agent.get("system"):
-                safety_messages.append({"role": "system", "content": agent.get("system")})
-            safety_messages.append({
-                "role": "user",
-                "content": context_prefix
-                + "\n\nThe code you returned included calls that are not in the whitelist. Regenerate strictly using only the allowed builder methods.",
-            })
-            completion2 = _call_openrouter_api(
-                model=openrouter_model,
-                messages=safety_messages,
-                max_tokens=1200,
-                temperature=0.2,
-            )
-            content_text2 = get_text_from_completion(completion2)
-            code, explanation_text = extract_code_and_text(content_text2)
-            final_completion = completion2  # Use the safety pass completion for thinking data
-
-        code = ensure_clear_on_change(current_code, code)
-        log_line("agent:code:res", {"length": len(code), "has_text": bool(explanation_text)})
-        
-        # Extract thinking data if available (from final completion)
-        thinking_process = _parse_thinking_data(final_completion)
-        result = {"type": "code", "code": code}
-        # Include text explanation if available
-        if explanation_text:
-            result["text"] = explanation_text
-        if thinking_process:
-            result["thinkingProcess"] = thinking_process
-        return result
-
-    # Text agent
-    selection_lines = []
-    code_pdb_id = None
-    structure_origin_context = None
-    
-    # Enrich uploaded_file_context with full metadata from DB if we have file_id but missing chain_residue_counts
-    if uploaded_file_context and user_id:
-        file_id = uploaded_file_context.get("file_id")
-        if file_id and not uploaded_file_context.get("chain_residue_counts"):
-            try:
-                from ..domain.storage.pdb_storage import get_uploaded_pdb
-                db_meta = get_uploaded_pdb(file_id, user_id)
-                if db_meta:
-                    uploaded_file_context = dict(uploaded_file_context)
-                    uploaded_file_context["chain_residue_counts"] = db_meta.get("chain_residue_counts", {})
-                    uploaded_file_context["total_residues"] = db_meta.get("total_residues")
-            except Exception as e:
-                log_line("agent:text:upload_metadata_fetch_error", {"error": str(e), "file_id": file_id})
-
-    # Add uploaded file context if available
-    uploaded_file_info = ""
-    if uploaded_file_context:
-        filename = uploaded_file_context.get("filename", "uploaded file")
-        atoms = uploaded_file_context.get("atoms", 0)
-        chains = uploaded_file_context.get("chains", [])
-        file_url = uploaded_file_context.get("file_url", "")
-        uploaded_file_info = (
-            f"UploadedFileContext: User has uploaded a PDB file named '{filename}' "
-            f"({atoms} atoms, {len(chains)} chain{'s' if len(chains) != 1 else ''}: {', '.join(chains) if chains else 'N/A'}). "
-            f"The file is available at: {file_url}. "
-            f"When answering questions about this structure, refer to it as the uploaded file '{filename}'.\n\n"
-        )
-    
-    if current_code and str(current_code).strip():
-        import re
-        # Check for blob URL (RF diffusion/AlphaFold result)
-        blob_match = re.search(r"loadStructure\s*\(\s*['\"](blob:[^'\"]+)['\"]", str(current_code))
-        if blob_match:
-            # This is a generated structure, check current_structure_origin or history for origin
-            if current_structure_origin:
-                origin_type = current_structure_origin.get("type", "unknown")
-                if origin_type == "rfdiffusion":
-                    params = current_structure_origin.get("parameters", {})
-                    structure_origin_context = (
-                        f"Current Structure: This is a protein structure generated using RFdiffusion protein design. "
-                        f"Design mode: {params.get('design_mode', 'unknown')}. "
-                    )
-                    if params.get("contigs"):
-                        structure_origin_context += f"Contigs: {params.get('contigs')}. "
-                    if params.get("diffusion_steps"):
-                        structure_origin_context += f"Diffusion steps: {params.get('diffusion_steps')}. "
-                    if current_structure_origin.get("filename"):
-                        structure_origin_context += f"Filename: {current_structure_origin.get('filename')}. "
-                    structure_origin_context += (
-                        "This structure does not have a PDB ID because it was computationally generated, "
-                        "not retrieved from the Protein Data Bank."
-                    )
-                elif origin_type == "alphafold":
-                    structure_origin_context = (
-                        f"Current Structure: This is a protein structure predicted using AlphaFold2. "
-                    )
-                    if current_structure_origin.get("filename"):
-                        structure_origin_context += f"Filename: {current_structure_origin.get('filename')}. "
-                    structure_origin_context += (
-                        "This structure does not have a PDB ID because it was computationally predicted, "
-                        "not retrieved from the Protein Data Bank."
-                    )
-                elif origin_type == "upload":
-                    structure_origin_context = (
-                        f"Current Structure: This is a protein structure loaded from an uploaded PDB file. "
-                    )
-                    if current_structure_origin.get("filename"):
-                        structure_origin_context += f"Filename: {current_structure_origin.get('filename')}. "
-            else:
-                # Fallback: check history for structure metadata
-                if history:
-                    import json
-                    for msg in reversed(history):  # Check most recent first
-                        if msg.get("type") == "ai" and msg.get("alphafoldResult"):
-                            result = msg["alphafoldResult"]
-                            job_type = result.get("jobType", "unknown")
-                            params = result.get("parameters", {})
-                            
-                            if job_type == "rfdiffusion":
-                                structure_origin_context = (
-                                    f"Current Structure: This structure was generated using RFdiffusion protein design. "
-                                    f"Design mode: {params.get('design_mode', 'unknown')}. "
-                                )
-                                if params.get("contigs"):
-                                    structure_origin_context += f"Contigs: {params.get('contigs')}. "
-                                structure_origin_context += (
-                                    "This structure does not have a PDB ID because it was computationally generated."
-                                )
-                                break
-                            elif job_type == "alphafold":
-                                structure_origin_context = (
-                                    "Current Structure: This structure was predicted using AlphaFold2. "
-                                    "This structure does not have a PDB ID because it was computationally predicted."
-                                )
-                                break
-        
-        # Check for PDB ID (traditional structure)
-        pdb_match = re.search(r"loadStructure\s*\(\s*['\"]([0-9A-Za-z]{4})['\"]", str(current_code))
-        if pdb_match:
-            code_pdb_id = pdb_match.group(1).upper()
-            if not structure_origin_context:
-                structure_origin_context = f"Current Structure: PDB ID {code_pdb_id} (from Protein Data Bank)."
-
-    # Fetch PDB metadata when we have PDB ID but no structure_metadata from frontend
-    if code_pdb_id and not structure_metadata:
-        try:
-            from ..domain.protein.sequence import SequenceExtractor
-            extractor = SequenceExtractor()
-            sequences = extractor.extract_from_pdb_id(code_pdb_id)
-            if sequences:
-                structure_metadata = {
-                    "sequences": [{"chain": c, "sequence": s, "length": len(s)} for c, s in sequences.items()],
-                    "chains": list(sequences.keys()),
-                    "residueCount": sum(len(s) for s in sequences.values()),
-                }
-        except Exception as e:
-            log_line("agent:text:pdb_metadata_fetch_error", {"error": str(e), "pdb_id": code_pdb_id})
-
-    # Build summarized StructureContext (chains, residue counts, composition) for residue-suggestion questions
-    summarized_structure_context = ""
-    structure_label = None
-    if current_structure_origin:
-        origin_type = current_structure_origin.get("type", "")
-        if origin_type == "upload" and current_structure_origin.get("filename"):
-            structure_label = f"uploaded file '{current_structure_origin['filename']}'"
-        elif origin_type == "pdb" and current_structure_origin.get("pdbId"):
-            code_pdb_id = code_pdb_id or current_structure_origin.get("pdbId")
-    if code_pdb_id and not structure_label:
-        structure_label = f"PDB {code_pdb_id}"
-    if structure_metadata or (uploaded_file_context and (uploaded_file_context.get("chain_residue_counts") or uploaded_file_context.get("chains"))):
-        summarized_structure_context = _build_summarized_structure_context(
-            structure_metadata=structure_metadata,
+        return await _run_code_agent(
+            agent=agent,
+            user_text=user_text,
+            current_code=current_code,
+            history=history,
+            selection=selection,
+            selections=selections,
+            current_structure_origin=current_structure_origin,
             uploaded_file_context=uploaded_file_context,
-            pdb_id=code_pdb_id,
-            structure_label=structure_label,
+            structure_metadata=structure_metadata,
+            pipeline_id=pipeline_id,
+            pipeline_data=pipeline_data,
+            model_override=model_override,
+            user_id=user_id,
+            pdb_content=pdb_content,
         )
-    
-    # Handle multiple selections if provided, otherwise fall back to single selection
-    active_selections = selections if selections and len(selections) > 0 else ([selection] if selection else [])
-    
-    if active_selections:
-        # Always treat as multiple selections to provide comprehensive info
-        # Use the new multiple selection format even for single selections
-        selection_lines.append(f"SelectedResiduesContext ({len(active_selections)} residue{'s' if len(active_selections) != 1 else ''}):")
-        
-        for i, sel in enumerate(active_selections):
-            chain = sel.get('labelAsymId') or sel.get('authAsymId') or '?'
-            seq_id = sel.get('labelSeqId') if sel.get('labelSeqId') is not None else sel.get('authSeqId')
-            comp_id = sel.get('compId') or '?'
-            # Use PDB ID from selection, or fall back to code context
-            pdb_id = sel.get('pdbId') or code_pdb_id or 'unknown'
-            
-            # Provide detailed info for each residue
-            selection_lines.append(f"  {i+1}. {comp_id}{seq_id} (Chain {chain}) in PDB {pdb_id}")
-            selection_lines.append(f"     - Residue Type: {comp_id}")
-            selection_lines.append(f"     - Position: {seq_id}")
-            selection_lines.append(f"     - Chain: {chain}")
-            selection_lines.append(f"     - PDB Structure: {pdb_id}")
-            if sel.get('insCode'):
-                selection_lines.append(f"     - Insertion Code: {sel.get('insCode')}")
-        
-        if len(active_selections) > 1:
-            selection_lines.append(f"Note: User has selected {len(active_selections)} residues for analysis or comparison.")
-        else:
-            selection_lines.append("Note: User has selected this specific residue for analysis.")
-    selection_context = "Context:\n" + "\n".join(selection_lines) if selection_lines else ""
-    
-    code_context = (
-        f"CodeContext (Current PDB: {code_pdb_id or 'unknown'}):\n" + str(current_code)[:3000]
-        if current_code and str(current_code).strip()
-        else ""
+
+    # Text agent: delegate to reusable LLM text agent
+    return await _run_llm_text_agent(
+        agent=agent,
+        user_text=user_text,
+        current_code=current_code,
+        history=history,
+        selection=selection,
+        selections=selections,
+        current_structure_origin=current_structure_origin,
+        uploaded_file_context=uploaded_file_context,
+        structure_metadata=structure_metadata,
+        pipeline_id=pipeline_id,
+        pipeline_data=pipeline_data,
+        model_override=model_override,
+        user_id=user_id,
+        pdb_content=pdb_content,
     )
-    
-    # Add structure origin context to code_context
-    if structure_origin_context:
-        if code_context:
-            code_context = structure_origin_context + "\n\n" + code_context
-        else:
-            code_context = structure_origin_context
-    
-    # Also add recent history context about generated structures
-    history_context_lines = []
-    if history:
-        import json
-        for msg in history[-3:]:  # Last 3 messages
-            if msg.get("type") == "ai" and msg.get("alphafoldResult"):
-                result = msg["alphafoldResult"]
-                job_type = result.get("jobType", "unknown")
-                if job_type == "rfdiffusion":
-                    params = result.get("parameters", {})
-                    history_context_lines.append(
-                        f"Recent RFdiffusion result: {result.get('filename', 'unknown')} "
-                        f"(design mode: {params.get('design_mode', 'unknown')})"
-                    )
-                elif job_type == "alphafold":
-                    history_context_lines.append(
-                        f"Recent AlphaFold2 prediction: {result.get('filename', 'unknown')}"
-                    )
 
-    # Detect if user input is a greeting or conversational (not asking about structure)
-    user_text_lower = user_text.lower().strip()
-    greeting_patterns = ["hi", "hello", "hey", "greetings", "good morning", "good afternoon", "good evening", "thanks", "thank you", "ok", "okay"]
-    is_greeting = any(pattern in user_text_lower for pattern in greeting_patterns) and len(user_text.strip()) < 30
-    
-    # Add pipeline context for text agents (bio-chat) if pipeline_id is provided
-    pipeline_context_info = ""
-    if pipeline_id:
-        # Try to use pipeline_data if available, otherwise create basic context
-        if pipeline_data:
-            try:
-                from ..domain.pipeline.context import get_pipeline_context, get_pipeline_summary
-                
-                # Create pipeline summary
-                summary = await get_pipeline_summary(pipeline_id, pipeline_data)
-                
-                # Build detailed pipeline context
-                pipeline_context_lines = [
-                    f"Pipeline Context: {summary.get('name', 'Unnamed Pipeline')} (ID: {summary.get('pipeline_id')})"
-                ]
-                
-                if summary.get("status"):
-                    pipeline_context_lines.append(f"Status: {summary['status']}")
-                
-                if summary.get("node_count"):
-                    pipeline_context_lines.append(f"Total nodes: {summary['node_count']}")
-                
-                # Add node details with actual configs
-                if summary.get("node_details"):
-                    node_list = []
-                    for node in summary["node_details"]:
-                        parts = [f"{node.get('label', node.get('id'))} (type: {node.get('type')}, status: {node.get('status', 'idle')})"]
-                        cfg = node.get("config")
-                        if cfg:
-                            cfg_str = ", ".join(f"{k}={v}" for k, v in cfg.items())
-                            parts.append(f"config: {{{cfg_str}}}")
-                        if node.get("error"):
-                            parts.append(f"error: {node['error']}")
-                        node_list.append(" | ".join(parts))
-                    if node_list:
-                        pipeline_context_lines.append("Nodes: " + "; ".join(node_list))
-
-                # Add execution flow
-                if summary.get("execution_flow"):
-                    flow = summary["execution_flow"]
-                    if isinstance(flow, list) and flow:
-                        pipeline_context_lines.append(f"Execution flow: {' → '.join(flow)}")
-
-                # Add nodes by type
-                if summary.get("nodes_by_type"):
-                    type_summary = []
-                    for node_type, nodes_of_type in summary["nodes_by_type"].items():
-                        type_summary.append(f"{len(nodes_of_type)} {node_type}")
-                    if type_summary:
-                        pipeline_context_lines.append(f"Node types: {', '.join(type_summary)}")
-
-                # Extract and add output files from result_metadata
-                output_files = []
-                for node in pipeline_data.get("nodes", []):
-                    result_metadata = node.get("result_metadata") or {}
-                    if result_metadata.get("output_file"):
-                        output_files.append(f"{node.get('label', node.get('id'))}: {result_metadata['output_file'].get('filename', 'output file')}")
-                    if result_metadata.get("sequence"):
-                        output_files.append(f"{node.get('label', node.get('id'))}: sequence output")
-                if output_files:
-                    pipeline_context_lines.append(f"Output files: {', '.join(output_files)}")
-
-                # Recent execution history
-                if summary.get("recent_executions"):
-                    exec_lines = []
-                    for ex in summary["recent_executions"]:
-                        dur = f", duration: {ex['total_duration_ms']}ms" if ex.get("total_duration_ms") else ""
-                        err = f", error: {ex['error_summary']}" if ex.get("error_summary") else ""
-                        exec_lines.append(f"{ex.get('status','?')} ({ex.get('trigger_type','?')}) at {ex.get('started_at','?')}{dur}{err}")
-                    pipeline_context_lines.append("Recent executions: " + "; ".join(exec_lines))
-
-                # Latest execution per-node log
-                if summary.get("latest_node_executions"):
-                    ne_lines = []
-                    for ne in summary["latest_node_executions"]:
-                        dur = f", {ne['duration_ms']}ms" if ne.get("duration_ms") else ""
-                        err = f", error: {ne['error']}" if ne.get("error") else ""
-                        out = f", output: {ne['output_summary']}" if ne.get("output_summary") else ""
-                        ne_lines.append(f"[{ne.get('execution_order','-')}] {ne.get('node_label',ne.get('node_id'))} ({ne.get('node_type')}): {ne.get('status','?')}{dur}{err}{out}")
-                    pipeline_context_lines.append("Latest run node log: " + "; ".join(ne_lines))
-
-                # Pipeline files
-                if summary.get("node_files"):
-                    file_lines = []
-                    for nf in summary["node_files"]:
-                        file_lines.append(f"{nf.get('filename','?')} ({nf.get('role','?')}/{nf.get('file_type','?')}) on node {nf.get('node_id','?')}")
-                    pipeline_context_lines.append("Pipeline files: " + "; ".join(file_lines))
-
-                pipeline_context_info = "Pipeline Context:\n" + "\n".join(pipeline_context_lines)
-            except Exception as e:
-                log_line("agent:text:pipeline_context_error", {
-                    "error": str(e),
-                    "pipeline_id": pipeline_id,
-                    "has_pipeline_data": bool(pipeline_data),
-                })
-                # Continue without pipeline context if fetching fails
-        else:
-            # If no pipeline_data, still provide basic context with pipeline_id
-            pipeline_context_info = f"Pipeline Context: Pipeline ID {pipeline_id} is attached to this message. The user is asking about this pipeline, but full pipeline details could not be loaded (user may not be authenticated or pipeline may not exist in database)."
-            log_line("agent:text:pipeline_basic_context", {
-                "pipeline_id": pipeline_id,
-                "note": "Using basic context without full pipeline data",
-            })
-    
-    # Build conversation history so the model can understand "previous chat" / "earlier in this conversation"
-    conversation_history: List[Dict[str, Any]] = []
-    if history:
-        for msg in history[-6:]:
-            msg_type = msg.get("type", "")
-            msg_content = msg.get("content", "")
-            if msg_type == "user":
-                conversation_history.append({"role": "user", "content": msg_content})
-            elif msg_type == "ai":
-                conversation_history.append({"role": "assistant", "content": msg_content})
-
-    messages: List[Dict[str, Any]] = []
-    context_parts = []
-    if uploaded_file_info:
-        context_parts.append(uploaded_file_info)
-    if pipeline_context_info:
-        context_parts.append(pipeline_context_info)
-    if history_context_lines:
-        context_parts.append("Recent Structure Generation History:\n" + "\n".join(history_context_lines))
-    if selection_context:
-        context_parts.append(selection_context)
-    # Add summarized StructureContext (chains, residue counts) for residue-suggestion questions
-    if summarized_structure_context and not is_greeting:
-        context_parts.append(summarized_structure_context)
-    # Only include code/structure context if user is NOT just greeting
-    # For greetings, skip structure context to avoid describing structures unnecessarily
-    if code_context and not is_greeting:
-        context_parts.append(code_context)
-    
-    if context_parts:
-        messages.append({"role": "user", "content": "\n\n".join(context_parts)})
-    messages.append({"role": "user", "content": user_text})
-
-    log_line("agent:text:req", {**base_log, "hasSelection": bool(selection), "userText": user_text})
-    
-    # Map model ID to OpenRouter format
-    openrouter_model = _map_model_id(model)
-    
-    # Prepare messages: system, then conversation history (so "previous chat" is understood), then current context + request
-    openrouter_messages: List[Dict[str, Any]] = []
-    system_prompt = agent.get("system")
-    if system_prompt:
-        openrouter_messages.append({"role": "system", "content": system_prompt})
-    openrouter_messages.extend(conversation_history)
-    openrouter_messages.extend(messages)
-    
-    # Try the requested model, with automatic fallback to default if rate limited
-    try:
-        completion = _call_openrouter_api(
-            model=openrouter_model,
-            messages=openrouter_messages,
-            max_tokens=1000,
-            temperature=0.5,
-        )
-    except RuntimeError as e:
-        # If rate limited and using a model override, try falling back to default model
-        if "Rate limit exceeded" in str(e) and model_override:
-            default_model = os.getenv(agent.get("modelEnv", "")) or agent.get("defaultModel")
-            default_openrouter_model = _map_model_id(default_model)
-            
-            # Only fallback if default model is different from the override
-            if default_openrouter_model != openrouter_model:
-                log_line("runner:model:fallback", {
-                    "from": openrouter_model,
-                    "to": default_openrouter_model,
-                    "reason": "rate_limit",
-                    "agentId": agent.get("id")
-                })
-                try:
-                    completion = _call_openrouter_api(
-                        model=default_openrouter_model,
-                        messages=openrouter_messages,
-                        max_tokens=1000,
-                        temperature=0.5,
-                    )
-                    # Update base_log to reflect the fallback
-                    base_log["model"] = default_model
-                    base_log["fallback_used"] = True
-                except RuntimeError as fallback_error:
-                    # If fallback also fails, raise the original error with context
-                    log_line("runner:model:fallback_failed", {
-                        "original_model": openrouter_model,
-                        "fallback_model": default_openrouter_model,
-                        "error": str(fallback_error)
-                    })
-                    raise RuntimeError(f"Rate limit exceeded for model '{openrouter_model}'. Fallback to default model '{default_openrouter_model}' also failed: {str(fallback_error)}")
-            else:
-                # Same model, just re-raise the original error
-                raise
-        else:
-            # Not a rate limit or no override, just re-raise
-            raise
-    
-    text = get_text_from_completion(completion)
-    log_line("agent:text:res", {"length": len(text), "preview": text[:400]})
-    
-    # Extract thinking data if available
-    thinking_process = _parse_thinking_data(completion)
-    result = {"type": "text", "text": text}
-    if thinking_process:
-        result["thinkingProcess"] = thinking_process
-    return result
 
 
 @traceable(name="RunAgentStream", run_type="chain")
@@ -1819,7 +1901,7 @@ async def run_agent_stream(
                     log_line("agent:mvs:rag_error:stream", {"error": str(e)})
             
             # Map model ID to OpenRouter format
-            openrouter_model = _map_model_id(model)
+            openrouter_model = map_model_id(model)
             
             # Build messages with conversation history
             messages = []
@@ -1830,112 +1912,18 @@ async def run_agent_stream(
             # Add current request with context
             messages.append({"role": "user", "content": context_prefix})
             
-            # Stream from OpenRouter
-            accumulated_reasoning = ""
-            accumulated_content = ""
-            thinking_steps: List[Dict[str, Any]] = []
-            current_step: Optional[Dict[str, Any]] = None
-            
             log_line("agent:stream:code:start", {**base_log, "userText": user_text})
-            
-            # Call streaming API (synchronous generator, but we're in async context)
             stream_gen = _call_openrouter_api_stream(
                 model=openrouter_model,
                 messages=messages,
                 max_tokens=1200,
                 temperature=0.2,
             )
-            for chunk in stream_gen:
-                if chunk["type"] == "reasoning":
-                    accumulated_reasoning += chunk["data"]
-                    completed_step, current_step = _parse_incremental_thinking_step(accumulated_reasoning, current_step)
-                    
-                    if completed_step:
-                        completed_step["status"] = "completed"
-                        existing_idx = next((i for i, s in enumerate(thinking_steps) if s["id"] == completed_step["id"]), None)
-                        if existing_idx is not None:
-                            thinking_steps[existing_idx] = completed_step
-                        else:
-                            thinking_steps.append(completed_step)
-                        yield {"type": "thinking_step", "data": completed_step}
-                    
-                    if current_step:
-                        existing_idx = next((i for i, s in enumerate(thinking_steps) if s["id"] == current_step["id"]), None)
-                        if existing_idx is not None:
-                            thinking_steps[existing_idx] = current_step
-                        else:
-                            thinking_steps.append(current_step)
-                        yield {"type": "thinking_step", "data": current_step}
-                
-                elif chunk["type"] == "content":
-                    accumulated_content += chunk["data"]
-                    yield {"type": "content", "data": {"text": chunk["data"]}}
-            
-            # Finalize any remaining step
-            if current_step:
-                current_step["status"] = "completed"
-                current_step["content"] = current_step.get("content", "").strip()
-                existing_idx = next((i for i, s in enumerate(thinking_steps) if s["id"] == current_step["id"]), None)
-                if existing_idx is not None:
-                    thinking_steps[existing_idx] = current_step
-                else:
-                    thinking_steps.append(current_step)
-                yield {"type": "thinking_step", "data": current_step}
-            
-            # Extract code from content
-            log_line("agent:stream:code:extract", {
-                **base_log,
-                "accumulated_content_length": len(accumulated_content),
-                "accumulated_content_preview": accumulated_content[:200] if accumulated_content else None
-            })
-            
-            code, explanation_text = extract_code_and_text(accumulated_content)
-            
-            # If no code found, log warning but still return result with thinking process
-            if not code or not code.strip():
-                log_line("agent:stream:code:empty", {
-                    **base_log,
-                    "accumulated_content_length": len(accumulated_content),
-                    "has_thinking_steps": len(thinking_steps) > 0,
-                    "has_text": bool(explanation_text)
-                })
-            
-            # Safety pass (simplified for streaming)
-            if code and code.strip() and violates_whitelist(code):
-                log_line("safety:whitelist:stream", {"blocked": True})
-                # For streaming, we'll just log the violation
-                code = ensure_clear_on_change(current_code, code)
-            
-            if code and code.strip():
-                code = ensure_clear_on_change(current_code, code)
-            else:
-                # If code is empty, keep it empty (don't use current_code)
-                code = ""
-            
-            # Build final result - always include thinking process if available
-            final_result = {
-                "type": "code",
-                "code": code,
-            }
-            # Include text explanation if available
-            if explanation_text:
-                final_result["text"] = explanation_text
-            
-            # Add thinking process if we have steps (even if code is empty)
-            if thinking_steps:
-                final_result["thinkingProcess"] = {
-                    "steps": thinking_steps,
-                    "isComplete": True,
-                    "totalSteps": len(thinking_steps)
-                }
-            
-            log_line("agent:stream:code:complete", {
-                **base_log,
-                "code_length": len(code) if code else 0,
-                "steps_count": len(thinking_steps),
-                "has_thinking_process": "thinkingProcess" in final_result
-            })
-            yield {"type": "complete", "data": final_result}
+            from .langchain_agent.streaming import process_openrouter_stream
+            for event in process_openrouter_stream(
+                stream_gen, _parse_incremental_thinking_step, "code", current_code=current_code
+            ):
+                yield event
             return
             
         except Exception as e:
@@ -2136,99 +2124,17 @@ async def run_agent_stream(
         openrouter_messages.extend(conversation_history_stream)
         openrouter_messages.extend(messages)
         
-        # Map model ID to OpenRouter format
-        openrouter_model = _map_model_id(model)
-        
-        # Stream from OpenRouter
-        accumulated_reasoning = ""
-        accumulated_content = ""
-        thinking_steps: List[Dict[str, Any]] = []
-        current_step: Optional[Dict[str, Any]] = None
-        step_counter = 0
-        
+        openrouter_model = map_model_id(model)
         log_line("agent:stream:start", {**base_log, "userText": user_text})
-        
-        reasoning_chunks = 0
-        content_chunks = 0
-        
-        for chunk in _call_openrouter_api_stream(
+        stream_gen = _call_openrouter_api_stream(
             model=openrouter_model,
             messages=openrouter_messages,
             max_tokens=1000,
             temperature=0.5,
-        ):
-            log_line("agent:stream:chunk", {"type": chunk.get("type"), "agentId": agent.get("id")})
-            
-            if chunk["type"] == "reasoning":
-                reasoning_chunks += 1
-                # Accumulate reasoning tokens
-                accumulated_reasoning += chunk["data"]
-                
-                # Parse incremental thinking steps
-                completed_step, current_step = _parse_incremental_thinking_step(accumulated_reasoning, current_step)
-                
-                # Emit completed step
-                if completed_step:
-                    completed_step["status"] = "completed"
-                    # Check if step already exists
-                    existing_idx = next((i for i, s in enumerate(thinking_steps) if s["id"] == completed_step["id"]), None)
-                    if existing_idx is not None:
-                        thinking_steps[existing_idx] = completed_step
-                    else:
-                        thinking_steps.append(completed_step)
-                    yield {"type": "thinking_step", "data": completed_step}
-                
-                # Emit current step if it exists
-                if current_step:
-                    # Check if step already exists
-                    existing_idx = next((i for i, s in enumerate(thinking_steps) if s["id"] == current_step["id"]), None)
-                    if existing_idx is not None:
-                        thinking_steps[existing_idx] = current_step
-                    else:
-                        thinking_steps.append(current_step)
-                    yield {"type": "thinking_step", "data": current_step}
-            
-            elif chunk["type"] == "content":
-                content_chunks += 1
-                # Accumulate content tokens
-                accumulated_content += chunk["data"]
-                yield {"type": "content", "data": {"text": chunk["data"]}}
-        
-        log_line("agent:stream:chunks_received", {
-            **base_log, 
-            "reasoning_chunks": reasoning_chunks, 
-            "content_chunks": content_chunks,
-            "accumulated_reasoning_length": len(accumulated_reasoning),
-            "accumulated_content_length": len(accumulated_content)
-        })
-        
-        # Finalize any remaining step
-        if current_step:
-            current_step["status"] = "completed"
-            current_step["content"] = current_step.get("content", "").strip()
-            existing_idx = next((i for i, s in enumerate(thinking_steps) if s["id"] == current_step["id"]), None)
-            if existing_idx is not None:
-                thinking_steps[existing_idx] = current_step
-            else:
-                thinking_steps.append(current_step)
-            yield {"type": "thinking_step", "data": current_step}
-        
-        # Build final result
-        final_result = {
-            "type": "text",
-            "text": accumulated_content.strip(),
-        }
-        
-        # Add thinking process if we have steps
-        if thinking_steps:
-            final_result["thinkingProcess"] = {
-                "steps": thinking_steps,
-                "isComplete": True,
-                "totalSteps": len(thinking_steps)
-            }
-        
-        log_line("agent:stream:complete", {**base_log, "text_length": len(accumulated_content), "steps_count": len(thinking_steps)})
-        yield {"type": "complete", "data": final_result}
+        )
+        from .langchain_agent.streaming import process_openrouter_stream
+        for event in process_openrouter_stream(stream_gen, _parse_incremental_thinking_step, "text"):
+            yield event
         
     except Exception as e:
         log_line("agent:stream:error", {**base_log, "error": str(e), "trace": traceback.format_exc()})

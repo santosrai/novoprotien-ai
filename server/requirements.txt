@@ -1,11 +1,26 @@
+# Core
 fastapi==0.111.0
 uvicorn==0.30.3
 python-dotenv==1.0.1
 slowapi==0.1.9
-langchain-openai==0.2.3
+
+# Constrain early to avoid resolution-too-deep (shared deps)
+jiter>=0.10.0,<1
+httpx>=0.27.0
+
+# LangChain ecosystem (1.x stack: avoids resolution-too-deep and aligns core/openai)
+langchain-core>=1.2.13,<2.0.0
+langchain>=1.0.0,<2.0.0
+langchain-openai>=1.0,<1.1.0
+langchain-openrouter>=0.0.2
+langgraph>=1.0.0,<1.1.0
 langsmith>=0.1.0
+
+# OpenAI (upper bound to limit backtracking)
 openai>=1.52.0,<2.0.0
-httpx==0.27.2
+
+# Rest
+PyYAML>=6.0.2
 certifi>=2023.0.0
 pinecone>=5.0.0
 requests>=2.31.0

@@ -69,6 +69,12 @@ export interface Message {
     job_id?: string;
     message?: string;
   };
+  smilesResult?: {
+    file_id: string;
+    file_url: string;
+    filename: string;
+    smiles?: string;
+  };
   // File attachment for user messages (deprecated - use attachments array)
   uploadedFile?: {
     file_id: string;
@@ -331,6 +337,7 @@ const createSaveMessageToBackend = (getSessions: () => ChatSession[]) => async (
           proteinmpnnResult: message.proteinmpnnResult,
           rfdiffusionResult: message.rfdiffusionResult,
           openfold2Result: message.openfold2Result,
+          smilesResult: message.smilesResult,
           uploadedFile: message.uploadedFile,
           error: message.error,
           // Include blueprint data for persistence
@@ -438,6 +445,8 @@ export const useChatHistoryStore = create<ChatHistoryState>()(
                       thinkingProcess: message.thinkingProcess,
                       alphafoldResult: message.alphafoldResult,
                       proteinmpnnResult: message.proteinmpnnResult,
+                      openfold2Result: message.openfold2Result,
+                      smilesResult: message.smilesResult,
                       // Include blueprint data for persistence
                       blueprint: (message as any).blueprint,
                       blueprintRationale: (message as any).blueprintRationale,
@@ -1058,6 +1067,8 @@ export const useChatHistoryStore = create<ChatHistoryState>()(
                     alphafoldResult: message.alphafoldResult,
                     proteinmpnnResult: message.proteinmpnnResult,
                     rfdiffusionResult: message.rfdiffusionResult,
+                    openfold2Result: message.openfold2Result,
+                    smilesResult: message.smilesResult,
                     uploadedFile: message.uploadedFile,
                     error: message.error,
                     // Include blueprint data for persistence
@@ -1505,6 +1516,10 @@ export const useChatHistoryStore = create<ChatHistoryState>()(
                 ...(metadata.openfold2Result != null && 
                     typeof metadata.openfold2Result === 'object' && 
                     { openfold2Result: metadata.openfold2Result }),
+                // SMILES result (stored PDB from SMILES conversion)
+                ...(metadata.smilesResult != null && 
+                    typeof metadata.smilesResult === 'object' && 
+                    { smilesResult: metadata.smilesResult }),
                 ...(metadata.uploadedFile != null && { uploadedFile: metadata.uploadedFile }),
                 ...(metadata.error != null && { error: metadata.error }),
                 // Blueprint data - restore from metadata

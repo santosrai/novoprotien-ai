@@ -1,10 +1,12 @@
-import React, { useState, useRef, useEffect, useCallback } from 'react';
+import React, { useState, useRef, useEffect, useCallback, useMemo } from 'react';
 import { Send, Sparkles, Download, Play, X, Copy, ChevronDown, ChevronUp, Shield } from 'lucide-react';
 import { PluginUIContext } from 'molstar/lib/mol-plugin-ui/context';
 import { useAppStore } from '../stores/appStore';
 import { useChatHistoryStore, useActiveSession, Message } from '../stores/chatHistoryStore';
 import { CodeExecutor } from '../utils/codeExecutor';
-import { api, getAuthHeaders } from '../utils/api';
+import { api, getAuthHeaders, streamAgentRoute } from '../utils/api';
+import { useStream } from '@langchain/langgraph-sdk/react';
+import { createLangGraphTransport, toLangGraphMessages } from '../utils/langgraphTransport';
 import { useModels, useAgents } from '../hooks/queries';
 import { v4 as uuidv4 } from 'uuid';
 import { AlphaFoldDialog } from './AlphaFoldDialog';
@@ -89,6 +91,12 @@ interface ExtendedMessage extends Message {
     }>;
     isComplete: boolean;
     totalSteps: number;
+  };
+  smilesResult?: {
+    file_id: string;
+    file_url: string;
+    filename: string;
+    smiles?: string;
   };
   validationResult?: ValidationReport;
   error?: ErrorDetails;
@@ -501,7 +509,169 @@ export const ChatPanel: React.FC = () => {
 
   // Get messages from active session
   const rawMessages = activeSession?.messages || [];
-  const messages = rawMessages as ExtendedMessage[];
+
+  // LangGraph SDK stream (SSE to FastAPI at apiUrl) for token-level streaming
+  const langGraphTransport = useMemo(() => createLangGraphTransport(), []);
+  const langGraphInitialValues = useMemo(
+    () => ({ messages: toLangGraphMessages(rawMessages) }),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [rawMessages.length, activeSessionId]
+  );
+  const stream = useStream({
+    transport: langGraphTransport,
+    messagesKey: 'messages',
+    initialValues: langGraphInitialValues as { messages: Array<{ type: string; content: string }> },
+    threadId: activeSessionId ?? undefined,
+    throttle: false,
+    onError: (err: unknown) => {
+      console.error('[LG stream] onError callback:', err);
+      setIsLoading(false);
+    },
+    onFinish: () => {
+      console.log('[LG stream] onFinish callback. stream.values:', stream.values, 'stream.error:', stream.error, 'stream.messages:', stream.messages);
+    },
+  } as import('@langchain/langgraph-sdk/react').UseStreamCustomOptions<{ messages: Array<{ type: string; content: string }> }>);
+
+  // Debug: log every change to stream state
+  useEffect(() => {
+    console.log('[LG stream state]', {
+      isLoading: stream.isLoading,
+      hasValues: !!stream.values,
+      values: stream.values,
+      error: stream.error,
+      messagesCount: stream.messages?.length ?? 0,
+      messages: stream.messages,
+    });
+  }, [stream.isLoading, stream.values, stream.error, stream.messages]);
+
+  // When SDK stream finishes (isLoading goes true→false), persist AI message and apply code/agentId.
+  // IMPORTANT: stream.isLoading starts as false and stream.values starts with initialValues,
+  // so we must track whether we've seen isLoading=true before processing the "finished" transition.
+  const hasSeenLoadingRef = useRef(false);
+  const lastProcessedValuesRef = useRef<unknown>(null);
+  useEffect(() => {
+    if (stream.isLoading) {
+      // Mark that we've entered a loading phase — only process "finished" after this
+      hasSeenLoadingRef.current = true;
+      lastProcessedValuesRef.current = null;
+      console.log('[LG stream] isLoading=true, waiting for completion...');
+      return;
+    }
+    // stream.isLoading is false — but only process if we saw it go true first
+    if (!hasSeenLoadingRef.current) {
+      console.log('[LG stream] isLoading=false but never saw loading=true, skipping (initial render)');
+      return;
+    }
+    // Reset so we don't reprocess on subsequent renders without a new submit
+    hasSeenLoadingRef.current = false;
+
+    const state = stream.values;
+    console.log('[LG stream finished]', {
+      state,
+      activeSessionId,
+      isLoading,
+      error: stream.error,
+      messagesCount: stream.messages?.length ?? 0,
+    });
+
+    // Try extracting from stream.values first (set by the "values" SSE event)
+    if (state && activeSessionId) {
+      if (lastProcessedValuesRef.current === state) {
+        console.log('[LG stream finished] Already processed this state, skipping');
+        setIsLoading(false);
+        return;
+      }
+      lastProcessedValuesRef.current = state;
+
+      const appResult = (state as { appResult?: { text?: string; code?: string; agentId?: string; thinkingProcess?: unknown } })?.appResult;
+      const msgs = (state as { messages?: Array<{ type: string; content: string }> })?.messages;
+      const lastAi = msgs?.length ? msgs.filter((m) => m.type === 'ai').pop() : null;
+      const content = lastAi?.content ?? appResult?.text ?? appResult?.code ?? '';
+      console.log('[LG stream finished] from values — content:', content?.slice(0, 100), 'appResult:', appResult);
+
+      if (content) {
+        addMessage({
+          id: uuidv4(),
+          type: 'ai',
+          content,
+          timestamp: new Date(),
+          ...(appResult?.thinkingProcess ? { thinkingProcess: convertThinkingData(appResult.thinkingProcess) } : {}),
+        } as ExtendedMessage);
+      }
+      if (appResult?.agentId) setLastAgentId(appResult.agentId);
+      if (appResult?.code) setCurrentCode(appResult.code);
+      setIsLoading(false);
+      return;
+    }
+
+    // Fallback: stream.values is null — try extracting from stream.messages
+    if (activeSessionId && isLoading) {
+      const streamMsgs = stream.messages as Array<{ type?: string; content?: unknown }> | undefined;
+      const lastAiFromStream = streamMsgs?.length
+        ? [...streamMsgs].reverse().find((m) => m.type === 'ai')
+        : null;
+      const fallbackContent = lastAiFromStream && typeof lastAiFromStream.content === 'string'
+        ? lastAiFromStream.content
+        : '';
+      console.log('[LG stream finished] No values, fallback from stream.messages:', fallbackContent?.slice(0, 100));
+      if (fallbackContent) {
+        addMessage({
+          id: uuidv4(),
+          type: 'ai',
+          content: fallbackContent,
+          timestamp: new Date(),
+        } as ExtendedMessage);
+      }
+    }
+    setIsLoading(false);
+  }, [stream.isLoading, stream.values, activeSessionId, addMessage, setLastAgentId, setCurrentCode, isLoading, stream.error, stream.messages]);
+
+  // Handle SDK stream errors — show error message and clear loading
+  useEffect(() => {
+    if (stream.error) {
+      const errMsg = stream.error instanceof Error ? stream.error.message : String(stream.error);
+      console.error('[LG stream error]', errMsg, stream.error);
+      if (activeSessionId && isLoading) {
+        addMessage({
+          id: uuidv4(),
+          type: 'ai',
+          content: `Something went wrong: ${errMsg}. Please try again.`,
+          timestamp: new Date(),
+        } as ExtendedMessage);
+        setIsLoading(false);
+      }
+    }
+  }, [stream.error, activeSessionId, isLoading, addMessage]);
+
+  // Safety timeout: if loading stays true for >90s, force clear it
+  useEffect(() => {
+    if (!isLoading) return;
+    const timer = setTimeout(() => {
+      console.warn('[ChatPanel] Loading timeout after 90s — forcing reset');
+      setIsLoading(false);
+    }, 90_000);
+    return () => clearTimeout(timer);
+  }, [isLoading]);
+
+  // Display messages: when SDK is streaming, show the latest AI message being built
+  const messages = (() => {
+    const sessionList = rawMessages as ExtendedMessage[];
+    if (stream.isLoading && stream.messages.length > 0) {
+      // stream.messages includes history + new streaming message.
+      // The NEW streaming AI message is the LAST ai message beyond what's already in sessionList.
+      const allStreamMsgs = stream.messages as Array<{ type?: string; content?: unknown; id?: string }>;
+      // Get the last AI message from the stream (the one being generated)
+      const lastAiMsg = [...allStreamMsgs].reverse().find((m) => m.type === 'ai');
+      const streamingContent = lastAiMsg && typeof lastAiMsg.content === 'string' ? lastAiMsg.content : '';
+      if (streamingContent) {
+        return [
+          ...sessionList,
+          { id: 'streaming-ai', content: streamingContent, type: 'ai' as const, timestamp: new Date() } as ExtendedMessage,
+        ];
+      }
+    }
+    return sessionList;
+  })();
 
   // AlphaFold state
   const [showAlphaFoldDialog, setShowAlphaFoldDialog] = useState(false);
@@ -692,12 +862,11 @@ try {
   };
 
   const loadSmilesInViewer = async (smilesData: { smiles: string; format?: string }) => {
-    const format = (smilesData.format || 'pdb').toLowerCase() === 'sdf' ? 'sdf' : 'pdb';
     let response: { content: string; filename: string; format: string };
     try {
       const res = await api.post<{ content: string; filename: string; format: string }>(
         '/smiles/to-structure',
-        { smiles: smilesData.smiles.trim(), format }
+        { smiles: smilesData.smiles.trim(), format: 'pdb' }
       );
       response = res.data;
     } catch (err: any) {
@@ -709,12 +878,23 @@ try {
       throw new Error(userMessage);
     }
 
-    setCurrentCode('');
-    setCurrentStructureOrigin({
-      type: 'smiles',
-      filename: response.filename,
-      metadata: { smiles: smilesData.smiles },
-    });
+    // Store converted PDB in upload storage so it appears in files and code can reference it
+    let fileId: string;
+    let apiUrl: string;
+    try {
+      const storeRes = await api.post<{ file_info: { file_id: string; filename: string } }>(
+        '/upload/pdb/from-content',
+        { pdbContent: response.content, filename: response.filename || 'smiles_structure.pdb' }
+      );
+      fileId = storeRes.data?.file_info?.file_id;
+      apiUrl = fileId ? `/api/upload/pdb/${fileId}` : '';
+      if (!fileId || !apiUrl) throw new Error('Failed to store SMILES PDB');
+      window.dispatchEvent(new CustomEvent('session-file-added'));
+    } catch (err: any) {
+      console.error('[ChatPanel] Failed to store SMILES PDB:', err);
+      throw new Error(err?.response?.data?.detail || err?.message || 'Failed to store structure.');
+    }
+
     setViewerVisibleAndSave(true);
     setActivePane('viewer');
 
@@ -730,24 +910,151 @@ try {
       return null;
     };
 
+    const filename = response.filename || 'smiles_structure.pdb';
+    const fileInfo = { file_id: fileId, file_url: apiUrl, filename };
+
     const readyPlugin = await waitForPlugin();
     if (!readyPlugin) {
-      setCurrentCode('// SMILES loaded – viewer initializing');
+      setCurrentCode(`// SMILES structure stored as ${filename}; load when viewer is ready:\ntry {\n  await builder.clearStructure();\n  await builder.loadStructure('${apiUrl}');\n  await builder.addBallAndStickRepresentation({ color: 'element' });\n  builder.focusView();\n} catch (e) { console.error(e); }`);
+      setCurrentStructureOrigin({
+        type: 'upload',
+        filename,
+        metadata: { file_id: fileId, file_url: apiUrl },
+      });
       setPendingCodeToRun('// SMILES structure will load when viewer is ready');
-      return;
+      return fileInfo;
     }
 
     try {
       setIsExecuting(true);
-      const { createMolstarBuilder } = await import('../utils/molstarBuilder');
-      const builder = createMolstarBuilder(readyPlugin);
-      await builder.loadStructureFromContent(response.content, response.format as 'pdb' | 'sdf');
-      setCurrentCode('// SMILES structure loaded in 3D (ball-and-stick)');
-      if (activeSessionId) {
-        saveVisualizationCode(activeSessionId, '// SMILES structure loaded in 3D');
-      }
+      const { CodeExecutor } = await import('../utils/codeExecutor');
+      const executor = new CodeExecutor(readyPlugin);
+      const blobRes = await api.get(`/upload/pdb/${fileId}`, { responseType: 'blob' });
+      const blob = new Blob([blobRes.data], { type: 'chemical/x-pdb' });
+      const blobUrl = URL.createObjectURL(blob);
+      const execCode = `
+try {
+  await builder.clearStructure();
+  await builder.loadStructure('${blobUrl}');
+  await builder.addBallAndStickRepresentation({ color: 'element' });
+  builder.focusView();
+} catch (e) { 
+  console.error('Failed to load SMILES structure:', e); 
+}`;
+      const savedCode = `
+try {
+  await builder.clearStructure();
+  await builder.loadStructure('${apiUrl}');
+  await builder.addBallAndStickRepresentation({ color: 'element' });
+  builder.focusView();
+} catch (e) { 
+  console.error('Failed to load SMILES structure:', e); 
+}`;
+      await executor.executeCode(execCode);
+      setTimeout(() => URL.revokeObjectURL(blobUrl), 5000);
+      setCurrentCode(savedCode);
+      if (activeSessionId) saveVisualizationCode(activeSessionId, savedCode);
+      setCurrentStructureOrigin({
+        type: 'upload',
+        filename,
+        metadata: { file_id: fileId, file_url: apiUrl },
+      });
+      return fileInfo;
     } catch (err) {
       console.error('[ChatPanel] Failed to load SMILES in viewer:', err);
+      throw err;
+    } finally {
+      setIsExecuting(false);
+    }
+  };
+
+  /** Load already-computed SMILES conversion (content + filename) into viewer; same UX as loadSmilesInViewer but no /smiles call. */
+  const loadSmilesResultInViewer = async (payload: {
+    content: string;
+    filename: string;
+  }): Promise<{ file_id: string; file_url: string; filename: string }> => {
+    const { content, filename } = payload;
+    let fileId: string;
+    let apiUrl: string;
+    try {
+      const storeRes = await api.post<{ file_info: { file_id: string; filename: string } }>(
+        '/upload/pdb/from-content',
+        { pdbContent: content, filename: filename || 'smiles_structure.pdb' }
+      );
+      fileId = storeRes.data?.file_info?.file_id;
+      apiUrl = fileId ? `/api/upload/pdb/${fileId}` : '';
+      if (!fileId || !apiUrl) throw new Error('Failed to store SMILES PDB');
+      window.dispatchEvent(new CustomEvent('session-file-added'));
+    } catch (err: any) {
+      console.error('[ChatPanel] Failed to store SMILES PDB:', err);
+      throw new Error(err?.response?.data?.detail || err?.message || 'Failed to store structure.');
+    }
+
+    setViewerVisibleAndSave(true);
+    setActivePane('viewer');
+
+    const waitForPlugin = async (maxWait = 15000, retryInterval = 200): Promise<PluginUIContext | null> => {
+      const startTime = Date.now();
+      while (Date.now() - startTime < maxWait) {
+        const currentPlugin = useAppStore.getState().plugin;
+        if (currentPlugin?.builders?.data && currentPlugin?.builders?.structure) {
+          return currentPlugin;
+        }
+        await new Promise((resolve) => setTimeout(resolve, retryInterval));
+      }
+      return null;
+    };
+
+    const fileInfo = { file_id: fileId, file_url: apiUrl, filename: filename || 'smiles_structure.pdb' };
+    const readyPlugin = await waitForPlugin();
+    if (!readyPlugin) {
+      setCurrentCode(`// SMILES structure stored as ${fileInfo.filename}; load when viewer is ready:\ntry {\n  await builder.clearStructure();\n  await builder.loadStructure('${apiUrl}');\n  await builder.addBallAndStickRepresentation({ color: 'element' });\n  builder.focusView();\n} catch (e) { console.error(e); }`);
+      setCurrentStructureOrigin({
+        type: 'upload',
+        filename: fileInfo.filename,
+        metadata: { file_id: fileId, file_url: apiUrl },
+      });
+      setPendingCodeToRun('// SMILES structure will load when viewer is ready');
+      return fileInfo;
+    }
+
+    try {
+      setIsExecuting(true);
+      const { CodeExecutor } = await import('../utils/codeExecutor');
+      const executor = new CodeExecutor(readyPlugin);
+      const blobRes = await api.get(`/upload/pdb/${fileId}`, { responseType: 'blob' });
+      const blob = new Blob([blobRes.data], { type: 'chemical/x-pdb' });
+      const blobUrl = URL.createObjectURL(blob);
+      const execCode = `
+try {
+  await builder.clearStructure();
+  await builder.loadStructure('${blobUrl}');
+  await builder.addBallAndStickRepresentation({ color: 'element' });
+  builder.focusView();
+} catch (e) { 
+  console.error('Failed to load SMILES structure:', e); 
+}`;
+      const savedCode = `
+try {
+  await builder.clearStructure();
+  await builder.loadStructure('${apiUrl}');
+  await builder.addBallAndStickRepresentation({ color: 'element' });
+  builder.focusView();
+} catch (e) { 
+  console.error('Failed to load SMILES structure:', e); 
+}`;
+      await executor.executeCode(execCode);
+      setTimeout(() => URL.revokeObjectURL(blobUrl), 5000);
+      setCurrentCode(savedCode);
+      if (activeSessionId) saveVisualizationCode(activeSessionId, savedCode);
+      setCurrentStructureOrigin({
+        type: 'upload',
+        filename: fileInfo.filename,
+        metadata: { file_id: fileId, file_url: apiUrl },
+      });
+      return fileInfo;
+    } catch (err) {
+      console.error('[ChatPanel] Failed to load SMILES result in viewer:', err);
       throw err;
     } finally {
       setIsExecuting(false);
@@ -1015,6 +1322,99 @@ try {
           >
             <Shield className="w-3.5 h-3.5" />
             Validate
+          </button>
+        </div>
+      </div>
+    );
+  };
+
+  const renderSmilesResult = (result: ExtendedMessage['smilesResult'], message?: ExtendedMessage) => {
+    if (!result?.file_id || !result?.file_url) return null;
+
+    const loadInViewer = async () => {
+      if (!plugin) return;
+      try {
+        setIsExecuting(true);
+        const executor = new CodeExecutor(plugin);
+        const blobRes = await api.get(`/upload/pdb/${result.file_id}`, { responseType: 'blob' });
+        const blob = new Blob([blobRes.data], { type: 'chemical/x-pdb' });
+        const blobUrl = URL.createObjectURL(blob);
+        const apiUrl = result.file_url;
+        const execCode = `
+try {
+  await builder.clearStructure();
+  await builder.loadStructure('${blobUrl}');
+  await builder.addBallAndStickRepresentation({ color: 'element' });
+  builder.focusView();
+} catch (e) { console.error('Failed to load SMILES structure:', e); }`;
+        const savedCode = `
+try {
+  await builder.clearStructure();
+  await builder.loadStructure('${apiUrl}');
+  await builder.addBallAndStickRepresentation({ color: 'element' });
+  builder.focusView();
+} catch (e) { console.error('Failed to load SMILES structure:', e); }`;
+        await executor.executeCode(execCode);
+        setTimeout(() => URL.revokeObjectURL(blobUrl), 5000);
+        setCurrentCode(savedCode);
+        if (activeSessionId) saveVisualizationCode(activeSessionId, savedCode, message?.id);
+        setViewerVisibleAndSave(true);
+        setActivePane('viewer');
+        setCurrentStructureOrigin({
+          type: 'upload',
+          filename: result.filename,
+          metadata: { file_id: result.file_id, file_url: result.file_url },
+        });
+      } catch (err) {
+        console.error('[ChatPanel] Failed to load SMILES result in viewer:', err);
+      } finally {
+        setIsExecuting(false);
+      }
+    };
+
+    const downloadPDB = async () => {
+      try {
+        const res = await api.get(`/upload/pdb/${result.file_id}`, { responseType: 'blob' });
+        const blob = new Blob([res.data], { type: 'chemical/x-pdb' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = result.filename || 'smiles_structure.pdb';
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+      } catch (e) {
+        console.error('[ChatPanel] Failed to download SMILES PDB:', e);
+      }
+    };
+
+    return (
+      <div className="mt-3 p-4 bg-gradient-to-r from-emerald-50 to-teal-50 border border-emerald-200 rounded-lg">
+        <div className="flex items-center space-x-2 mb-3">
+          <div className="w-8 h-8 bg-emerald-600 rounded-full flex items-center justify-center">
+            <span className="text-white text-sm font-bold">SM</span>
+          </div>
+          <div>
+            <h4 className="font-medium text-gray-900">SMILES structure</h4>
+            <p className="text-xs text-gray-600">{result.filename}</p>
+          </div>
+        </div>
+        <div className="flex space-x-2">
+          <button
+            onClick={downloadPDB}
+            className="flex items-center space-x-1 px-3 py-2 bg-emerald-600 text-white rounded-md hover:bg-emerald-700 text-sm"
+          >
+            <Download className="w-4 h-4" />
+            <span>Download PDB</span>
+          </button>
+          <button
+            onClick={loadInViewer}
+            disabled={!plugin}
+            className="flex items-center space-x-1 px-3 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed text-sm"
+          >
+            <Play className="w-4 h-4" />
+            <span>View 3D</span>
           </button>
         </div>
       </div>
@@ -2029,17 +2429,30 @@ try {
       }
 
       if (data.action === 'show_smiles_in_viewer' && data.smiles) {
+        const friendlySuccessMessage =
+          'Loaded the molecule in the 3D viewer. You can explore it in the right panel.';
         loadSmilesInViewer({
           smiles: data.smiles,
           format: data.format || 'pdb',
-        }).catch((err) => {
-          addMessage({
-            id: uuidv4(),
-            content: err?.message ?? 'Failed to load SMILES in 3D viewer.',
-            type: 'ai',
-            timestamp: new Date(),
+        })
+          .then((smilesResult) => {
+            const msg: ExtendedMessage = {
+              id: uuidv4(),
+              content: friendlySuccessMessage,
+              type: 'ai',
+              timestamp: new Date(),
+            };
+            if (smilesResult) msg.smilesResult = { ...smilesResult, smiles: data.smiles };
+            addMessage(msg);
+          })
+          .catch((err) => {
+            addMessage({
+              id: uuidv4(),
+              content: err?.message ?? 'Failed to load SMILES in 3D viewer.',
+              type: 'ai',
+              timestamp: new Date(),
+            });
           });
-        });
         return true;
       }
 
@@ -2326,8 +2739,119 @@ try {
         console.log('[DEBUG] currentCode length:', currentCode?.length || 0);
         console.log('[DEBUG] selections count:', selections.length);
         console.log('[DEBUG] selections:', selections);
-        const response = await api.post('/agents/route', payload);
-        console.log('[AI] route:response', response?.data);
+
+        // LangGraph SDK path: stream via SSE to FastAPI
+        const sessionMessages = activeSession?.messages ?? [];
+        const lcMessages = [...toLangGraphMessages(sessionMessages), { type: 'human' as const, content: text }];
+        const configurable = {
+          currentCode,
+          history: payload.history,
+          selection: payload.selection,
+          selections: payload.selections,
+          uploadedFile: payload.uploadedFile,
+          structureMetadata: payload.structureMetadata,
+          pipeline_id: payload.pipeline_id,
+          pipeline_data: payload.pipeline_data,
+          model: payload.model,
+          agentId: payload.agentId,
+        };
+        console.log('[LG submit] lcMessages:', lcMessages.length, 'configurable keys:', Object.keys(configurable));
+        try {
+          await stream.submit(
+            { messages: lcMessages },
+            { config: { configurable } }
+          );
+          console.log('[LG submit] returned OK');
+        } catch (submitErr) {
+          console.error('[LG submit] ERROR:', submitErr);
+          addMessage({
+            id: uuidv4(),
+            type: 'ai',
+            content: `Stream error: ${submitErr instanceof Error ? submitErr.message : String(submitErr)}`,
+            timestamp: new Date(),
+          } as ExtendedMessage);
+          setIsLoading(false);
+        }
+        return; // onFinish will add message and set code/agentId
+
+        // Legacy NDJSON streaming path (kept for reference; SDK path returns above)
+        const streamingPlaceholderId = uuidv4();
+        let placeholderAdded = false;
+        const sessionId = activeSession?.id;
+        const addOrUpdateStreamingMessage = (content: string, merge?: Partial<ExtendedMessage>) => {
+          if (!sessionId) return;
+          const store = useChatHistoryStore.getState();
+          const session = store.sessions.find((s) => s.id === sessionId);
+          if (!session) return;
+          
+          if (!placeholderAdded) {
+            const newMsg = { id: streamingPlaceholderId, content, type: 'ai', timestamp: new Date(), ...merge } as ExtendedMessage;
+            useChatHistoryStore.setState({
+              sessions: store.sessions.map(s => s.id === sessionId ? { ...s, messages: [...s.messages, newMsg] } : s)
+            });
+            placeholderAdded = true;
+          } else {
+            useChatHistoryStore.setState({
+              sessions: store.sessions.map(s => s.id === sessionId ? {
+                ...s,
+                messages: s.messages.map(m => m.id === streamingPlaceholderId ? { ...m, content, ...merge } as ExtendedMessage : m)
+              } : s)
+            });
+          }
+        };
+        const removeStreamingPlaceholder = () => {
+          if (!sessionId || !placeholderAdded) return;
+          const store = useChatHistoryStore.getState();
+          useChatHistoryStore.setState({
+             sessions: store.sessions.map(s => s.id === sessionId ? {
+               ...s,
+               messages: s.messages.filter(m => m.id !== streamingPlaceholderId)
+             } : s)
+          });
+        };
+
+        let response: { data?: any } = {};
+        try {
+          for await (const chunk of streamAgentRoute(payload)) {
+            if (chunk.type === 'content' && chunk.data?.text) {
+              const store = useChatHistoryStore.getState();
+              const prev = store.sessions.find((s) => s.id === sessionId)?.messages?.find((m) => m.id === streamingPlaceholderId);
+              const nextContent = (prev?.content || '') + chunk.data.text;
+              addOrUpdateStreamingMessage(nextContent);
+            } else if (chunk.type === 'complete' && chunk.data) {
+              response = { data: chunk.data };
+              const finalContent = chunk.data.text ?? chunk.data.code ?? '';
+              const isActionOnly = typeof finalContent === 'string' && finalContent.trim().startsWith('{"action":');
+              if (placeholderAdded) {
+                addOrUpdateStreamingMessage(finalContent || '', { thinkingProcess: chunk.data.thinkingProcess ? convertThinkingData(chunk.data.thinkingProcess) : undefined });
+              } else if (finalContent && !isActionOnly) {
+                addOrUpdateStreamingMessage(finalContent, { thinkingProcess: chunk.data.thinkingProcess ? convertThinkingData(chunk.data.thinkingProcess) : undefined });
+              }
+              break;
+            } else if (chunk.type === 'error') {
+              addOrUpdateStreamingMessage(chunk.data?.error ?? 'Something went wrong.');
+              setIsLoading(false);
+              return;
+            }
+          }
+        } catch (streamErr: any) {
+          addOrUpdateStreamingMessage(streamErr?.message ?? 'Request failed.');
+          setIsLoading(false);
+          return;
+        }
+
+        if (!response.data) {
+          // Stream ended without a complete event — show error instead of silent failure
+          if (placeholderAdded) {
+            addOrUpdateStreamingMessage('Connection lost or server error. Please try again.');
+          } else {
+            addOrUpdateStreamingMessage('Connection lost or server error. Please try again.');
+          }
+          setIsLoading(false);
+          return;
+        }
+
+        setIsLoading(false); // End loading state as soon as stream completes
         
         const agentId = response.data?.agentId;
         const agentType = response.data?.type as 'code' | 'text' | undefined;
@@ -2359,9 +2883,10 @@ try {
           setCurrentCode('');
           
           // Clear the 3D viewer if plugin is available
-          if (plugin) {
+          const pluginRef = plugin;
+          if (pluginRef) {
             try {
-              const executor = new CodeExecutor(plugin);
+              const executor = new CodeExecutor(pluginRef as PluginUIContext);
               await executor.executeCode('try { await builder.clearStructure(); } catch(e) { console.warn("Clear failed:", e); }');
               console.log('[Agent Switch] Viewer cleared successfully');
             } catch (e) {
@@ -2376,11 +2901,58 @@ try {
         if (agentId) {
           setLastAgentId(agentId);
         }
+
+        // Handle tool results (e.g. SMILES from tool-calling) before parsing text for structured actions
+        const toolResults = response.data?.toolResults as Array<{ name: string; result: { content?: string; filename?: string; error?: string } }> | undefined;
+        const smilesToolResult = toolResults?.find((t) => t.name === 'show_smiles_in_viewer');
+        const smilesResult = smilesToolResult?.result;
+        const content = smilesResult?.content;
+        const filename = smilesResult?.filename;
+        if (content && filename) {
+            removeStreamingPlaceholder();
+            loadSmilesResultInViewer({ content: content as string, filename: filename as string })
+              .then((loaded) => {
+                const msg: ExtendedMessage = {
+                  id: uuidv4(),
+                  content: 'Loaded the molecule in the 3D viewer. You can explore it in the right panel.',
+                  type: 'ai',
+                  timestamp: new Date(),
+                  smilesResult: { ...loaded },
+                };
+                addMessage(msg);
+              })
+              .catch((err) => {
+                addMessage({
+                  id: uuidv4(),
+                  content: err?.message ?? 'Failed to load SMILES in 3D viewer.',
+                  type: 'ai',
+                  timestamp: new Date(),
+                });
+              });
+            return;
+          }
+          const smilesError = smilesResult?.error;
+          if (smilesError) {
+            removeStreamingPlaceholder();
+            addMessage({
+              id: uuidv4(),
+              content: smilesError as string,
+              type: 'ai',
+              timestamp: new Date(),
+            });
+            return;
+          }
+
+        // Handle structured actions (e.g. show_smiles_in_viewer from JSON in text) from any agent so we never show raw JSON in chat
+        if (response.data?.text && handleAlphaFoldResponse(response.data.text)) {
+          return;
+        }
+
         if (agentType === 'text') {
           const aiText = response.data?.text || 'Okay.';
           thinkingProcess = convertThinkingData(response.data?.thinkingProcess);
           console.log('[AI] route:text', { text: aiText?.slice?.(0, 400), hasThinking: !!thinkingProcess });
-          
+
           // Check if this is an AlphaFold response
           if (agentId === 'alphafold-agent') {
             console.log('🧬 [AlphaFold] Agent detected, processing response');
@@ -2534,20 +3106,23 @@ try {
           };
 
           const parsedBlueprint = tryParseBlueprint();
-          if (parsedBlueprint) {
+          if (parsedBlueprint != null) {
+            const bp = parsedBlueprint as NonNullable<typeof parsedBlueprint>;
             console.log('✅ [Pipeline] Blueprint detected in response', agentId === 'pipeline-agent' ? '(pipeline-agent)' : '(fallback)');
-            console.log('📋 [Pipeline] Blueprint nodes:', parsedBlueprint.blueprint.nodes?.length || 0);
-            setGhostBlueprint(parsedBlueprint.blueprint);
+            console.log('📋 [Pipeline] Blueprint nodes:', bp.blueprint.nodes?.length || 0);
+            setGhostBlueprint(bp.blueprint);
             const chatMsg: ExtendedMessage = {
               id: uuidv4(),
-              content: parsedBlueprint.message || aiText,
+              content: bp.message || aiText,
               type: 'ai',
               timestamp: new Date(),
-              blueprint: parsedBlueprint.blueprint,
-              blueprintRationale: parsedBlueprint.rationale,
+              blueprint: bp.blueprint,
+              blueprintRationale: bp.rationale,
             };
             if (thinkingProcess) chatMsg.thinkingProcess = thinkingProcess;
+            removeStreamingPlaceholder();
             addMessage(chatMsg);
+            setIsLoading(false);
             return;
           }
           
@@ -2566,7 +3141,9 @@ try {
             chatMsg.thinkingProcess = thinkingProcess;
           }
           
+          removeStreamingPlaceholder();
           addMessage(chatMsg);
+          setIsLoading(false);
           return; // Exit early - no code generation or execution
         }
         code = response.data?.code || '';
@@ -2574,8 +3151,14 @@ try {
         aiText = response.data?.text || '';
         thinkingProcess = convertThinkingData(response.data?.thinkingProcess);
         console.log('[AI] route:code', { length: code?.length, hasThinking: !!thinkingProcess, hasText: !!aiText });
-      } catch (apiErr) {
+      } catch (apiErr: any) {
         console.warn('AI generation failed (backend unavailable or error).', apiErr);
+        
+        // Check if this is an API key error (503 with api_key_missing)
+        const isApiKeyError = apiErr?.response?.status === 503 && 
+          (apiErr?.response?.data?.error === 'api_key_missing' || 
+           apiErr?.response?.data?.message?.includes('OpenRouter API key'));
+        
         const likelyVis = isLikelyVisualization(text);
         if (likelyVis) {
           if (plugin) {
@@ -2591,13 +3174,19 @@ try {
 } catch (e) { console.error(e); }`;
           }
         } else {
+          // Provide more specific error message for API key issues
+          const errorMessage = isApiKeyError
+            ? 'OpenRouter API key is invalid or missing. Please set OPENROUTER_API_KEY in server/.env with a valid key from https://openrouter.ai'
+            : 'AI backend is unavailable. Please start the server and try again.';
+          
           const chatMsg: Message = {
             id: uuidv4(),
-            content: 'AI backend is unavailable. Please start the server and try again.',
+            content: errorMessage,
             type: 'ai',
             timestamp: new Date()
           };
           addMessage(chatMsg);
+          setIsLoading(false); // Reset loading state before returning
           return;
         }
       }
@@ -2859,6 +3448,7 @@ try {
                     return null;
                   })()}
                   {renderAlphaFoldResult(message.alphafoldResult, message)}
+                  {renderSmilesResult(message.smilesResult, message)}
                   {renderOpenFold2Result(message.openfold2Result, message)}
                   {renderDiffDockResult(message.diffdockResult, message)}
                   {renderRFdiffusionResult(message.rfdiffusionResult, message)}
