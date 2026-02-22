@@ -32,6 +32,9 @@ export interface Message {
   // Job tracking for async operations
   jobId?: string;
   jobType?: 'rfdiffusion' | 'alphafold' | 'proteinmpnn';
+  // Supervisor agent metadata
+  agentId?: string;
+  toolsInvoked?: string[];
   // Extended fields for AI messages
   thinkingProcess?: ThinkingProcess;
   alphafoldResult?: {
@@ -67,6 +70,7 @@ export interface Message {
     pdbContent?: string;
     filename?: string;
     job_id?: string;
+    pdb_url?: string;
     message?: string;
   };
   smilesResult?: {

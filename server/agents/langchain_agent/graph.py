@@ -8,12 +8,13 @@ from __future__ import annotations
 from typing import Annotated, Any, Dict, List, Optional, Sequence, TypedDict
 
 try:
-    from langchain_core.messages import BaseMessage
+    from langchain_core.messages import BaseMessage, SystemMessage
     from langgraph.graph import END, START, StateGraph
     from langgraph.prebuilt import ToolNode, tools_condition
     from langgraph.graph.message import add_messages
 except ImportError:
     BaseMessage = None
+    SystemMessage = None
     StateGraph = None
     START = None
     END = None
@@ -39,7 +40,9 @@ def build_agent_graph(
     Args:
         llm: LangChain chat model (from get_chat_model).
         tools: List of LangChain tools; can be empty for no-tool agents.
-        system_prompt: Optional; caller adds SystemMessage to state.
+        system_prompt: If provided, prepended as a SystemMessage before the
+            input messages on every LLM call.  This ensures each sub-agent
+            gets its own specialised prompt.
 
     Returns:
         Compiled graph with invoke({"messages": [...]}, config={"recursion_limit": 25}).
@@ -48,6 +51,7 @@ def build_agent_graph(
         raise RuntimeError("langgraph is required for agent graph")
 
     llm_with_tools = llm.bind_tools(tools) if tools else llm
+    _system_prompt = system_prompt
 
     class State(TypedDict):
         messages: Annotated[Sequence[BaseMessage], add_messages]
@@ -55,8 +59,12 @@ def build_agent_graph(
     from langchain_core.runnables import RunnableConfig
 
     async def agent_node(state: State, config: Optional[RunnableConfig] = None) -> Dict[str, Any]:
-        # Pass config so LangGraph/LangChain can attach streaming callbacks (stream_mode="messages")
-        response = await llm_with_tools.ainvoke(state["messages"], config=config or {})
+        msgs = list(state["messages"])
+        if _system_prompt and SystemMessage is not None:
+            has_system = msgs and getattr(msgs[0], "type", None) == "system"
+            if not has_system:
+                msgs = [SystemMessage(content=_system_prompt)] + msgs
+        response = await llm_with_tools.ainvoke(msgs, config=config or {})
         return {"messages": [response]}
 
     def _noop_tools(state: State) -> Dict[str, Any]:

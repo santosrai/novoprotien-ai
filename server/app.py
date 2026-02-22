@@ -684,8 +684,8 @@ async def route_stream(request: Request, user: Dict[str, Any] = Depends(get_curr
                 if row:
                     pipeline_data = _json.loads(row[2]) if row[2] else {}
         try:
-            from .agents.runner import run_react_agent_stream
-            async for event in run_react_agent_stream(
+            from .agents.runner import run_supervisor_stream
+            async for event in run_supervisor_stream(
                 user_text=input_text,
                 current_code=body.get("currentCode"),
                 history=body.get("history"),
@@ -696,6 +696,7 @@ async def route_stream(request: Request, user: Dict[str, Any] = Depends(get_curr
                 pipeline_id=pipeline_id,
                 pipeline_data=pipeline_data,
                 model_override=model_override,
+                manual_agent_id=manual_agent_id,
             ):
                 # NDJSON: one JSON object per line for frontend streamAgentRoute()
                 yield _json.dumps(event) + "\n"
@@ -711,7 +712,7 @@ async def route_stream(request: Request, user: Dict[str, Any] = Depends(get_curr
 
 
 def _body_to_stream_args(body: dict, user: Dict[str, Any]) -> dict:
-    """Build run_react_agent_stream kwargs from either legacy payload or LangGraph SDK payload.
+    """Build run_supervisor_stream kwargs from either legacy payload or LangGraph SDK payload.
     SDK sends: { input: ..., config: { configurable: { ... } } }
     Legacy sends: { input: ..., context: { configurable: { ... } } } or flat keys."""
     import json as _json
@@ -760,6 +761,9 @@ def _body_to_stream_args(body: dict, user: Dict[str, Any]) -> dict:
             if row:
                 pipeline_data = _json.loads(row[2]) if row[2] else {}
 
+    # Extract manual agent selection (null/absent = auto-route via supervisor)
+    manual_agent_id = body.get("agentId") or configurable.get("agentId") or None
+
     return {
         "user_text": spell_fix(input_text) if input_text else input_text,
         "current_code": body.get("currentCode") or configurable.get("currentCode"),
@@ -771,6 +775,7 @@ def _body_to_stream_args(body: dict, user: Dict[str, Any]) -> dict:
         "pipeline_id": pipeline_id,
         "pipeline_data": pipeline_data,
         "model_override": body.get("model") or configurable.get("model"),
+        "manual_agent_id": manual_agent_id,
     }
 
 
@@ -823,20 +828,28 @@ async def route_stream_sse(request: Request, user: Dict[str, Any] = Depends(get_
         try:
             import uuid as _uuid
             try:
-                from .agents.runner import run_react_agent_stream
+                from .agents.runner import run_supervisor_stream
             except ImportError:
-                from agents.runner import run_react_agent_stream
+                from agents.runner import run_supervisor_stream
 
             collected_content: list = []
             event_count = 0
             # Stable message ID so SDK MessageTupleManager concatenates all chunks
             ai_msg_id = str(_uuid.uuid4())
-            _log(f"[SSE] Starting agent stream, ai_msg_id={ai_msg_id}")
-            async for event in run_react_agent_stream(**stream_args):
+            _log(f"[SSE] Starting supervisor stream, ai_msg_id={ai_msg_id}")
+            async for event in run_supervisor_stream(**stream_args):
                 event_count += 1
                 etype = event.get("type")
                 _log(f"[SSE] event #{event_count}: type={etype}")
-                if etype == "content":
+                if etype == "routing":
+                    # New: tell frontend which agent was selected (agent pill)
+                    payload = _json.dumps(event.get("data") or {})
+                    yield f"event: metadata\ndata: {payload}\n\n"
+                elif etype == "tool_call":
+                    # New: tell frontend which tool was invoked (tool pill)
+                    payload = _json.dumps({"tool": (event.get("data") or {}).get("name")})
+                    yield f"event: metadata\ndata: {payload}\n\n"
+                elif etype == "content":
                     text = (event.get("data") or {}).get("text") or ""
                     if isinstance(text, str) and text:
                         collected_content.append(text)
@@ -849,7 +862,7 @@ async def route_stream_sse(request: Request, user: Dict[str, Any] = Depends(get_
                 elif etype == "complete":
                     data = event.get("data") or {}
                     full_text = data.get("text") or "".join(collected_content) or data.get("code") or ""
-                    _log(f"[SSE] complete: full_text len={len(full_text)}, agentId={data.get('agentId')}")
+                    _log(f"[SSE] complete: full_text len={len(full_text)}, agentId={data.get('agentId')}, tools={data.get('toolsInvoked')}")
                     # Build history messages with IDs for the SDK values event
                     history = stream_args.get("history") or []
                     lc_messages: list = []
@@ -862,8 +875,8 @@ async def route_stream_sse(request: Request, user: Dict[str, Any] = Depends(get_
                         })
                     # Final AI message uses the same ID as the streamed chunks
                     lc_messages.append({"type": "ai", "id": ai_msg_id, "content": full_text})
-                    # Include app result so frontend can handle agentId, code, actions, etc.
-                    app_result = {k: data.get(k) for k in ("agentId", "text", "code", "reason", "type", "thinkingProcess") if data.get(k) is not None}
+                    # Include app result so frontend can handle agentId, code, actions, toolsInvoked, etc.
+                    app_result = {k: data.get(k) for k in ("agentId", "text", "code", "reason", "type", "thinkingProcess", "toolsInvoked") if data.get(k) is not None}
                     values_payload = _json.dumps({"messages": lc_messages, "appResult": app_result})
                     _log(f"[SSE] yielding values event, messages count: {len(lc_messages)}")
                     yield f"event: values\ndata: {values_payload}\n\n"

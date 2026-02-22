@@ -1,428 +1,141 @@
-import React, { useState, useRef, useEffect, useCallback, useMemo } from 'react';
-import { Send, Sparkles, Download, Play, X, Copy, ChevronDown, ChevronUp, Shield } from 'lucide-react';
-import { PluginUIContext } from 'molstar/lib/mol-plugin-ui/context';
+import React, { useState, useRef, useEffect, useCallback } from 'react';
+import { Sparkles } from 'lucide-react';
 import { useAppStore } from '../stores/appStore';
+import type { StructureOrigin } from '../stores/appStore';
 import { useChatHistoryStore, useActiveSession, Message } from '../stores/chatHistoryStore';
 import { CodeExecutor } from '../utils/codeExecutor';
-import { api, getAuthHeaders, streamAgentRoute } from '../utils/api';
-import { useStream } from '@langchain/langgraph-sdk/react';
-import { createLangGraphTransport, toLangGraphMessages } from '../utils/langgraphTransport';
+import { api, getAuthHeaders } from '../utils/api';
+import { toLangGraphMessages } from '../utils/langgraphTransport';
 import { useModels, useAgents } from '../hooks/queries';
 import { v4 as uuidv4 } from 'uuid';
+import { useAlphaFoldProgress, useProteinMPNNProgress } from './ProgressTracker';
+import { useAlphaFoldCancel } from '../hooks/mutations/useAlphaFold';
+import { useDiffDockPredict } from '../hooks/mutations/useDiffDock';
+import { useAgentSettings, useSettingsStore } from '../stores/settingsStore';
+import { usePipelineStore } from '../components/pipeline-canvas';
+import { extractStructureMetadata, summarizeForAgent } from '../utils/structureMetadata';
+
 import { AlphaFoldDialog } from './AlphaFoldDialog';
 import { OpenFold2Dialog } from './OpenFold2Dialog';
 import { DiffDockDialog } from './DiffDockDialog';
 import { RFdiffusionDialog } from './RFdiffusionDialog';
 import { ProteinMPNNDialog } from './ProteinMPNNDialog';
-import { ProgressTracker, useAlphaFoldProgress, useProteinMPNNProgress } from './ProgressTracker';
-import { useAlphaFoldCancel } from '../hooks/mutations/useAlphaFold';
-import { useDiffDockPredict } from '../hooks/mutations/useDiffDock';
-import { ErrorDisplay } from './ErrorDisplay';
-import { ErrorDetails, AlphaFoldErrorHandler, OpenFold2ErrorHandler, RFdiffusionErrorHandler, DiffDockErrorHandler, ErrorCategory, ErrorSeverity } from '../utils/errorHandler';
-import { logAlphaFoldError } from '../utils/errorLogger';
-import { AgentSelector } from './AgentSelector';
-import { ModelSelector } from './ModelSelector';
-import { useAgentSettings, useSettingsStore } from '../stores/settingsStore';
-import { ThinkingProcessDisplay } from './ThinkingProcessDisplay';
-import { AttachmentMenu } from './AttachmentMenu';
-import { JobLoadingPill } from './JobLoadingPill';
-import { PipelineBlueprintDisplay } from './PipelineBlueprintDisplay';
 import { PipelineSelectionModal } from './PipelineSelectionModal';
 import { ServerFilesDialog } from './ServerFilesDialog';
-import ValidationPanel from './ValidationPanel';
-import type { ValidationReport } from '../types/validation';
-import { usePipelineStore } from '../components/pipeline-canvas';
-import { PipelineBlueprint } from '../components/pipeline-canvas';
-import { extractStructureMetadata, summarizeForAgent } from '../utils/structureMetadata';
-import ReactMarkdown from 'react-markdown';
-import remarkGfm from 'remark-gfm';
 
-// Extended message metadata for structured agent results
-interface ExtendedMessage extends Message {
-  alphafoldResult?: {
-    pdbContent?: string;
-    filename?: string;
-    sequence?: string;
-    parameters?: any;
-    metadata?: any;
-  };
-  openfold2Result?: {
-    pdbContent?: string;
-    filename?: string;
-    job_id?: string;
-    pdb_url?: string;
-    message?: string;
-  };
-  rfdiffusionResult?: {
-    pdbContent?: string;
-    filename?: string;
-    parameters?: any;
-    metadata?: any;
-  };
-  proteinmpnnResult?: {
-    jobId: string;
-    sequences: Array<{
-      id: string;
-      sequence: string;
-      length: number;
-      metadata?: Record<string, any>;
-    }>;
-    downloads: {
-      json: string;
-      fasta: string;
-      raw?: string;
-    };
-    metadata?: Record<string, any>;
-  };
-  diffdockResult?: {
-    pdbContent?: string;
-    filename?: string;
-    job_id?: string;
-    pdb_url?: string;
-    message?: string;
-  };
-  thinkingProcess?: {
-    steps: Array<{
-      id: string;
-      title: string;
-      content: string;
-      status: 'pending' | 'processing' | 'completed';
-      timestamp?: Date;
-    }>;
-    isComplete: boolean;
-    totalSteps: number;
-  };
-  smilesResult?: {
-    file_id: string;
-    file_url: string;
-    filename: string;
-    smiles?: string;
-  };
-  validationResult?: ValidationReport;
-  error?: ErrorDetails;
-  blueprint?: PipelineBlueprint;
-  blueprintRationale?: string;
-  blueprintApproved?: boolean;
-}
+import type { ExtendedMessage, FileUploadState } from '../types/chat';
 
-const renderProteinMPNNResult = (result: ExtendedMessage['proteinmpnnResult']) => {
-  if (!result) return null;
+import { useChatSession } from '../hooks/useChatSession';
+import { useLangGraphStream } from '../hooks/useLangGraphStream';
+import { useViewerLoader } from '../hooks/useViewerLoader';
+import { useJobHandlers } from '../hooks/useJobHandlers';
+import { useActionRouter } from '../hooks/useActionRouter';
 
-  const copySequence = async (sequence: string) => {
-    try {
-      await navigator.clipboard.writeText(sequence);
-      console.log('[ProteinMPNN] Sequence copied to clipboard');
-    } catch (err) {
-      console.warn('Failed to copy sequence', err);
-    }
-  };
-
-  return (
-    <div className="mt-3 p-4 bg-gradient-to-r from-emerald-50 to-teal-50 border border-emerald-200 rounded-lg">
-      <div className="flex items-center space-x-2 mb-3">
-        <div className="w-8 h-8 bg-emerald-600 rounded-full flex items-center justify-center">
-          <span className="text-white text-sm font-bold">PM</span>
-        </div>
-        <div>
-          <h4 className="font-medium text-gray-900">ProteinMPNN Sequence Design</h4>
-          <p className="text-xs text-gray-600">
-            Job {result.jobId} • {result.sequences.length} sequence{result.sequences.length === 1 ? '' : 's'}
-          </p>
-        </div>
-      </div>
-
-      <div className="flex flex-wrap gap-2 mb-3">
-        <a
-          href={result.downloads.json}
-          target="_blank"
-          rel="noopener noreferrer"
-          className="inline-flex items-center space-x-1 px-3 py-1 text-xs bg-emerald-100 text-emerald-700 rounded-full hover:bg-emerald-200"
-        >
-          <Download className="w-3 h-3" />
-          <span>JSON</span>
-        </a>
-        <a
-          href={result.downloads.fasta}
-          target="_blank"
-          rel="noopener noreferrer"
-          className="inline-flex items-center space-x-1 px-3 py-1 text-xs bg-emerald-100 text-emerald-700 rounded-full hover:bg-emerald-200"
-        >
-          <Download className="w-3 h-3" />
-          <span>FASTA</span>
-        </a>
-        {result.downloads.raw && (
-          <a
-            href={result.downloads.raw}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="inline-flex items-center space-x-1 px-3 py-1 text-xs bg-emerald-100 text-emerald-700 rounded-full hover:bg-emerald-200"
-          >
-            <Download className="w-3 h-3" />
-            <span>Raw data</span>
-          </a>
-        )}
-      </div>
-
-      <div className="space-y-4">
-        {result.sequences.map((seq, index) => (
-          <div key={seq.id} className="border border-emerald-200 rounded-lg bg-white">
-            <div className="flex items-center justify-between px-3 py-2 border-b border-emerald-100 bg-emerald-50">
-              <div>
-                <p className="text-sm font-medium text-emerald-800">Design {index + 1}</p>
-                <p className="text-xs text-emerald-600">{seq.length} residues</p>
-              </div>
-              <button
-                onClick={() => copySequence(seq.sequence)}
-                className="inline-flex items-center space-x-1 text-xs text-emerald-700 hover:text-emerald-900"
-                title="Copy sequence"
-              >
-                <Copy className="w-3 h-3" />
-                <span>Copy</span>
-              </button>
-            </div>
-            <div className="px-3 py-3">
-              <pre className="text-xs font-mono whitespace-pre-wrap break-words bg-emerald-50 border border-emerald-100 rounded p-3">{seq.sequence}</pre>
-            </div>
-          </div>
-        ))}
-      </div>
-    </div>
-  );
-};
-
-// Helper function to convert backend thinking data to frontend format
-const convertThinkingData = (thinkingProcess: any): ExtendedMessage['thinkingProcess'] | undefined => {
-  if (!thinkingProcess) return undefined;
-  
-  // Backend returns: { steps: [...], isComplete: bool, totalSteps: number }
-  // Frontend expects: { steps: ThinkingStep[], isComplete: bool, totalSteps: number }
-  if (thinkingProcess.steps && Array.isArray(thinkingProcess.steps)) {
-    return {
-      steps: thinkingProcess.steps.map((step: any) => ({
-        id: step.id || `step_${Math.random()}`,
-        title: step.title || 'Thinking Step',
-        content: step.content || '',
-        status: step.status || 'completed',
-        timestamp: step.timestamp ? new Date(step.timestamp) : undefined
-      })),
-      isComplete: thinkingProcess.isComplete !== false,
-      totalSteps: thinkingProcess.totalSteps || thinkingProcess.steps.length
-    };
-  }
-  
-  return undefined;
-};
-
-// Generate a user-friendly message for code execution
-const getExecutionMessage = (userRequest: string): string => {
-  const request = userRequest.toLowerCase().trim();
-  
-  // Extract the main subject (what they want to see)
-  const subjectMatch = request.match(/(?:show|display|visualize|view|load|open|see)\s+(.+?)(?:\s|$)/i);
-  const subject = subjectMatch ? subjectMatch[1].trim() : request;
-  
-  // Clean up common trailing words
-  const cleanSubject = subject.replace(/\s+(structure|protein|molecule|chain|helix)$/i, '').trim();
-  
-  // If it's a short, meaningful subject, use it
-  if (cleanSubject && cleanSubject.length < 40 && cleanSubject.length > 0) {
-    // Capitalize first letter
-    const capitalized = cleanSubject.charAt(0).toUpperCase() + cleanSubject.slice(1);
-    return `Loading ${capitalized}...`;
-  }
-  
-  // Fallback to a simple message
-  return 'Loading structure...';
-};
-
-const extractProteinMPNNSequences = (payload: any): string[] => {
-  if (!payload) return [];
-
-  const search = (data: any): string[] => {
-    if (!data) return [];
-    const candidates: string[] = [];
-    const possibleFields = ['designed_sequences', 'designed_seqs', 'sequences', 'output_sequences'];
-
-    for (const field of possibleFields) {
-      if (Array.isArray(data?.[field])) {
-        return data[field].filter((item: unknown) => typeof item === 'string');
-      }
-    }
-
-    if (Array.isArray(data)) {
-      return data.filter((item) => typeof item === 'string');
-    }
-
-    if (typeof data === 'object') {
-      const inner = data?.result || data?.data;
-      if (inner) {
-        const nested = search(inner);
-        if (nested.length > 0) {
-          return nested;
-        }
-      }
-    }
-
-    return candidates;
-  };
-
-  return search(payload);
-};
-
-const createProteinMPNNError = (
-  code: string,
-  userMessage: string,
-  technicalMessage: string,
-  context: Record<string, any>
-): ErrorDetails => ({
-  code,
-  category: ErrorCategory.PROCESSING,
-  severity: ErrorSeverity.HIGH,
-  userMessage,
-  technicalMessage,
-  context,
-  suggestions: [
-    {
-      action: 'Retry sequence design',
-      description: 'Try submitting the ProteinMPNN job again or adjust the parameters.',
-      type: 'retry',
-      priority: 1,
-    },
-    {
-      action: 'Verify backbone structure',
-      description: 'Ensure the selected PDB backbone is valid and contains the intended chains.',
-      type: 'fix',
-      priority: 2,
-    },
-  ],
-  timestamp: new Date(),
-});
+import { MessageList } from './chat/MessageList';
+import { WelcomeScreen } from './chat/WelcomeScreen';
+import { ChatInput } from './chat/ChatInput';
 
 export const ChatPanel: React.FC = () => {
-  const { plugin, currentCode, currentStructureOrigin, setCurrentCode, setIsExecuting, setActivePane, setPendingCodeToRun, setViewerVisible, setCurrentStructureOrigin, pendingCodeToRun } = useAppStore();
+  const {
+    plugin, currentCode, currentStructureOrigin,
+    setCurrentCode, setIsExecuting, setActivePane,
+    setPendingCodeToRun, setViewerVisible, setCurrentStructureOrigin,
+    pendingCodeToRun,
+  } = useAppStore();
   const selections = useAppStore(state => state.selections);
   const removeSelection = useAppStore(state => state.removeSelection);
   const clearSelections = useAppStore(state => state.clearSelections);
   const { setGhostBlueprint } = usePipelineStore();
 
-
-  // Chat history store
-  const { createSession, activeSessionId, saveVisualizationCode, getVisualizationCode, getLastCanvasCodeFromSession, saveViewerVisibility, getViewerVisibility } = useChatHistoryStore();
+  const {
+    createSession, activeSessionId,
+    saveVisualizationCode, getVisualizationCode,
+    getLastCanvasCodeFromSession, saveViewerVisibility, getViewerVisibility,
+  } = useChatHistoryStore();
   const isViewerVisible = useAppStore(state => state.isViewerVisible);
-  
-  // Helper function to set viewer visibility and save to session
-  const setViewerVisibleAndSave = useCallback((visible: boolean) => {
-    setViewerVisible(visible);
-    if (activeSessionId) {
-      saveViewerVisibility(activeSessionId, visible);
-    }
-  }, [setViewerVisible, activeSessionId, saveViewerVisibility]);
   const { activeSession, addMessage, updateMessages } = useActiveSession();
-  // Stable primitive so restore effect doesn't re-run on every session object reference change
   const activeSessionMessageCount = activeSession?.messages?.length ?? -1;
 
-  // Agent and model settings
   const { settings: agentSettings } = useAgentSettings();
   const langsmithSettings = useSettingsStore((s) => s.settings?.langsmith);
-  
+
   const [input, setInput] = useState('');
   const [isLoading, setIsLoading] = useState(false);
-  const [lastAgentId, setLastAgentId] = useState<string>('');
+  const [, setLastAgentId] = useState<string>('');
   const [isQuickStartExpanded, setIsQuickStartExpanded] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
-  const previousSessionIdRef = useRef<string | null>(null);
-  
-  // PDB file upload state - track files with their upload status
-  interface FileUploadState {
-    file: File;
-    status: 'uploading' | 'uploaded' | 'error';
-    fileInfo?: {
-      file_id: string;
-      filename: string;
-      file_url: string;
-      atoms: number;
-      chains: string[];
-      size: number;
-      chain_residue_counts?: Record<string, number>;
-      total_residues?: number;
-    };
-    error?: string;
-  }
+
   const [fileUploads, setFileUploads] = useState<FileUploadState[]>([]);
   const [uploadError, setUploadError] = useState<string | null>(null);
-  // Pipeline selection state
   const [showPipelineModal, setShowPipelineModal] = useState(false);
   const [showServerFilesDialog, setShowServerFilesDialog] = useState(false);
   const [selectedPipeline, setSelectedPipeline] = useState<{ id: string; name: string } | null>(null);
   const displayAttachedPipeline = selectedPipeline;
-  // Refs to track latest values for session switching (avoid stale closures)
-  const currentCodeRef = useRef<string | null>(currentCode);
-  const isViewerVisibleRef = useRef<boolean>(isViewerVisible);
-  const hasAttemptedCreateRef = useRef<boolean>(false);
 
-  // Get sync state and sessions from store
+  // Dialog states
+  const [showAlphaFoldDialog, setShowAlphaFoldDialog] = useState(false);
+  const [alphafoldData, setAlphafoldData] = useState<any>(null);
+  const [showProteinMPNNDialog, setShowProteinMPNNDialog] = useState(false);
+  const [proteinmpnnData, setProteinmpnnData] = useState<any>(null);
+  const [showOpenFold2Dialog, setShowOpenFold2Dialog] = useState(false);
+  const [showDiffDockDialog, setShowDiffDockDialog] = useState(false);
+  const [showRFdiffusionDialog, setShowRFdiffusionDialog] = useState(false);
+  const [rfdiffusionData, setRfdiffusionData] = useState<any>(null);
+
+  // Progress and mutations
+  const alphafoldProgress = useAlphaFoldProgress();
+  const alphafoldCancelMutation = useAlphaFoldCancel();
+  const [isCancellingAlphaFold, setIsCancellingAlphaFold] = useState(false);
+  const proteinmpnnProgress = useProteinMPNNProgress();
+  const diffdockPredictMutation = useDiffDockPredict();
+
   const isSyncing = useChatHistoryStore(state => state._isSyncing);
   const sessions = useChatHistoryStore(state => state.sessions);
 
-  // Reset hasAttemptedCreateRef when a session is successfully created or switched
-  useEffect(() => {
-    if (activeSessionId) {
-      hasAttemptedCreateRef.current = false;
-    }
-  }, [activeSessionId]);
+  useAgents();
+  const { data: modelsData } = useModels();
+  const models = modelsData ?? [];
 
-  // Initialize session if none exists (but wait for sync to complete)
-  useEffect(() => {
-    // Don't create if:
-    // 1. Already have an active session
-    // 2. Sync is in progress (wait for it to complete)
-    // 3. Already attempted to create (prevent duplicate creation)
-    // 4. Sessions exist (even if no activeSessionId, they might be loading)
-    if (activeSessionId || isSyncing || hasAttemptedCreateRef.current || sessions.length > 0) {
-      return;
-    }
+  const rawMessages = activeSession?.messages || [];
 
-    // Wait a bit for store rehydration and backend sync to complete
-    const timeoutId = setTimeout(() => {
-      // Double-check conditions after delay
-      const currentState = useChatHistoryStore.getState();
-      if (!currentState.activeSessionId && !currentState._isSyncing && currentState.sessions.length === 0) {
-        hasAttemptedCreateRef.current = true;
-        createSession();
-      }
-    }, 500); // Wait 500ms for sync to complete
+  // --- Hooks ---
 
-    return () => clearTimeout(timeoutId);
-  }, [activeSessionId, isSyncing, sessions.length, createSession]);
+  const { setViewerVisibleAndSave } = useChatSession({
+    activeSessionId, activeSession, activeSessionMessageCount,
+    currentCode, isViewerVisible, isSyncing, sessions,
+    createSession, getVisualizationCode, getLastCanvasCodeFromSession,
+    saveVisualizationCode, getViewerVisibility, saveViewerVisibility,
+    setCurrentCode, setViewerVisible, setActivePane,
+  });
 
-  // Initialize previous session ID ref on mount
-  useEffect(() => {
-    if (activeSessionId && !previousSessionIdRef.current) {
-      previousSessionIdRef.current = activeSessionId;
-      // Check if this is a new session (no messages) - hide all panes
-      const isNewSession = activeSessionMessageCount < 0 || activeSessionMessageCount === 0;
-      if (isNewSession) {
-        setViewerVisible(false);
-        setActivePane(null);
-      } else {
-        // Restore viewer visibility for existing session on mount
-        const savedVisibility = getViewerVisibility(activeSessionId);
-        if (savedVisibility !== undefined) {
-          setViewerVisible(savedVisibility);
-        }
-      }
-    }
-  }, [activeSessionId, activeSessionMessageCount, getViewerVisibility, setViewerVisible, setActivePane]);
+  const { loadUploadedFileInViewer, loadSmilesInViewer } = useViewerLoader({
+    plugin, activeSessionId, setIsExecuting, setCurrentCode,
+    setCurrentStructureOrigin, setPendingCodeToRun, setViewerVisibleAndSave,
+    setActivePane, saveVisualizationCode,
+  });
 
-  // Keep refs updated with latest values (prevents stale closures)
-  useEffect(() => {
-    currentCodeRef.current = currentCode;
-  }, [currentCode]);
+  const { routeAction } = useActionRouter({
+    setAlphafoldData, setShowAlphaFoldDialog,
+    setRfdiffusionData, setShowRFdiffusionDialog,
+    setProteinmpnnData, setShowProteinMPNNDialog,
+    setShowOpenFold2Dialog, setShowDiffDockDialog,
+    addMessage, loadSmilesInViewer,
+  });
 
-  useEffect(() => {
-    isViewerVisibleRef.current = isViewerVisible;
-  }, [isViewerVisible]);
+  const { stream, messages, hasStreamingContent } = useLangGraphStream({
+    rawMessages, activeSessionId, isLoading, setIsLoading,
+    addMessage, setLastAgentId, setCurrentCode, saveVisualizationCode,
+    setIsExecuting, setPendingCodeToRun, setViewerVisibleAndSave,
+    setActivePane, routeAction,
+  });
+
+  const jobHandlers = useJobHandlers({
+    activeSession, activeSessionId, addMessage, updateMessages,
+    alphafoldProgress, proteinmpnnProgress, diffdockPredictMutation,
+    setShowAlphaFoldDialog, setShowOpenFold2Dialog, setShowDiffDockDialog,
+    setShowRFdiffusionDialog, setShowProteinMPNNDialog,
+  });
 
   // Auto-show viewer when pendingCodeToRun is set
   useEffect(() => {
@@ -432,254 +145,19 @@ export const ChatPanel: React.FC = () => {
     }
   }, [pendingCodeToRun, setViewerVisibleAndSave, setActivePane]);
 
-  // Restore visualization code and viewer visibility when switching sessions
+  // Scroll + textarea resize
   useEffect(() => {
-    if (!activeSessionId) return;
-    
-    // Save current state to previous session before switching
-    // Use refs to ensure we have the latest values even if they changed after effect was scheduled
-    if (previousSessionIdRef.current && previousSessionIdRef.current !== activeSessionId) {
-      const codeToSave = currentCodeRef.current?.trim() || '';
-      if (codeToSave) {
-        saveVisualizationCode(previousSessionIdRef.current, codeToSave);
-        console.log('[ChatPanel] Saved code to previous session:', previousSessionIdRef.current);
-      }
-      // Save viewer visibility to previous session
-      saveViewerVisibility(previousSessionIdRef.current, isViewerVisibleRef.current);
-      console.log('[ChatPanel] Saved viewer visibility to previous session:', previousSessionIdRef.current, isViewerVisibleRef.current);
-    }
-    
-    // Check if this is a new session (no messages) - don't restore code for new sessions
-    const isNewSession = !activeSession || activeSession.messages.length === 0;
-    
-    if (isNewSession) {
-      // For new sessions, clear any existing code (don't restore from previous sessions)
-      if (currentCodeRef.current && currentCodeRef.current.trim()) {
-        console.log('[ChatPanel] Clearing code for new session:', activeSessionId);
-        setCurrentCode('');
-      }
-      // Hide all panes for new sessions
-      setViewerVisible(false);
-      setActivePane(null); // Reset active pane to hide all panes
-      console.log('[ChatPanel] Hiding all panes for new session:', activeSessionId);
-    } else {
-      // Prefer session messages (in-memory) - runs synchronously when messages are loaded
-      const sessionCode = getLastCanvasCodeFromSession(activeSessionId);
-      if (sessionCode) {
-        console.log('[ChatPanel] Restoring visualization code from session messages:', activeSessionId);
-        setCurrentCode(sessionCode);
-        const savedVisibility = getViewerVisibility(activeSessionId);
-        setViewerVisible(savedVisibility !== undefined ? savedVisibility : true);
-      } else {
-        // Fall back to async getVisualizationCode (localStorage, session API, user-scoped)
-        getVisualizationCode(activeSessionId).then((savedCode) => {
-          const hasValidCode = savedCode &&
-            savedCode.trim() &&
-            !savedCode.includes('blob:http://') &&
-            !savedCode.includes('blob:https://');
+    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  }, [messages, isLoading]);
 
-          if (hasValidCode) {
-            console.log('[ChatPanel] Restoring visualization code for session:', activeSessionId);
-            setCurrentCode(savedCode);
-            const savedVisibility = getViewerVisibility(activeSessionId);
-            setViewerVisible(savedVisibility !== undefined ? savedVisibility : true);
-          } else {
-            if (currentCodeRef.current && currentCodeRef.current.trim()) {
-              console.log('[ChatPanel] Clearing code for session without valid visualization:', activeSessionId);
-              setCurrentCode('');
-            }
-            setViewerVisible(false);
-          }
-        }).catch((error) => {
-          console.error('[ChatPanel] Failed to restore visualization code:', error);
-          setViewerVisible(false);
-        });
-      }
-    }
-
-    // Update previous session ID
-    previousSessionIdRef.current = activeSessionId;
-  }, [activeSessionId, activeSessionMessageCount, getVisualizationCode, getLastCanvasCodeFromSession, saveVisualizationCode, getViewerVisibility, saveViewerVisibility, setCurrentCode, setViewerVisible]);
-
-  // Use React Query for agents/models - deduplicates requests, avoids Strict Mode double-fetch
-  const { data: agentsData } = useAgents();
-  const { data: modelsData } = useModels();
-  const agents = agentsData ?? [];
-  const models = modelsData ?? [];
-
-  // Get messages from active session
-  const rawMessages = activeSession?.messages || [];
-
-  // LangGraph SDK stream (SSE to FastAPI at apiUrl) for token-level streaming
-  const langGraphTransport = useMemo(() => createLangGraphTransport(), []);
-  const langGraphInitialValues = useMemo(
-    () => ({ messages: toLangGraphMessages(rawMessages) }),
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [rawMessages.length, activeSessionId]
-  );
-  const stream = useStream({
-    transport: langGraphTransport,
-    messagesKey: 'messages',
-    initialValues: langGraphInitialValues as { messages: Array<{ type: string; content: string }> },
-    threadId: activeSessionId ?? undefined,
-    throttle: false,
-    onError: (err: unknown) => {
-      console.error('[LG stream] onError callback:', err);
-      setIsLoading(false);
-    },
-    onFinish: () => {
-      console.log('[LG stream] onFinish callback. stream.values:', stream.values, 'stream.error:', stream.error, 'stream.messages:', stream.messages);
-    },
-  } as import('@langchain/langgraph-sdk/react').UseStreamCustomOptions<{ messages: Array<{ type: string; content: string }> }>);
-
-  // Debug: log every change to stream state
   useEffect(() => {
-    console.log('[LG stream state]', {
-      isLoading: stream.isLoading,
-      hasValues: !!stream.values,
-      values: stream.values,
-      error: stream.error,
-      messagesCount: stream.messages?.length ?? 0,
-      messages: stream.messages,
-    });
-  }, [stream.isLoading, stream.values, stream.error, stream.messages]);
-
-  // When SDK stream finishes (isLoading goes true→false), persist AI message and apply code/agentId.
-  // IMPORTANT: stream.isLoading starts as false and stream.values starts with initialValues,
-  // so we must track whether we've seen isLoading=true before processing the "finished" transition.
-  const hasSeenLoadingRef = useRef(false);
-  const lastProcessedValuesRef = useRef<unknown>(null);
-  useEffect(() => {
-    if (stream.isLoading) {
-      // Mark that we've entered a loading phase — only process "finished" after this
-      hasSeenLoadingRef.current = true;
-      lastProcessedValuesRef.current = null;
-      console.log('[LG stream] isLoading=true, waiting for completion...');
-      return;
+    if (textareaRef.current) {
+      textareaRef.current.style.height = 'auto';
+      textareaRef.current.style.height = `${Math.min(textareaRef.current.scrollHeight, 200)}px`;
     }
-    // stream.isLoading is false — but only process if we saw it go true first
-    if (!hasSeenLoadingRef.current) {
-      console.log('[LG stream] isLoading=false but never saw loading=true, skipping (initial render)');
-      return;
-    }
-    // Reset so we don't reprocess on subsequent renders without a new submit
-    hasSeenLoadingRef.current = false;
+  }, [input]);
 
-    const state = stream.values;
-    console.log('[LG stream finished]', {
-      state,
-      activeSessionId,
-      isLoading,
-      error: stream.error,
-      messagesCount: stream.messages?.length ?? 0,
-    });
-
-    // Try extracting from stream.values first (set by the "values" SSE event)
-    if (state && activeSessionId) {
-      if (lastProcessedValuesRef.current === state) {
-        console.log('[LG stream finished] Already processed this state, skipping');
-        setIsLoading(false);
-        return;
-      }
-      lastProcessedValuesRef.current = state;
-
-      const appResult = (state as { appResult?: { text?: string; code?: string; agentId?: string; thinkingProcess?: unknown } })?.appResult;
-      const msgs = (state as { messages?: Array<{ type: string; content: string }> })?.messages;
-      const lastAi = msgs?.length ? msgs.filter((m) => m.type === 'ai').pop() : null;
-      const content = lastAi?.content ?? appResult?.text ?? appResult?.code ?? '';
-      console.log('[LG stream finished] from values — content:', content?.slice(0, 100), 'appResult:', appResult);
-
-      if (content) {
-        addMessage({
-          id: uuidv4(),
-          type: 'ai',
-          content,
-          timestamp: new Date(),
-          ...(appResult?.thinkingProcess ? { thinkingProcess: convertThinkingData(appResult.thinkingProcess) } : {}),
-        } as ExtendedMessage);
-      }
-      if (appResult?.agentId) setLastAgentId(appResult.agentId);
-      if (appResult?.code) setCurrentCode(appResult.code);
-      setIsLoading(false);
-      return;
-    }
-
-    // Fallback: stream.values is null — try extracting from stream.messages
-    if (activeSessionId && isLoading) {
-      const streamMsgs = stream.messages as Array<{ type?: string; content?: unknown }> | undefined;
-      const lastAiFromStream = streamMsgs?.length
-        ? [...streamMsgs].reverse().find((m) => m.type === 'ai')
-        : null;
-      const fallbackContent = lastAiFromStream && typeof lastAiFromStream.content === 'string'
-        ? lastAiFromStream.content
-        : '';
-      console.log('[LG stream finished] No values, fallback from stream.messages:', fallbackContent?.slice(0, 100));
-      if (fallbackContent) {
-        addMessage({
-          id: uuidv4(),
-          type: 'ai',
-          content: fallbackContent,
-          timestamp: new Date(),
-        } as ExtendedMessage);
-      }
-    }
-    setIsLoading(false);
-  }, [stream.isLoading, stream.values, activeSessionId, addMessage, setLastAgentId, setCurrentCode, isLoading, stream.error, stream.messages]);
-
-  // Handle SDK stream errors — show error message and clear loading
-  useEffect(() => {
-    if (stream.error) {
-      const errMsg = stream.error instanceof Error ? stream.error.message : String(stream.error);
-      console.error('[LG stream error]', errMsg, stream.error);
-      if (activeSessionId && isLoading) {
-        addMessage({
-          id: uuidv4(),
-          type: 'ai',
-          content: `Something went wrong: ${errMsg}. Please try again.`,
-          timestamp: new Date(),
-        } as ExtendedMessage);
-        setIsLoading(false);
-      }
-    }
-  }, [stream.error, activeSessionId, isLoading, addMessage]);
-
-  // Safety timeout: if loading stays true for >90s, force clear it
-  useEffect(() => {
-    if (!isLoading) return;
-    const timer = setTimeout(() => {
-      console.warn('[ChatPanel] Loading timeout after 90s — forcing reset');
-      setIsLoading(false);
-    }, 90_000);
-    return () => clearTimeout(timer);
-  }, [isLoading]);
-
-  // Display messages: when SDK is streaming, show the latest AI message being built
-  const messages = (() => {
-    const sessionList = rawMessages as ExtendedMessage[];
-    if (stream.isLoading && stream.messages.length > 0) {
-      // stream.messages includes history + new streaming message.
-      // The NEW streaming AI message is the LAST ai message beyond what's already in sessionList.
-      const allStreamMsgs = stream.messages as Array<{ type?: string; content?: unknown; id?: string }>;
-      // Get the last AI message from the stream (the one being generated)
-      const lastAiMsg = [...allStreamMsgs].reverse().find((m) => m.type === 'ai');
-      const streamingContent = lastAiMsg && typeof lastAiMsg.content === 'string' ? lastAiMsg.content : '';
-      if (streamingContent) {
-        return [
-          ...sessionList,
-          { id: 'streaming-ai', content: streamingContent, type: 'ai' as const, timestamp: new Date() } as ExtendedMessage,
-        ];
-      }
-    }
-    return sessionList;
-  })();
-
-  // AlphaFold state
-  const [showAlphaFoldDialog, setShowAlphaFoldDialog] = useState(false);
-  const [alphafoldData, setAlphafoldData] = useState<any>(null);
-  const alphafoldProgress = useAlphaFoldProgress();
-  const alphafoldCancelMutation = useAlphaFoldCancel();
-  const [isCancellingAlphaFold, setIsCancellingAlphaFold] = useState(false);
-
+  // --- AlphaFold cancel ---
   const handleAlphaFoldCancel = async () => {
     const jobId = alphafoldProgress.currentJobId;
     if (!jobId || isCancellingAlphaFold) return;
@@ -697,1807 +175,55 @@ export const ChatPanel: React.FC = () => {
     }
   };
 
-  // ProteinMPNN state
-  const [showProteinMPNNDialog, setShowProteinMPNNDialog] = useState(false);
-  const [proteinmpnnData, setProteinmpnnData] = useState<any>(null);
-  const proteinmpnnProgress = useProteinMPNNProgress();
-  const diffdockPredictMutation = useDiffDockPredict();
-
-  // OpenFold2 state
-  const [showOpenFold2Dialog, setShowOpenFold2Dialog] = useState(false);
-
-  // DiffDock state
-  const [showDiffDockDialog, setShowDiffDockDialog] = useState(false);
-
-  // RFdiffusion state
-  const [showRFdiffusionDialog, setShowRFdiffusionDialog] = useState(false);
-  const [rfdiffusionData, setRfdiffusionData] = useState<any>(null);
-
-  const scrollToBottom = () => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  };
-
+  // --- Helpers ---
   const formatSelection = (selection: any) => {
     const chain = selection.labelAsymId ?? selection.authAsymId ?? '';
     const seq = selection.labelSeqId != null && selection.labelSeqId !== ''
       ? selection.labelSeqId
-      : selection.authSeqId != null
-        ? selection.authSeqId
-        : '';
+      : selection.authSeqId != null ? selection.authSeqId : '';
     const chainText = chain ? ` (${chain})` : '';
     return `${selection.compId || '?'}${seq !== '' ? seq : ''}${chainText}`;
   };
 
-  useEffect(() => {
-    scrollToBottom();
-  }, [messages]);
-
-  // Auto-resize textarea
-  useEffect(() => {
-    if (textareaRef.current) {
-      textareaRef.current.style.height = 'auto';
-      textareaRef.current.style.height = `${Math.min(textareaRef.current.scrollHeight, 200)}px`;
-    }
-  }, [input]);
-
-  const renderMessageContent = (content: string) => {
-    try {
-      const parsed = JSON.parse(content);
-      return (
-        <pre className="text-[10px] whitespace-pre-wrap bg-white border border-gray-200 rounded p-1.5 overflow-x-auto leading-relaxed">
-          {JSON.stringify(parsed, null, 2)}
-        </pre>
-      );
-    } catch {
-      // not JSON
-    }
-
-    // Render full markdown (headings, bold, tables, lists) via react-markdown + GFM
-    return (
-      <div className="markdown-content text-sm leading-relaxed [&_h1]:text-lg [&_h1]:font-semibold [&_h1]:mt-2 [&_h1]:mb-1 [&_h2]:text-base [&_h2]:font-semibold [&_h2]:mt-2 [&_h2]:mb-1 [&_h3]:text-sm [&_h3]:font-semibold [&_h3]:mt-1.5 [&_h3]:mb-0.5 [&_p]:my-1 [&_p]:whitespace-pre-wrap [&_ul]:my-1 [&_ul]:pl-5 [&_ol]:my-1 [&_ol]:pl-5 [&_strong]:font-semibold [&_table]:w-full [&_table]:border-collapse [&_table]:border [&_table]:border-gray-200 [&_th]:text-left [&_th]:px-2 [&_th]:py-1 [&_th]:border [&_th]:border-gray-200 [&_th]:bg-gray-50 [&_td]:px-2 [&_td]:py-1 [&_td]:border [&_td]:border-gray-200 [&_tr:nth-child(even)]:bg-gray-50">
-        <ReactMarkdown remarkPlugins={[remarkGfm]}>{content}</ReactMarkdown>
-      </div>
-    );
-  };
-
-  // Helper function to validate uploaded file info (type guard)
   const isValidUploadedFile = (
-    fileInfo: ExtendedMessage['uploadedFile']
-  ): fileInfo is NonNullable<ExtendedMessage['uploadedFile']> => {
-    return !!(
-      fileInfo &&
-      fileInfo.file_id &&
-      fileInfo.filename &&
-      fileInfo.file_url &&
-      typeof fileInfo.atoms === 'number' &&
-      Array.isArray(fileInfo.chains)
-    );
+    fileInfo: Message['uploadedFile']
+  ): fileInfo is NonNullable<Message['uploadedFile']> => {
+    return !!(fileInfo && fileInfo.file_id && fileInfo.filename && fileInfo.file_url
+      && typeof fileInfo.atoms === 'number' && Array.isArray(fileInfo.chains));
   };
-
-  const loadUploadedFileInViewer = async (fileInfo: { file_id: string; filename: string; file_url: string }) => {
-    // Use API endpoint directly instead of blob URL to avoid blob URL expiration issues
-    const apiUrl = `/api/upload/pdb/${fileInfo.file_id}`;
-
-    // Build visualization code (shown in editor for user reference)
-    const code = `
-try {
-  await builder.clearStructure();
-  await builder.loadStructure('${apiUrl}');
-  await builder.addCartoonRepresentation({ color: 'secondary-structure' });
-  builder.focusView();
-  console.log('Uploaded file loaded successfully');
-} catch (e) { 
-  console.error('Failed to load uploaded file:', e); 
-}`;
-
-    // Set structure origin for LLM context
-    setCurrentStructureOrigin({
-      type: 'upload',
-      filename: fileInfo.filename,
-      metadata: {
-        file_id: fileInfo.file_id,
-        file_url: fileInfo.file_url,
-      },
-    });
-
-    // Clear currentCode BEFORE making viewer visible to prevent MolstarViewer from
-    // trying to auto-execute stale code via the sandbox during initialization.
-    setCurrentCode('');
-
-    // Make the viewer visible first so the MolStar plugin can initialize
-    setViewerVisibleAndSave(true);
-    setActivePane('viewer');
-
-    // Wait for plugin to be ready (with timeout and retry)
-    const waitForPlugin = async (maxWait = 15000, retryInterval = 200): Promise<PluginUIContext | null> => {
-      const startTime = Date.now();
-      while (Date.now() - startTime < maxWait) {
-        const currentPlugin = useAppStore.getState().plugin;
-        if (currentPlugin) {
-          try {
-            if (currentPlugin.builders && currentPlugin.builders.data && currentPlugin.builders.structure) {
-              return currentPlugin;
-            }
-          } catch (e) {
-            // Plugin exists but might not be fully ready
-          }
-        }
-        await new Promise(resolve => setTimeout(resolve, retryInterval));
-      }
-      return null;
-    };
-
-    const readyPlugin = await waitForPlugin();
-
-    if (!readyPlugin) {
-      console.warn('[ChatPanel] Plugin not ready after timeout, queuing code for execution');
-      setCurrentCode(code);
-      setPendingCodeToRun(code);
-      return;
-    }
-
-    // Execute directly using the MolstarBuilder (bypasses sandbox for reliability)
-    try {
-      setIsExecuting(true);
-      const { createMolstarBuilder } = await import('../utils/molstarBuilder');
-      const builder = createMolstarBuilder(readyPlugin);
-      await builder.clearStructure();
-      await builder.loadStructure(apiUrl);
-      await builder.addCartoonRepresentation({ color: 'secondary-structure' });
-      builder.focusView();
-      console.log('[ChatPanel] Uploaded file loaded successfully in 3D viewer');
-
-      // Now set the code in the editor for user reference and persistence
-      setCurrentCode(code);
-      if (activeSessionId) {
-        saveVisualizationCode(activeSessionId, code);
-        console.log('[ChatPanel] Saved visualization code to session:', activeSessionId);
-      }
-    } catch (err) {
-      console.error('[ChatPanel] Failed to load uploaded file in viewer:', err);
-      alert(`Failed to load ${fileInfo.filename} in 3D viewer. Please try again.`);
-    } finally {
-      setIsExecuting(false);
-    }
-  };
-
-  const loadSmilesInViewer = async (smilesData: { smiles: string; format?: string }) => {
-    let response: { content: string; filename: string; format: string };
-    try {
-      const res = await api.post<{ content: string; filename: string; format: string }>(
-        '/smiles/to-structure',
-        { smiles: smilesData.smiles.trim(), format: 'pdb' }
-      );
-      response = res.data;
-    } catch (err: any) {
-      const userMessage =
-        err?.response?.data?.userMessage ||
-        err?.response?.data?.detail ||
-        err?.message ||
-        'Failed to convert SMILES to structure.';
-      throw new Error(userMessage);
-    }
-
-    // Store converted PDB in upload storage so it appears in files and code can reference it
-    let fileId: string;
-    let apiUrl: string;
-    try {
-      const storeRes = await api.post<{ file_info: { file_id: string; filename: string } }>(
-        '/upload/pdb/from-content',
-        { pdbContent: response.content, filename: response.filename || 'smiles_structure.pdb' }
-      );
-      fileId = storeRes.data?.file_info?.file_id;
-      apiUrl = fileId ? `/api/upload/pdb/${fileId}` : '';
-      if (!fileId || !apiUrl) throw new Error('Failed to store SMILES PDB');
-      window.dispatchEvent(new CustomEvent('session-file-added'));
-    } catch (err: any) {
-      console.error('[ChatPanel] Failed to store SMILES PDB:', err);
-      throw new Error(err?.response?.data?.detail || err?.message || 'Failed to store structure.');
-    }
-
-    setViewerVisibleAndSave(true);
-    setActivePane('viewer');
-
-    const waitForPlugin = async (maxWait = 15000, retryInterval = 200): Promise<PluginUIContext | null> => {
-      const startTime = Date.now();
-      while (Date.now() - startTime < maxWait) {
-        const currentPlugin = useAppStore.getState().plugin;
-        if (currentPlugin?.builders?.data && currentPlugin?.builders?.structure) {
-          return currentPlugin;
-        }
-        await new Promise((resolve) => setTimeout(resolve, retryInterval));
-      }
-      return null;
-    };
-
-    const filename = response.filename || 'smiles_structure.pdb';
-    const fileInfo = { file_id: fileId, file_url: apiUrl, filename };
-
-    const readyPlugin = await waitForPlugin();
-    if (!readyPlugin) {
-      setCurrentCode(`// SMILES structure stored as ${filename}; load when viewer is ready:\ntry {\n  await builder.clearStructure();\n  await builder.loadStructure('${apiUrl}');\n  await builder.addBallAndStickRepresentation({ color: 'element' });\n  builder.focusView();\n} catch (e) { console.error(e); }`);
-      setCurrentStructureOrigin({
-        type: 'upload',
-        filename,
-        metadata: { file_id: fileId, file_url: apiUrl },
-      });
-      setPendingCodeToRun('// SMILES structure will load when viewer is ready');
-      return fileInfo;
-    }
-
-    try {
-      setIsExecuting(true);
-      const { CodeExecutor } = await import('../utils/codeExecutor');
-      const executor = new CodeExecutor(readyPlugin);
-      const blobRes = await api.get(`/upload/pdb/${fileId}`, { responseType: 'blob' });
-      const blob = new Blob([blobRes.data], { type: 'chemical/x-pdb' });
-      const blobUrl = URL.createObjectURL(blob);
-      const execCode = `
-try {
-  await builder.clearStructure();
-  await builder.loadStructure('${blobUrl}');
-  await builder.addBallAndStickRepresentation({ color: 'element' });
-  builder.focusView();
-} catch (e) { 
-  console.error('Failed to load SMILES structure:', e); 
-}`;
-      const savedCode = `
-try {
-  await builder.clearStructure();
-  await builder.loadStructure('${apiUrl}');
-  await builder.addBallAndStickRepresentation({ color: 'element' });
-  builder.focusView();
-} catch (e) { 
-  console.error('Failed to load SMILES structure:', e); 
-}`;
-      await executor.executeCode(execCode);
-      setTimeout(() => URL.revokeObjectURL(blobUrl), 5000);
-      setCurrentCode(savedCode);
-      if (activeSessionId) saveVisualizationCode(activeSessionId, savedCode);
-      setCurrentStructureOrigin({
-        type: 'upload',
-        filename,
-        metadata: { file_id: fileId, file_url: apiUrl },
-      });
-      return fileInfo;
-    } catch (err) {
-      console.error('[ChatPanel] Failed to load SMILES in viewer:', err);
-      throw err;
-    } finally {
-      setIsExecuting(false);
-    }
-  };
-
-  /** Load already-computed SMILES conversion (content + filename) into viewer; same UX as loadSmilesInViewer but no /smiles call. */
-  const loadSmilesResultInViewer = async (payload: {
-    content: string;
-    filename: string;
-  }): Promise<{ file_id: string; file_url: string; filename: string }> => {
-    const { content, filename } = payload;
-    let fileId: string;
-    let apiUrl: string;
-    try {
-      const storeRes = await api.post<{ file_info: { file_id: string; filename: string } }>(
-        '/upload/pdb/from-content',
-        { pdbContent: content, filename: filename || 'smiles_structure.pdb' }
-      );
-      fileId = storeRes.data?.file_info?.file_id;
-      apiUrl = fileId ? `/api/upload/pdb/${fileId}` : '';
-      if (!fileId || !apiUrl) throw new Error('Failed to store SMILES PDB');
-      window.dispatchEvent(new CustomEvent('session-file-added'));
-    } catch (err: any) {
-      console.error('[ChatPanel] Failed to store SMILES PDB:', err);
-      throw new Error(err?.response?.data?.detail || err?.message || 'Failed to store structure.');
-    }
-
-    setViewerVisibleAndSave(true);
-    setActivePane('viewer');
-
-    const waitForPlugin = async (maxWait = 15000, retryInterval = 200): Promise<PluginUIContext | null> => {
-      const startTime = Date.now();
-      while (Date.now() - startTime < maxWait) {
-        const currentPlugin = useAppStore.getState().plugin;
-        if (currentPlugin?.builders?.data && currentPlugin?.builders?.structure) {
-          return currentPlugin;
-        }
-        await new Promise((resolve) => setTimeout(resolve, retryInterval));
-      }
-      return null;
-    };
-
-    const fileInfo = { file_id: fileId, file_url: apiUrl, filename: filename || 'smiles_structure.pdb' };
-    const readyPlugin = await waitForPlugin();
-    if (!readyPlugin) {
-      setCurrentCode(`// SMILES structure stored as ${fileInfo.filename}; load when viewer is ready:\ntry {\n  await builder.clearStructure();\n  await builder.loadStructure('${apiUrl}');\n  await builder.addBallAndStickRepresentation({ color: 'element' });\n  builder.focusView();\n} catch (e) { console.error(e); }`);
-      setCurrentStructureOrigin({
-        type: 'upload',
-        filename: fileInfo.filename,
-        metadata: { file_id: fileId, file_url: apiUrl },
-      });
-      setPendingCodeToRun('// SMILES structure will load when viewer is ready');
-      return fileInfo;
-    }
-
-    try {
-      setIsExecuting(true);
-      const { CodeExecutor } = await import('../utils/codeExecutor');
-      const executor = new CodeExecutor(readyPlugin);
-      const blobRes = await api.get(`/upload/pdb/${fileId}`, { responseType: 'blob' });
-      const blob = new Blob([blobRes.data], { type: 'chemical/x-pdb' });
-      const blobUrl = URL.createObjectURL(blob);
-      const execCode = `
-try {
-  await builder.clearStructure();
-  await builder.loadStructure('${blobUrl}');
-  await builder.addBallAndStickRepresentation({ color: 'element' });
-  builder.focusView();
-} catch (e) { 
-  console.error('Failed to load SMILES structure:', e); 
-}`;
-      const savedCode = `
-try {
-  await builder.clearStructure();
-  await builder.loadStructure('${apiUrl}');
-  await builder.addBallAndStickRepresentation({ color: 'element' });
-  builder.focusView();
-} catch (e) { 
-  console.error('Failed to load SMILES structure:', e); 
-}`;
-      await executor.executeCode(execCode);
-      setTimeout(() => URL.revokeObjectURL(blobUrl), 5000);
-      setCurrentCode(savedCode);
-      if (activeSessionId) saveVisualizationCode(activeSessionId, savedCode);
-      setCurrentStructureOrigin({
-        type: 'upload',
-        filename: fileInfo.filename,
-        metadata: { file_id: fileId, file_url: apiUrl },
-      });
-      return fileInfo;
-    } catch (err) {
-      console.error('[ChatPanel] Failed to load SMILES result in viewer:', err);
-      throw err;
-    } finally {
-      setIsExecuting(false);
-    }
-  };
-
-  const renderFileAttachment = (fileInfo: ExtendedMessage['uploadedFile'], isUserMessage: boolean = false) => {
-    if (!isValidUploadedFile(fileInfo)) return null;
-
-    // Use different styling for user vs AI messages
-    const bgClass = isUserMessage 
-      ? 'bg-white bg-opacity-20 border-white border-opacity-30' 
-      : 'bg-gradient-to-r from-blue-50 to-indigo-50 border border-blue-200';
-    const textClass = isUserMessage ? 'text-white' : 'text-gray-900';
-    const textSecondaryClass = isUserMessage ? 'text-white text-opacity-80' : 'text-gray-600';
-    const buttonClass = isUserMessage
-      ? 'bg-white text-blue-600 hover:bg-gray-100'
-      : 'bg-blue-600 text-white hover:bg-blue-700';
-
-    return (
-      <div className={`mt-3 p-4 ${bgClass} rounded-lg`}>
-        <div className="flex items-center space-x-2 mb-3">
-          <div className={`w-8 h-8 ${isUserMessage ? 'bg-white bg-opacity-30' : 'bg-blue-600'} rounded-full flex items-center justify-center`}>
-            <span className={`${isUserMessage ? 'text-white' : 'text-white'} text-sm font-bold`}>PDB</span>
-          </div>
-          <div>
-            <h4 className={`font-medium ${textClass}`}>Uploaded PDB File</h4>
-            <p className={`text-xs ${textSecondaryClass}`}>
-              {fileInfo.filename} • {fileInfo.atoms} atoms • {fileInfo.chains.length} chain{fileInfo.chains.length !== 1 ? 's' : ''}
-            </p>
-          </div>
-        </div>
-        
-        {fileInfo.chains.length > 0 && (
-          <div className={`mb-3 text-xs ${textSecondaryClass}`}>
-            <span>Chains: {fileInfo.chains.join(', ')}</span>
-          </div>
-        )}
-        
-        <div className="flex space-x-2">
-          <button
-            onClick={() => loadUploadedFileInViewer(fileInfo)}
-            className={`flex items-center space-x-1 px-3 py-2 ${buttonClass} rounded-md text-sm`}
-          >
-            <Play className="w-4 h-4" />
-            <span>View in 3D</span>
-          </button>
-        </div>
-      </div>
-    );
-  };
-
-  const renderPipelineAttachment = (pipeline: ExtendedMessage['pipeline'], isUserMessage: boolean = false) => {
-    if (!pipeline) return null;
-
-    // Use different styling for user vs AI messages
-    const bgClass = isUserMessage 
-      ? 'bg-white bg-opacity-20 border-white border-opacity-30' 
-      : 'bg-gradient-to-r from-purple-50 to-indigo-50 border border-purple-200';
-    const textClass = isUserMessage ? 'text-white' : 'text-gray-900';
-    const textSecondaryClass = isUserMessage ? 'text-white text-opacity-80' : 'text-gray-600';
-
-    const statusColors: Record<string, string> = {
-      draft: 'bg-gray-100 text-gray-700',
-      running: 'bg-blue-100 text-blue-700',
-      completed: 'bg-green-100 text-green-700',
-      failed: 'bg-red-100 text-red-700',
-    };
-
-    return (
-      <div className={`mt-3 p-4 ${bgClass} rounded-lg`}>
-        <div className="flex items-center space-x-2 mb-3">
-          <div className={`w-8 h-8 ${isUserMessage ? 'bg-white bg-opacity-30' : 'bg-purple-600'} rounded-full flex items-center justify-center`}>
-            <span className={`${isUserMessage ? 'text-white' : 'text-white'} text-sm font-bold`}>⚙️</span>
-          </div>
-          <div className="flex-1">
-            <h4 className={`font-medium ${textClass}`}>Pipeline: {pipeline.name}</h4>
-            <div className="flex items-center gap-2 mt-1">
-              <span className={`text-xs px-2 py-0.5 rounded-full ${statusColors[pipeline.status] || statusColors.draft}`}>
-                {pipeline.status}
-              </span>
-            </div>
-          </div>
-        </div>
-        <p className={`text-xs ${textSecondaryClass} mt-2`}>
-          Ask questions about this pipeline's nodes, execution history, or output files.
-        </p>
-      </div>
-    );
-  };
-
-  const renderValidationResult = (report: ValidationReport) => (
-    <div className="mt-3 rounded-lg overflow-hidden border border-indigo-200 bg-gradient-to-br from-indigo-50 to-purple-50 p-4">
-      <ValidationPanel
-        report={report}
-        onColorByConfidence={() => {
-          const code = `
-async function colorByConfidence() {
-  const data = plugin.managers.structure.hierarchy.current.structures;
-  if (data.length > 0) {
-    const struct = data[0];
-    await plugin.builders.structure.representation.addRepresentation(struct.cell.obj?.data, {
-      type: 'cartoon',
-      color: 'uncertainty',
-    });
-  }
-}
-colorByConfidence();`;
-          setCurrentCode(code);
-          setPendingCodeToRun(code);
-        }}
-      />
-    </div>
-  );
 
   const handleValidateStructure = async (pdbContent: string) => {
     try {
       const { validateStructure } = await import('../utils/api');
-
-      // Add a loading message
+      addMessage({ id: uuidv4(), content: 'Running structure validation...', type: 'ai', timestamp: new Date() });
+      const report = await validateStructure(pdbContent);
       addMessage({
         id: uuidv4(),
-        content: 'Running structure validation...',
-        type: 'ai',
-        timestamp: new Date(),
-      });
-
-      const report = await validateStructure(pdbContent);
-
-      // Add validation result message
-      const resultMsg: ExtendedMessage = {
-        id: uuidv4(),
         content: `Structure validation complete - Grade: ${report.grade}`,
-        type: 'ai',
-        timestamp: new Date(),
-        validationResult: report,
-      };
-      addMessage(resultMsg);
+        type: 'ai', timestamp: new Date(), validationResult: report,
+      } as ExtendedMessage);
     } catch (error) {
       addMessage({
         id: uuidv4(),
         content: `Validation failed: ${error instanceof Error ? error.message : 'Unknown error'}`,
-        type: 'ai',
-        timestamp: new Date(),
+        type: 'ai', timestamp: new Date(),
       });
     }
   };
 
-  const renderAlphaFoldResult = (result: ExtendedMessage['alphafoldResult'], message?: ExtendedMessage) => {
-    if (!result) return null;
-
-    const downloadPDB = () => {
-      if (result.pdbContent) {
-        const blob = new Blob([result.pdbContent], { type: 'text/plain' });
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        a.href = url;
-        a.download = result.filename || 'alphafold_result.pdb';
-        document.body.appendChild(a);
-        a.click();
-        document.body.removeChild(a);
-        URL.revokeObjectURL(url);
-      }
-    };
-
-    const loadInViewer = async () => {
-      if (!result.pdbContent || !plugin) return;
-      
-      try {
-        setIsExecuting(true);
-        const executor = new CodeExecutor(plugin);
-        // Store PDB on server for clean API URL (avoids long data URLs in code editor)
-        const storeRes = await api.post('/upload/pdb/from-content', {
-          pdbContent: result.pdbContent,
-          filename: result.filename || 'alphafold_result.pdb',
-        });
-        const fileId = storeRes.data?.file_info?.file_id;
-        const apiUrl = fileId ? `/api/upload/pdb/${fileId}` : null;
-        if (!apiUrl) throw new Error('Failed to store PDB');
-        // Fetch with auth for execution (Molstar fetch won't include JWT)
-        const blobRes = await api.get(`/upload/pdb/${fileId}`, { responseType: 'blob' });
-        const blob = new Blob([blobRes.data], { type: 'chemical/x-pdb' });
-        const blobUrl = URL.createObjectURL(blob);
-        const execCode = `
-try {
-  await builder.clearStructure();
-  await builder.loadStructure('${blobUrl}');
-  await builder.addCartoonRepresentation({ color: 'secondary-structure' });
-  builder.focusView();
-} catch (e) { 
-  console.error('Failed to load AlphaFold result:', e); 
-}`;
-        const savedCode = `
-try {
-  await builder.clearStructure();
-  await builder.loadStructure('${apiUrl}');
-  await builder.addCartoonRepresentation({ color: 'secondary-structure' });
-  builder.focusView();
-} catch (e) { 
-  console.error('Failed to load AlphaFold result:', e); 
-}`;
-        await executor.executeCode(execCode);
-        setTimeout(() => URL.revokeObjectURL(blobUrl), 5000);
-        setCurrentCode(savedCode);
-        if (activeSessionId) saveVisualizationCode(activeSessionId, savedCode, message?.id);
-        setViewerVisibleAndSave(true);
-        setActivePane('viewer');
-        setCurrentStructureOrigin({ type: 'alphafold', filename: result.filename || 'alphafold_result.pdb' });
-      } catch (err) {
-        console.error('Failed to load AlphaFold result in viewer:', err);
-      } finally {
-        setIsExecuting(false);
-      }
-    };
-
-    return (
-      <div className="mt-3 p-4 bg-gradient-to-r from-purple-50 to-blue-50 border border-purple-200 rounded-lg">
-        <div className="flex items-center space-x-2 mb-3">
-          <div className="w-8 h-8 bg-purple-600 rounded-full flex items-center justify-center">
-            <span className="text-white text-sm font-bold">AF</span>
-          </div>
-          <div>
-            <h4 className="font-medium text-gray-900">AlphaFold2 Structure Prediction</h4>
-            <p className="text-xs text-gray-600">
-              {result.sequence ? `${result.sequence.length} residues` : 'Structure predicted'}
-            </p>
-          </div>
-        </div>
-        
-        {result.metadata && (
-          <div className="mb-3 text-xs text-gray-600">
-            <div className="grid grid-cols-2 gap-2">
-              {result.parameters?.algorithm && (
-                <span>Algorithm: {result.parameters.algorithm}</span>
-              )}
-              {result.parameters?.databases && (
-                <span>Databases: {result.parameters.databases.join(', ')}</span>
-              )}
-            </div>
-          </div>
-        )}
-        
-        <div className="flex space-x-2">
-          <button
-            onClick={downloadPDB}
-            className="flex items-center space-x-1 px-3 py-2 bg-purple-600 text-white rounded-md hover:bg-purple-700 text-sm"
-          >
-            <Download className="w-4 h-4" />
-            <span>Download PDB</span>
-          </button>
-          
-          <button
-            onClick={loadInViewer}
-            disabled={!plugin}
-            className="flex items-center space-x-1 px-3 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed text-sm"
-          >
-            <Play className="w-4 h-4" />
-            <span>View 3D</span>
-          </button>
-
-          <button
-            onClick={() => handleValidateStructure(result.pdbContent!)}
-            className="flex items-center gap-1.5 px-3 py-1.5 bg-indigo-50 text-indigo-600 rounded-lg text-xs font-medium hover:bg-indigo-100 transition-colors"
-            disabled={!result.pdbContent}
-          >
-            <Shield className="w-3.5 h-3.5" />
-            Validate
-          </button>
-        </div>
-      </div>
-    );
-  };
-
-  const renderSmilesResult = (result: ExtendedMessage['smilesResult'], message?: ExtendedMessage) => {
-    if (!result?.file_id || !result?.file_url) return null;
-
-    const loadInViewer = async () => {
-      if (!plugin) return;
-      try {
-        setIsExecuting(true);
-        const executor = new CodeExecutor(plugin);
-        const blobRes = await api.get(`/upload/pdb/${result.file_id}`, { responseType: 'blob' });
-        const blob = new Blob([blobRes.data], { type: 'chemical/x-pdb' });
-        const blobUrl = URL.createObjectURL(blob);
-        const apiUrl = result.file_url;
-        const execCode = `
-try {
-  await builder.clearStructure();
-  await builder.loadStructure('${blobUrl}');
-  await builder.addBallAndStickRepresentation({ color: 'element' });
-  builder.focusView();
-} catch (e) { console.error('Failed to load SMILES structure:', e); }`;
-        const savedCode = `
-try {
-  await builder.clearStructure();
-  await builder.loadStructure('${apiUrl}');
-  await builder.addBallAndStickRepresentation({ color: 'element' });
-  builder.focusView();
-} catch (e) { console.error('Failed to load SMILES structure:', e); }`;
-        await executor.executeCode(execCode);
-        setTimeout(() => URL.revokeObjectURL(blobUrl), 5000);
-        setCurrentCode(savedCode);
-        if (activeSessionId) saveVisualizationCode(activeSessionId, savedCode, message?.id);
-        setViewerVisibleAndSave(true);
-        setActivePane('viewer');
-        setCurrentStructureOrigin({
-          type: 'upload',
-          filename: result.filename,
-          metadata: { file_id: result.file_id, file_url: result.file_url },
-        });
-      } catch (err) {
-        console.error('[ChatPanel] Failed to load SMILES result in viewer:', err);
-      } finally {
-        setIsExecuting(false);
-      }
-    };
-
-    const downloadPDB = async () => {
-      try {
-        const res = await api.get(`/upload/pdb/${result.file_id}`, { responseType: 'blob' });
-        const blob = new Blob([res.data], { type: 'chemical/x-pdb' });
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        a.href = url;
-        a.download = result.filename || 'smiles_structure.pdb';
-        document.body.appendChild(a);
-        a.click();
-        document.body.removeChild(a);
-        URL.revokeObjectURL(url);
-      } catch (e) {
-        console.error('[ChatPanel] Failed to download SMILES PDB:', e);
-      }
-    };
-
-    return (
-      <div className="mt-3 p-4 bg-gradient-to-r from-emerald-50 to-teal-50 border border-emerald-200 rounded-lg">
-        <div className="flex items-center space-x-2 mb-3">
-          <div className="w-8 h-8 bg-emerald-600 rounded-full flex items-center justify-center">
-            <span className="text-white text-sm font-bold">SM</span>
-          </div>
-          <div>
-            <h4 className="font-medium text-gray-900">SMILES structure</h4>
-            <p className="text-xs text-gray-600">{result.filename}</p>
-          </div>
-        </div>
-        <div className="flex space-x-2">
-          <button
-            onClick={downloadPDB}
-            className="flex items-center space-x-1 px-3 py-2 bg-emerald-600 text-white rounded-md hover:bg-emerald-700 text-sm"
-          >
-            <Download className="w-4 h-4" />
-            <span>Download PDB</span>
-          </button>
-          <button
-            onClick={loadInViewer}
-            disabled={!plugin}
-            className="flex items-center space-x-1 px-3 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed text-sm"
-          >
-            <Play className="w-4 h-4" />
-            <span>View 3D</span>
-          </button>
-        </div>
-      </div>
-    );
-  };
-
-  const renderOpenFold2Result = (result: ExtendedMessage['openfold2Result'], message?: ExtendedMessage) => {
-    if (!result?.pdbContent) return null;
-    const downloadPDB = () => {
-      const blob = new Blob([result.pdbContent!], { type: 'text/plain' });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = result.filename || 'openfold2_result.pdb';
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-      URL.revokeObjectURL(url);
-    };
-    const loadInViewer = async () => {
-      if (!result.pdbContent || !plugin) return;
-      try {
-        setIsExecuting(true);
-        const executor = new CodeExecutor(plugin);
-        // Use stored result URL when available to avoid creating duplicate uploads on every "View 3D"
-        const resultApiUrl = result.pdb_url ?? (result.job_id ? `/api/openfold2/result/${result.job_id}` : null);
-        let apiUrl: string;
-        let blobRes: { data: BlobPart };
-        if (resultApiUrl) {
-          apiUrl = resultApiUrl;
-          blobRes = await api.get(apiUrl.replace(/^\/api/, ''), { responseType: 'blob' });
-        } else {
-          const storeRes = await api.post('/upload/pdb/from-content', {
-            pdbContent: result.pdbContent,
-            filename: result.filename || 'openfold2_result.pdb',
-          });
-          const fileId = storeRes.data?.file_info?.file_id;
-          apiUrl = fileId ? `/api/upload/pdb/${fileId}` : '';
-          if (!apiUrl) throw new Error('Failed to store PDB');
-          blobRes = await api.get(`/upload/pdb/${fileId}`, { responseType: 'blob' });
-        }
-        const blob = new Blob([blobRes.data], { type: 'chemical/x-pdb' });
-        const blobUrl = URL.createObjectURL(blob);
-        const execCode = `
-try {
-  await builder.clearStructure();
-  await builder.loadStructure('${blobUrl}');
-  await builder.addCartoonRepresentation({ color: 'bfactor' });
-  builder.focusView();
-} catch (e) { console.error('Failed to load OpenFold2 result:', e); }`;
-        const savedCode = `
-try {
-  await builder.clearStructure();
-  await builder.loadStructure('${apiUrl}');
-  await builder.addCartoonRepresentation({ color: 'bfactor' });
-  builder.focusView();
-} catch (e) { console.error('Failed to load OpenFold2 result:', e); }`;
-        await executor.executeCode(execCode);
-        setTimeout(() => URL.revokeObjectURL(blobUrl), 5000);
-        setCurrentCode(savedCode);
-        if (activeSessionId) saveVisualizationCode(activeSessionId, savedCode, message?.id);
-        setViewerVisibleAndSave(true);
-        setActivePane('viewer');
-        setCurrentStructureOrigin({ type: 'alphafold', filename: result.filename || 'openfold2_result.pdb' });
-      } catch (err) {
-        console.error('Failed to load OpenFold2 result in viewer:', err);
-      } finally {
-        setIsExecuting(false);
-      }
-    };
-    return (
-      <div className="mt-3 p-4 bg-gradient-to-r from-amber-50 to-orange-50 border border-amber-200 rounded-lg">
-        <div className="flex items-center space-x-2 mb-3">
-          <div className="w-8 h-8 bg-amber-600 rounded-full flex items-center justify-center">
-            <span className="text-white text-sm font-bold">OF2</span>
-          </div>
-          <div>
-            <h4 className="font-medium text-gray-900">OpenFold2 Structure Prediction</h4>
-            <p className="text-xs text-gray-600">Structure predicted successfully</p>
-          </div>
-        </div>
-        <div className="flex space-x-2">
-          <button
-            onClick={downloadPDB}
-            className="flex items-center space-x-1 px-3 py-2 bg-amber-600 text-white rounded-md hover:bg-amber-700 text-sm"
-          >
-            <Download className="w-4 h-4" />
-            <span>Download PDB</span>
-          </button>
-          <button
-            onClick={loadInViewer}
-            disabled={!plugin}
-            className="flex items-center space-x-1 px-3 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed text-sm"
-          >
-            <Play className="w-4 h-4" />
-            <span>View 3D</span>
-          </button>
-
-          <button
-            onClick={() => handleValidateStructure(result.pdbContent!)}
-            className="flex items-center gap-1.5 px-3 py-1.5 bg-indigo-50 text-indigo-600 rounded-lg text-xs font-medium hover:bg-indigo-100 transition-colors"
-            disabled={!result.pdbContent}
-          >
-            <Shield className="w-3.5 h-3.5" />
-            Validate
-          </button>
-        </div>
-      </div>
-    );
-  };
-
-  const renderDiffDockResult = (result: ExtendedMessage['diffdockResult'], message?: ExtendedMessage) => {
-    if (!result?.pdbContent && !result?.pdb_url) return null;
-    const downloadPDB = () => {
-      if (result.pdbContent) {
-        const blob = new Blob([result.pdbContent], { type: 'text/plain' });
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        a.href = url;
-        a.download = result.filename || 'diffdock_result.pdb';
-        document.body.appendChild(a);
-        a.click();
-        document.body.removeChild(a);
-        URL.revokeObjectURL(url);
-      } else if (result.pdb_url) {
-        window.open(result.pdb_url, '_blank');
-      }
-    };
-    const loadInViewer = async () => {
-      if (!plugin) return;
-      try {
-        setIsExecuting(true);
-        const executor = new CodeExecutor(plugin);
-        const resultApiUrl = result.pdb_url ?? (result.job_id ? `/api/diffdock/result/${result.job_id}` : null);
-        let apiUrl: string;
-        let blobRes: { data: BlobPart };
-        if (resultApiUrl) {
-          apiUrl = resultApiUrl;
-          blobRes = await api.get(apiUrl.replace(/^\/api/, ''), { responseType: 'blob' });
-        } else if (result.pdbContent) {
-          const storeRes = await api.post('/upload/pdb/from-content', {
-            pdbContent: result.pdbContent,
-            filename: result.filename || 'diffdock_result.pdb',
-          });
-          const fileId = storeRes.data?.file_info?.file_id;
-          apiUrl = fileId ? `/api/upload/pdb/${fileId}` : '';
-          if (!apiUrl) throw new Error('Failed to store PDB');
-          blobRes = await api.get(`/upload/pdb/${fileId}`, { responseType: 'blob' });
-        } else {
-          return;
-        }
-        const blob = new Blob([blobRes.data], { type: 'chemical/x-pdb' });
-        const blobUrl = URL.createObjectURL(blob);
-        const execCode = `
-try {
-  await builder.clearStructure();
-  await builder.loadStructure('${blobUrl}');
-  await builder.addCartoonRepresentation({ color: 'bfactor' });
-  builder.focusView();
-} catch (e) { console.error('Failed to load DiffDock result:', e); }`;
-        const savedCode = `
-try {
-  await builder.clearStructure();
-  await builder.loadStructure('${apiUrl}');
-  await builder.addCartoonRepresentation({ color: 'bfactor' });
-  builder.focusView();
-} catch (e) { console.error('Failed to load DiffDock result:', e); }`;
-        await executor.executeCode(execCode);
-        setTimeout(() => URL.revokeObjectURL(blobUrl), 5000);
-        setCurrentCode(savedCode);
-        if (activeSessionId) saveVisualizationCode(activeSessionId, savedCode, message?.id);
-        setViewerVisibleAndSave(true);
-        setActivePane('viewer');
-        setCurrentStructureOrigin({ type: 'diffdock', filename: result.filename || 'diffdock_result.pdb' });
-      } catch (err) {
-        console.error('Failed to load DiffDock result in viewer:', err);
-      } finally {
-        setIsExecuting(false);
-      }
-    };
-    return (
-      <div className="mt-3 p-4 bg-gradient-to-r from-teal-50 to-cyan-50 border border-teal-200 rounded-lg dark:from-teal-900/20 dark:to-cyan-900/20 dark:border-teal-700">
-        <div className="flex items-center space-x-2 mb-3">
-          <div className="w-8 h-8 bg-teal-600 rounded-full flex items-center justify-center">
-            <span className="text-white text-sm font-bold">DD</span>
-          </div>
-          <div>
-            <h4 className="font-medium text-gray-900 dark:text-gray-100">DiffDock Protein-Ligand Docking</h4>
-            <p className="text-xs text-gray-600 dark:text-gray-400">Docking completed successfully</p>
-          </div>
-        </div>
-        <div className="flex space-x-2">
-          <button
-            onClick={downloadPDB}
-            className="flex items-center space-x-1 px-3 py-2 bg-teal-600 text-white rounded-md hover:bg-teal-700 text-sm"
-          >
-            <Download className="w-4 h-4" />
-            <span>Download PDB</span>
-          </button>
-          <button
-            onClick={loadInViewer}
-            disabled={!plugin}
-            className="flex items-center space-x-1 px-3 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed text-sm"
-          >
-            <Play className="w-4 h-4" />
-            <span>View 3D</span>
-          </button>
-        </div>
-      </div>
-    );
-  };
-
-  const renderRFdiffusionResult = (result: ExtendedMessage['rfdiffusionResult'], message?: ExtendedMessage) => {
-    if (!result?.pdbContent) return null;
-    const downloadPDB = () => {
-      const blob = new Blob([result.pdbContent!], { type: 'text/plain' });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = result.filename || 'rfdiffusion_design.pdb';
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-      URL.revokeObjectURL(url);
-    };
-    const loadInViewer = async () => {
-      if (!result.pdbContent || !plugin) return;
-      try {
-        setIsExecuting(true);
-        const executor = new CodeExecutor(plugin);
-        const storeRes = await api.post('/upload/pdb/from-content', {
-          pdbContent: result.pdbContent,
-          filename: result.filename || 'rfdiffusion_design.pdb',
-        });
-        const fileId = storeRes.data?.file_info?.file_id;
-        const apiUrl = fileId ? `/api/upload/pdb/${fileId}` : null;
-        if (!apiUrl) throw new Error('Failed to store PDB');
-        const blobRes = await api.get(`/upload/pdb/${fileId}`, { responseType: 'blob' });
-        const blob = new Blob([blobRes.data], { type: 'chemical/x-pdb' });
-        const blobUrl = URL.createObjectURL(blob);
-        const execCode = `
-try {
-  await builder.clearStructure();
-  await builder.loadStructure('${blobUrl}');
-  await builder.addCartoonRepresentation({ color: 'secondary-structure' });
-  builder.focusView();
-} catch (e) { console.error('Failed to load RFdiffusion result:', e); }`;
-        const savedCode = `
-try {
-  await builder.clearStructure();
-  await builder.loadStructure('${apiUrl}');
-  await builder.addCartoonRepresentation({ color: 'secondary-structure' });
-  builder.focusView();
-} catch (e) { console.error('Failed to load RFdiffusion result:', e); }`;
-        await executor.executeCode(execCode);
-        setTimeout(() => URL.revokeObjectURL(blobUrl), 5000);
-        setCurrentCode(savedCode);
-        if (activeSessionId) saveVisualizationCode(activeSessionId, savedCode, message?.id);
-        setViewerVisibleAndSave(true);
-        setActivePane('viewer');
-        setCurrentStructureOrigin({ type: 'rfdiffusion', filename: result.filename || 'rfdiffusion_design.pdb' });
-      } catch (err) {
-        console.error('Failed to load RFdiffusion result in viewer:', err);
-      } finally {
-        setIsExecuting(false);
-      }
-    };
-    return (
-      <div className="mt-3 p-4 bg-gradient-to-r from-indigo-50 to-violet-50 border border-indigo-200 rounded-lg">
-        <div className="flex items-center space-x-2 mb-3">
-          <div className="w-8 h-8 bg-indigo-600 rounded-full flex items-center justify-center">
-            <span className="text-white text-sm font-bold">RF</span>
-          </div>
-          <div>
-            <h4 className="font-medium text-gray-900">RFdiffusion Protein Design</h4>
-            <p className="text-xs text-gray-600">Designed structure ready</p>
-          </div>
-        </div>
-        <div className="flex space-x-2">
-          <button
-            onClick={downloadPDB}
-            className="flex items-center space-x-1 px-3 py-2 bg-indigo-600 text-white rounded-md hover:bg-indigo-700 text-sm"
-          >
-            <Download className="w-4 h-4" />
-            <span>Download PDB</span>
-          </button>
-          <button
-            onClick={loadInViewer}
-            disabled={!plugin}
-            className="flex items-center space-x-1 px-3 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed text-sm"
-          >
-            <Play className="w-4 h-4" />
-            <span>View 3D</span>
-          </button>
-        </div>
-      </div>
-    );
-  };
-
-  const isLikelyVisualization = (text: string): boolean => {
-    const p = String(text || '').toLowerCase();
-    const keywords = [
-      'show ', 'display ', 'visualize', 'render', 'color', 'colour', 'cartoon', 'surface', 'ball-and-stick', 'water', 'ligand', 'focus', 'zoom', 'load', 'pdb', 'highlight', 'chain', 'view', 'representation'
-    ];
-    return keywords.some(k => p.includes(k));
-  };
-
-  // AlphaFold handling functions
-  const handleAlphaFoldConfirm = async (sequence: string, parameters: any) => {
-    console.log('🚀 [AlphaFold] User confirmed folding request');
-    console.log('📊 [AlphaFold] Sequence length:', sequence.length);
-    console.log('⚙️ [AlphaFold] Parameters:', parameters);
-    
-    setShowAlphaFoldDialog(false);
-    
-    const jobId = `af_${Date.now()}`;
-    console.log('🆔 [AlphaFold] Generated job ID:', jobId);
-    
-    // Validate sequence before proceeding
-    const validationError = AlphaFoldErrorHandler.handleSequenceValidation(sequence, jobId);
-    if (validationError) {
-      // Log the validation error
-      logAlphaFoldError(validationError, { sequence: sequence.slice(0, 100), parameters });
-      
-      const errorMessage: ExtendedMessage = {
-        id: (Date.now() + 1).toString(),
-        content: validationError.userMessage,
-        type: 'ai',
-        timestamp: new Date(),
-        error: validationError
-      };
-      addMessage(errorMessage);
-      return;
-    }
-    
-    alphafoldProgress.startProgress(jobId, 'Submitting protein folding request...');
-    console.log('📡 [AlphaFold] Starting progress tracking for job:', jobId);
-
-    const pendingMessageId = uuidv4();
-    const pendingMessage: ExtendedMessage = {
-      id: pendingMessageId,
-      content: 'AlphaFold structure prediction in progress...',
-      type: 'ai',
-      timestamp: new Date(),
-    };
-    addMessage(pendingMessage);
-
-    const sessionId = activeSession?.id;
-    const updateAlphaFoldMessage = (content: string, update: Partial<ExtendedMessage>) => {
-      if (!sessionId) return;
-      const store = useChatHistoryStore.getState();
-      const session = store.sessions.find(s => s.id === sessionId);
-      if (!session) return;
-      const messages = session.messages || [];
-      const idx = messages.findIndex(m => m.id === pendingMessageId);
-      if (idx === -1) return;
-      const updated = [...messages];
-      updated[idx] = { ...updated[idx], content, ...update };
-      updateMessages(updated);
-    };
-
-    try {
-      console.log('🌐 [AlphaFold] Making API call to /api/alphafold/fold');
-      console.log('📦 [AlphaFold] Payload:', { sequence: sequence.slice(0, 50) + '...', parameters, jobId });
-      
-      // Call the AlphaFold API endpoint
-      const response = await api.post('/alphafold/fold', {
-        sequence,
-        parameters,
-        jobId
-      });
-      
-      console.log('📨 [AlphaFold] API response received:', response.status, response.data);
-
-      // Async flow: 202 Accepted → poll status endpoint until completion
-      if (response.status === 202 || response.data.status === 'accepted' || response.data.status === 'queued' || response.data.status === 'running') {
-        console.log('🕒 [AlphaFold] Job accepted, starting polling for status...', { jobId });
-        const start = Date.now();
-        const poll = async () => {
-          try {
-            const statusResp = await api.get(`/alphafold/status/${jobId}`);
-            const st = statusResp.data?.status;
-            if (st === 'completed') {
-              const result = statusResp.data?.data || {};
-              updateAlphaFoldMessage(
-                `AlphaFold2 structure prediction completed successfully! The folded structure is ready for download and visualization.`,
-                {
-                  alphafoldResult: {
-                    pdbContent: result.pdbContent,
-                    filename: result.filename || `folded_${Date.now()}.pdb`,
-                    sequence,
-                    parameters,
-                    metadata: result.metadata
-                  }
-                }
-              );
-              alphafoldProgress.completeProgress();
-              return true;
-            } else if (st === 'error' || st === 'not_found') {
-              const errorMsg = st === 'not_found'
-                ? 'Job not found. The server may have been restarted. Please try submitting again.'
-                : statusResp.data?.error || 'Folding computation failed';
-              const apiError = AlphaFoldErrorHandler.createError(
-                'FOLDING_FAILED',
-                { jobId, sequenceLength: sequence.length, parameters },
-                errorMsg,
-                undefined,
-                jobId
-              );
-              logAlphaFoldError(apiError, { apiResponse: statusResp.data, sequence: sequence.slice(0, 100), parameters });
-              updateAlphaFoldMessage(apiError.userMessage, { error: apiError });
-              alphafoldProgress.errorProgress(apiError.userMessage);
-              return true;
-            } else if (st === 'cancelled') {
-              updateAlphaFoldMessage('Folding was cancelled.', {});
-              alphafoldProgress.cancelProgress();
-              return true;
-            } else {
-              // Update progress heuristically up to 90%
-              const elapsed = (Date.now() - start) / 1000;
-              const estDuration = 300; // 5 minutes heuristic
-              const pct = Math.min(90, Math.round((elapsed / estDuration) * 90));
-              alphafoldProgress.updateProgress(`Processing... (${Math.round(elapsed)}s)`, pct);
-              return false;
-            }
-          } catch (e: unknown) {
-            const status = (e as { response?: { status?: number } })?.response?.status;
-            const terminalStatuses = [400, 401, 403, 404, 410];
-            if (typeof status === 'number' && terminalStatuses.includes(status)) {
-              const errorMsg = status === 404
-                ? 'Job not found. The folding job may have expired or the server was restarted.'
-                : `Request failed (HTTP ${status}). Please try submitting again.`;
-              const apiError = AlphaFoldErrorHandler.createError(
-                'FOLDING_FAILED',
-                { jobId, sequenceLength: sequence.length, parameters },
-                errorMsg,
-                undefined,
-                jobId
-              );
-              logAlphaFoldError(apiError, { httpStatus: status, sequence: sequence.slice(0, 100), parameters });
-              updateAlphaFoldMessage(apiError.userMessage, { error: apiError });
-              alphafoldProgress.errorProgress(apiError.userMessage);
-              return true;
-            }
-            console.warn('⚠️ [AlphaFold] Polling failed, will retry...', e);
-            return false;
-          }
-        };
-
-        // Poll every 3s until done or timeout (~45 minutes) — user can cancel anytime
-        const timeoutSec = 45 * 60;
-        let finished = false;
-        while (!finished && (Date.now() - start) / 1000 < timeoutSec) {
-          // eslint-disable-next-line no-await-in-loop
-          finished = await poll();
-          if (finished) break;
-          // eslint-disable-next-line no-await-in-loop
-          await new Promise(res => setTimeout(res, 3000));
-        }
-
-        if (!finished) {
-          const msg = 'AlphaFold is still running past 45 minutes. It may finish soon; you can cancel and retry later.';
-          const apiError = AlphaFoldErrorHandler.createError(
-            'FOLDING_FAILED',
-            { jobId, sequenceLength: sequence.length, parameters },
-            msg,
-            undefined,
-            jobId
-          );
-          logAlphaFoldError(apiError, { sequence: sequence.slice(0, 100), parameters, timedOut: true });
-          updateAlphaFoldMessage(apiError.userMessage, { error: apiError });
-          alphafoldProgress.errorProgress(apiError.userMessage);
-        }
-        return; // Exit after async flow
-      }
-
-      if (response.data.status === 'success') {
-        const result = response.data.data;
-        updateAlphaFoldMessage(
-          `AlphaFold2 structure prediction completed successfully! The folded structure is ready for download and visualization.`,
-          {
-            alphafoldResult: {
-              pdbContent: result.pdbContent,
-              filename: result.filename || `folded_${Date.now()}.pdb`,
-              sequence,
-              parameters,
-              metadata: result.metadata
-            }
-          }
-        );
-        alphafoldProgress.completeProgress();
-      } else {
-        // Handle API errors with structured error display
-        const apiError = AlphaFoldErrorHandler.createError(
-          'FOLDING_FAILED',
-          { jobId, sequenceLength: sequence.length, parameters },
-          response.data.error || 'Folding computation failed',
-          undefined,
-          jobId
-        );
-        logAlphaFoldError(apiError, { apiResponse: response.data, sequence: sequence.slice(0, 100), parameters });
-        updateAlphaFoldMessage(apiError.userMessage, { error: apiError });
-        alphafoldProgress.errorProgress(apiError.userMessage);
-      }
-    } catch (error: any) {
-      console.error('AlphaFold request failed:', error);
-      const structuredError = AlphaFoldErrorHandler.handleAPIError(error, jobId);
-      logAlphaFoldError(structuredError, { originalError: error.message, sequence: sequence.slice(0, 100), parameters, networkError: true });
-      updateAlphaFoldMessage(structuredError.userMessage, { error: structuredError });
-      alphafoldProgress.errorProgress(structuredError.userMessage);
-    }
-  };
-
-  const handleOpenFold2Confirm = async (sequence: string, parameters: { alignmentsRaw?: string; templatesRaw?: string; relax_prediction: boolean }) => {
-    setShowOpenFold2Dialog(false);
-    const jobId = `of2_${Date.now()}`;
-    const validationError = OpenFold2ErrorHandler.handleSequenceValidation(sequence, jobId);
-    if (validationError) {
-      addMessage({
-        id: (Date.now() + 1).toString(),
-        content: validationError.userMessage,
-        type: 'ai',
-        timestamp: new Date(),
-        error: validationError,
-      });
-      return;
-    }
-    const pendingMessageId = uuidv4();
-    const pendingMessage: ExtendedMessage = {
-      id: pendingMessageId,
-      content: 'OpenFold2 structure prediction in progress...',
-      type: 'ai',
-      timestamp: new Date(),
-    };
-    addMessage(pendingMessage);
-
-    const sessionId = activeSession?.id;
-    const updateOpenFold2Message = (content: string, update: Partial<ExtendedMessage>) => {
-      if (!sessionId) return;
-      const store = useChatHistoryStore.getState();
-      const session = store.sessions.find(s => s.id === sessionId);
-      if (!session) return;
-      const messages = session.messages || [];
-      const idx = messages.findIndex(m => m.id === pendingMessageId);
-      if (idx === -1) return;
-      const updated = [...messages];
-      updated[idx] = { ...updated[idx], content, ...update };
-      updateMessages(updated);
-    };
-
-    try {
-      const response = await api.post('/openfold2/predict', {
-        sequence,
-        alignmentsRaw: parameters.alignmentsRaw,
-        templatesRaw: parameters.templatesRaw,
-        relax_prediction: parameters.relax_prediction ?? false,
-        jobId,
-        sessionId: activeSessionId ?? undefined,
-      });
-      const data = response.data;
-      if (data.status === 'completed' && data.pdbContent) {
-        updateOpenFold2Message(
-          'OpenFold2 structure prediction completed successfully! The structure is ready for visualization.',
-          {
-            openfold2Result: {
-              pdbContent: data.pdbContent,
-              filename: data.filename || `openfold2_${jobId}.pdb`,
-              job_id: data.job_id,
-              pdb_url: data.pdb_url ?? (data.job_id ? `/api/openfold2/result/${data.job_id}` : undefined),
-              message: data.message,
-            },
-          }
-        );
-      } else {
-        const err = OpenFold2ErrorHandler.createError(data.code || 'API_ERROR', { jobId, feature: 'OpenFold2' }, data.error);
-        updateOpenFold2Message(err.userMessage, { error: err });
-      }
-    } catch (error: any) {
-      const err = OpenFold2ErrorHandler.createError('API_ERROR', { jobId, feature: 'OpenFold2' }, error?.response?.data?.error || error?.message);
-      updateOpenFold2Message(err.userMessage, { error: err });
-    }
-  };
-
-  const handleDiffDockClose = () => {
-    setShowDiffDockDialog(false);
-    addMessage({
-      id: uuidv4(),
-      content: "You've closed the DiffDock dialog. Ask to dock a ligand when you're ready.",
-      type: 'ai',
-      timestamp: new Date(),
-    });
-  };
-
-  const handleDiffDockConfirm = async (params: {
-    protein_file_id?: string;
-    protein_content?: string;
-    ligand_sdf_content: string;
-    parameters: { num_poses?: number; time_divisions?: number; steps?: number; save_trajectory?: boolean; is_staged?: boolean };
-  }) => {
-    setShowDiffDockDialog(false);
-    const jobId = `diffdock_${Date.now()}`;
-    const pendingMessageId = uuidv4();
-    const pendingMessage: ExtendedMessage = {
-      id: pendingMessageId,
-      content: 'DiffDock docking in progress...',
-      type: 'ai',
-      timestamp: new Date(),
-    };
-    addMessage(pendingMessage);
-
-    const sessionId = activeSession?.id;
-    const updateDiffDockMessage = (content: string, update: Partial<ExtendedMessage>) => {
-      if (!sessionId) return;
-      const store = useChatHistoryStore.getState();
-      const session = store.sessions.find(s => s.id === sessionId);
-      if (!session) return;
-      const messages = session.messages || [];
-      const idx = messages.findIndex(m => m.id === pendingMessageId);
-      if (idx === -1) return;
-      const updated = [...messages];
-      updated[idx] = { ...updated[idx], content, ...update };
-      updateMessages(updated);
-    };
-
-    try {
-      const data = await diffdockPredictMutation.mutateAsync({
-        protein_file_id: params.protein_file_id,
-        protein_content: params.protein_content,
-        ligand_sdf_content: params.ligand_sdf_content,
-        parameters: params.parameters ?? {},
-        job_id: jobId,
-        jobId,
-        session_id: activeSessionId ?? undefined,
-        sessionId: activeSessionId ?? undefined,
-      });
-      if (data.status === 'completed' && (data.pdbContent || data.pdb_url)) {
-        updateDiffDockMessage(
-          data.message ?? 'DiffDock docking completed successfully! The structure is ready for visualization.',
-          {
-            diffdockResult: {
-              pdbContent: data.pdbContent,
-              filename: data.job_id ? `diffdock_${data.job_id}.pdb` : 'diffdock_result.pdb',
-              job_id: data.job_id,
-              pdb_url: data.pdb_url ?? (data.job_id ? `/api/diffdock/result/${data.job_id}` : undefined),
-              message: data.message,
-            },
-          }
-        );
-      } else {
-        const err = DiffDockErrorHandler.handleError(
-          { data: { errorCode: data.errorCode, userMessage: data.userMessage }, status: 400 },
-          { jobId, feature: 'DiffDock' }
-        );
-        updateDiffDockMessage(err.userMessage, { error: err });
-      }
-    } catch (error: any) {
-      const err = DiffDockErrorHandler.handleError(
-        error?.response ?? { data: error?.response?.data, status: error?.response?.status },
-        { jobId, feature: 'DiffDock' }
-      );
-      updateDiffDockMessage(err.userMessage, { error: err });
-    }
-  };
-
-  const handleProteinMPNNConfirm = async (config: {
-    pdbSource: 'rfdiffusion' | 'upload' | 'inline';
-    sourceJobId?: string;
-    uploadId?: string;
-    parameters: any;
-    message?: string;
-  }) => {
-    console.log('🧩 [ProteinMPNN] Confirm payload:', config);
-    setShowProteinMPNNDialog(false);
-
-    const jobId = `pm_${Date.now()}`;
-
-    const payload = {
-      jobId,
-      pdbSource: config.pdbSource,
-      sourceJobId: config.sourceJobId,
-      uploadId: config.uploadId,
-      parameters: config.parameters,
-    };
-
-    const context = {
-      jobId,
-      pdbSource: config.pdbSource,
-      sourceJobId: config.sourceJobId,
-      uploadId: config.uploadId,
-      parameters: config.parameters,
-    };
-
-    const pendingMessageId = uuidv4();
-    const pendingMessage: ExtendedMessage = {
-      id: pendingMessageId,
-      content: 'ProteinMPNN sequence design in progress...',
-      type: 'ai',
-      timestamp: new Date(),
-    };
-    addMessage(pendingMessage);
-
-    const sessionId = activeSession?.id;
-    const updateProteinMPNNMessage = (content: string, update: Partial<ExtendedMessage>) => {
-      if (!sessionId) return;
-      const store = useChatHistoryStore.getState();
-      const session = store.sessions.find(s => s.id === sessionId);
-      if (!session) return;
-      const messages = session.messages || [];
-      const idx = messages.findIndex(m => m.id === pendingMessageId);
-      if (idx === -1) return;
-      const updated = [...messages];
-      updated[idx] = { ...updated[idx], content, ...update };
-      updateMessages(updated);
-    };
-
-    try {
-      proteinmpnnProgress.startProgress(jobId, 'Submitting ProteinMPNN design request...');
-      const response = await api.post('/proteinmpnn/design', payload);
-      console.log('🧬 [ProteinMPNN] Submission response:', response.status, response.data);
-
-      if (response.status !== 202) {
-        const errorDetails = createProteinMPNNError(
-          'PROTEINMPNN_SUBMIT_FAILED',
-          'ProteinMPNN job submission failed.',
-          response.data?.error || 'Unexpected response from ProteinMPNN submission endpoint.',
-          context,
-        );
-        updateProteinMPNNMessage(errorDetails.userMessage, { error: errorDetails });
-        proteinmpnnProgress.errorProgress(errorDetails.userMessage);
-        return;
-      }
-
-      const started = Date.now();
-      const timeoutSec = 15 * 60; // 15 minutes
-      let finished = false;
-      let lastProgressUpdate = 10;
-
-      const poll = async (): Promise<boolean> => {
-        if (proteinmpnnProgress.isCancelled?.()) {
-          return true;
-        }
-        try {
-          const statusResp = await api.get(`/proteinmpnn/status/${jobId}`);
-          const statusData = statusResp.data || {};
-          const status = statusData.status as string;
-          const progressState = statusData.progress;
-
-          console.log('⏱️ [ProteinMPNN] Poll status:', status, progressState);
-
-          if (status === 'completed') {
-            const resultResp = await api.get(`/proteinmpnn/result/${jobId}`);
-            const resultData = resultResp.data || {};
-            const sequences = extractProteinMPNNSequences(resultData);
-
-            const sequenceEntries = sequences.map((sequence, idx) => ({
-              id: `${jobId}_${idx + 1}`,
-              sequence,
-              length: sequence.length,
-            }));
-
-            const messageContent = sequenceEntries.length
-              ? `ProteinMPNN generated ${sequenceEntries.length} candidate sequence${sequenceEntries.length === 1 ? '' : 's'}.`
-              : 'ProteinMPNN job completed, but no sequences were returned.';
-
-            updateProteinMPNNMessage(messageContent, {
-              proteinmpnnResult: {
-                jobId,
-                sequences: sequenceEntries,
-                downloads: {
-                  json: `/api/proteinmpnn/result/${jobId}?fmt=json`,
-                  fasta: `/api/proteinmpnn/result/${jobId}?fmt=fasta`,
-                  raw: `/api/proteinmpnn/result/${jobId}?fmt=raw`,
-                },
-                metadata: resultData,
-              },
-            });
-            proteinmpnnProgress.completeProgress(
-              sequenceEntries.length ? 'Sequence design completed successfully!' : 'ProteinMPNN job completed.'
-            );
-            return true;
-          }
-
-          if (status === 'error' || status === 'timeout' || status === 'polling_failed') {
-            const errorDetails = createProteinMPNNError(
-              'PROTEINMPNN_JOB_FAILED',
-              'ProteinMPNN sequence design failed.',
-              statusData.error || status || 'Job failed',
-              { ...context, status },
-            );
-            updateProteinMPNNMessage(errorDetails.userMessage, { error: errorDetails });
-            proteinmpnnProgress.errorProgress(errorDetails.userMessage);
-            return true;
-          }
-
-          if (status === 'not_found') {
-            proteinmpnnProgress.updateProgress('Waiting for ProteinMPNN job to register...', lastProgressUpdate);
-            return false;
-          }
-
-          const elapsedSeconds = (Date.now() - started) / 1000;
-          const computedProgress = Math.min(95, Math.round((elapsedSeconds / timeoutSec) * 90));
-          const progressValue = typeof progressState?.progress === 'number'
-            ? progressState.progress
-            : computedProgress;
-          lastProgressUpdate = progressValue;
-          const progressMessage = progressState?.message || 'Design in progress...';
-          proteinmpnnProgress.updateProgress(progressMessage, progressValue);
-          return false;
-        } catch (pollError: any) {
-          console.warn('⚠️ [ProteinMPNN] Polling error:', pollError);
-          const elapsedSeconds = (Date.now() - started) / 1000;
-          const fallbackProgress = Math.min(90, Math.round((elapsedSeconds / timeoutSec) * 80));
-          proteinmpnnProgress.updateProgress('Waiting for ProteinMPNN result...', fallbackProgress);
-          return false;
-        }
-      };
-
-      while (!finished && (Date.now() - started) / 1000 < timeoutSec) {
-        if (proteinmpnnProgress.isCancelled?.()) {
-          finished = true;
-          break;
-        }
-        // eslint-disable-next-line no-await-in-loop
-        finished = await poll();
-        if (finished) break;
-        if (proteinmpnnProgress.isCancelled?.()) {
-          finished = true;
-          break;
-        }
-        // eslint-disable-next-line no-await-in-loop
-        await new Promise((resolve) => setTimeout(resolve, 4000));
-      }
-
-      if (!finished && !proteinmpnnProgress.isCancelled?.()) {
-        const errorDetails = createProteinMPNNError(
-          'PROTEINMPNN_TIMEOUT',
-          'ProteinMPNN job timed out before completion.',
-          'Job exceeded client-side timeout threshold.',
-          context,
-        );
-        updateProteinMPNNMessage(errorDetails.userMessage, { error: errorDetails });
-        proteinmpnnProgress.errorProgress(errorDetails.userMessage);
-      }
-    } catch (error: any) {
-      console.error('❌ [ProteinMPNN] Request failed:', error);
-      const technicalMessage = error?.response?.data?.error || error?.message || 'Unknown ProteinMPNN error';
-      const errorDetails = createProteinMPNNError(
-        'PROTEINMPNN_REQUEST_FAILED',
-        'Unable to submit ProteinMPNN job.',
-        technicalMessage,
-        context,
-      );
-      updateProteinMPNNMessage(errorDetails.userMessage, { error: errorDetails });
-      proteinmpnnProgress.errorProgress(errorDetails.userMessage);
-    }
-  };
-
-  // RFdiffusion handling functions
-  const handleRFdiffusionConfirm = async (parameters: any) => {
-    setShowRFdiffusionDialog(false);
-    const jobId = `rf_${Date.now()}`;
-    const pendingMessageId = uuidv4();
-    const pendingMessage: ExtendedMessage = {
-      id: pendingMessageId,
-      content: 'RFdiffusion protein design in progress...',
-      type: 'ai',
-      timestamp: new Date(),
-      jobId,
-      jobType: 'rfdiffusion'
-    };
-    addMessage(pendingMessage);
-
-    const sessionId = activeSession?.id;
-    const updateRFdiffusionMessage = (content: string, update: Partial<ExtendedMessage>) => {
-      if (!sessionId) return;
-      const store = useChatHistoryStore.getState();
-      const session = store.sessions.find(s => s.id === sessionId);
-      if (!session) return;
-      const messages = session.messages || [];
-      const idx = messages.findIndex(m => m.id === pendingMessageId);
-      if (idx === -1) return;
-      const updated = [...messages];
-      updated[idx] = { ...updated[idx], content, ...update, jobId: undefined, jobType: undefined };
-      updateMessages(updated);
-    };
-
-    try {
-      const response = await api.post('/rfdiffusion/design', { parameters, jobId });
-
-      if (response.data.status === 'success') {
-        const result = response.data.data;
-        updateRFdiffusionMessage(
-          `RFdiffusion protein design completed successfully! The designed structure is ready for download and visualization.`,
-          {
-            rfdiffusionResult: {
-              pdbContent: result.pdbContent,
-              filename: result.filename || `designed_${Date.now()}.pdb`,
-              parameters,
-              metadata: result.metadata
-            }
-          }
-        );
-      } else {
-        const apiError = RFdiffusionErrorHandler.handleError(response.data, { jobId, parameters, feature: 'RFdiffusion' });
-        const displayContent = apiError.aiSummary || apiError.userMessage;
-        updateRFdiffusionMessage(displayContent, { error: apiError });
-      }
-    } catch (error: any) {
-      console.error('RFdiffusion request failed:', error);
-      const structuredError = RFdiffusionErrorHandler.handleError(error, { jobId, parameters, feature: 'RFdiffusion' });
-      const displayContent = structuredError.aiSummary || structuredError.userMessage;
-      updateRFdiffusionMessage(displayContent, { error: structuredError });
-    }
-  };
-
-  // Dialog cancel/close handlers — add a short AI message when user closes without confirming
-  const handleAlphaFoldClose = useCallback(() => {
-    setShowAlphaFoldDialog(false);
-    addMessage({
-      id: uuidv4(),
-      content: "You've cancelled the folding. What else can I help you with?",
-      type: 'ai',
-      timestamp: new Date(),
-    });
-  }, [addMessage]);
-
-  const handleRFdiffusionClose = useCallback(() => {
-    setShowRFdiffusionDialog(false);
-    addMessage({
-      id: uuidv4(),
-      content: "You've cancelled the design. What else can I help you with?",
-      type: 'ai',
-      timestamp: new Date(),
-    });
-  }, [addMessage]);
-
-  const handleProteinMPNNClose = useCallback(() => {
-    setShowProteinMPNNDialog(false);
-    addMessage({
-      id: uuidv4(),
-      content: "You've cancelled the sequence design. What else can I help you with?",
-      type: 'ai',
-      timestamp: new Date(),
-    });
-  }, [addMessage]);
-
-  const handleOpenFold2Close = useCallback(() => {
-    setShowOpenFold2Dialog(false);
-    addMessage({
-      id: uuidv4(),
-      content: "You've cancelled the structure prediction. What else can I help you with?",
-      type: 'ai',
-      timestamp: new Date(),
-    });
-  }, [addMessage]);
-
-  const handleAlphaFoldResponse = (responseData: any) => {
-    try {
-      // Enhanced logging for debugging
-      console.log('🧬 [AlphaFold] Raw response received:', responseData);
-      console.log('🧬 [AlphaFold] Response type:', typeof responseData);
-      console.log('🧬 [AlphaFold] Response length:', responseData?.length || 0);
-      
-      const data = JSON.parse(responseData);
-      console.log('✅ [AlphaFold] Successfully parsed JSON:', data);
-      console.log('🔍 [AlphaFold] Action detected:', data.action);
-      
-      if (data.action === 'confirm_folding') {
-        console.log('🎯 [AlphaFold] Confirm folding action detected');
-        
-        // Handle sequence extraction if needed
-        if (data.sequence === 'NEEDS_EXTRACTION' && data.source) {
-          console.log('🧪 [AlphaFold] Sequence needs extraction from:', data.source);
-          // Extract sequence from PDB (this would normally call a sequence extraction API)
-          // For now, we'll use a mock sequence for demonstration
-          const mockSequence = 'MVLSEGEWQLVLHVWAKVEADVAGHGQDILIRLFKSHPETLEKFDRFKHLKTEAEMKASEDLKKHGVTVLTALGAILKKKGHHEAELKPLAQSHATKHKIPIKYLEFISEAIIHVLHSRHPG';
-          data.sequence = mockSequence;
-          data.message = `Extracted sequence from ${data.source}. Ready to fold ${mockSequence.length}-residue protein.`;
-          console.log('✅ [AlphaFold] Mock sequence extracted, length:', mockSequence.length);
-        } else {
-          console.log('📝 [AlphaFold] Direct sequence provided, length:', data.sequence?.length || 0);
-        }
-        
-        console.log('💬 [AlphaFold] Setting dialog data and showing dialog');
-        setAlphafoldData(data);
-        setShowAlphaFoldDialog(true);
-        return true; // Handled
-      }
-
-      if (data.action === 'confirm_design') {
-        console.log('[RFdiffusion] Design confirmation detected');
-        setRfdiffusionData(data);
-        setShowRFdiffusionDialog(true);
-        return true; // Handled
-      }
-
-      if (data.action === 'confirm_proteinmpnn_design') {
-        console.log('[ProteinMPNN] Design confirmation detected');
-        setProteinmpnnData(data);
-        setShowProteinMPNNDialog(true);
-        return true;
-      }
-
-      if (data.action === 'open_openfold2_dialog') {
-        setShowOpenFold2Dialog(true);
-        return true;
-      }
-
-      if (data.action === 'open_diffdock_dialog') {
-        setShowDiffDockDialog(true);
-        return true;
-      }
-
-      if (data.action === 'show_smiles_in_viewer' && data.smiles) {
-        const friendlySuccessMessage =
-          'Loaded the molecule in the 3D viewer. You can explore it in the right panel.';
-        loadSmilesInViewer({
-          smiles: data.smiles,
-          format: data.format || 'pdb',
-        })
-          .then((smilesResult) => {
-            const msg: ExtendedMessage = {
-              id: uuidv4(),
-              content: friendlySuccessMessage,
-              type: 'ai',
-              timestamp: new Date(),
-            };
-            if (smilesResult) msg.smilesResult = { ...smilesResult, smiles: data.smiles };
-            addMessage(msg);
-          })
-          .catch((err) => {
-            addMessage({
-              id: uuidv4(),
-              content: err?.message ?? 'Failed to load SMILES in 3D viewer.',
-              type: 'ai',
-              timestamp: new Date(),
-            });
-          });
-        return true;
-      }
-
-      if (data.action === 'validation_result') {
-        console.log('[Validation] Validation result detected in agent response');
-        const validationMsg: ExtendedMessage = {
-          id: uuidv4(),
-          content: `Structure validation complete - Grade: ${data.grade}`,
-          type: 'ai',
-          timestamp: new Date(),
-          validationResult: data as ValidationReport,
-        };
-        addMessage(validationMsg);
-        return true;
-      }
-    } catch (e) {
-      console.log('[AlphaFold] Response parsing failed:', e);
-      console.log('[AlphaFold] Raw response was:', responseData);
-      // Not JSON or not AlphaFold response
-    }
-    return false; // Not handled
-  };
-
-  // Upload file immediately when selected
+  // --- File upload ---
   const uploadFile = async (file: File) => {
-    // Find the file in state by reference
-    setFileUploads(prev => prev.map(item => 
+    setFileUploads(prev => prev.map(item =>
       item.file === file ? { ...item, status: 'uploading' } : item
     ));
-
     try {
       setUploadError(null);
       const formData = new FormData();
       formData.append('file', file);
-      if (activeSessionId) {
-        formData.append('session_id', activeSessionId);
-      }
+      if (activeSessionId) formData.append('session_id', activeSessionId);
 
       const headers = getAuthHeaders();
-      const response = await fetch('/api/upload/pdb', {
-        method: 'POST',
-        headers,
-        body: formData,
-      });
-
+      const response = await fetch('/api/upload/pdb', { method: 'POST', headers, body: formData });
       if (!response.ok) {
         const errorData = await response.json();
         throw new Error(errorData.detail || 'Upload failed');
@@ -2515,74 +241,38 @@ try {
         total_residues: result.file_info.total_residues,
       };
 
-      // Mark file as uploaded
       let isFirstFile = false;
       setFileUploads(prev => {
-        const updated = prev.map(item => 
-          item.file === file 
-            ? { ...item, status: 'uploaded' as const, fileInfo } 
-            : item
+        const updated = prev.map(item =>
+          item.file === file ? { ...item, status: 'uploaded' as const, fileInfo } : item
         );
-        // Check if this is the first uploaded file
         isFirstFile = updated.findIndex(item => item.status === 'uploaded') === 0;
         return updated;
       });
 
-      // Dispatch event to notify file browser to refresh
       window.dispatchEvent(new CustomEvent('session-file-added'));
-
-      // Clear previous PDB context when new file is uploaded
       setCurrentCode('');
       setCurrentStructureOrigin(null);
 
-      // Auto-load first uploaded file in viewer
       if (isFirstFile && plugin) {
         try {
           setIsExecuting(true);
           const executor = new CodeExecutor(plugin);
           await executor.executeCode('try { await builder.clearStructure(); } catch(e) { console.warn("Clear failed:", e); }');
-          
           const fileUrl = result.file_info.file_url || `/api/upload/pdb/${result.file_info.file_id}`;
           const fileResponse = await fetch(fileUrl, { headers: getAuthHeaders() });
-          if (!fileResponse.ok) {
-            throw new Error('Failed to fetch uploaded file');
-          }
+          if (!fileResponse.ok) throw new Error('Failed to fetch uploaded file');
           const fileContent = await fileResponse.text();
-          
           const pdbBlob = new Blob([fileContent], { type: 'text/plain' });
           const blobUrl = URL.createObjectURL(pdbBlob);
-          
-          const loadCode = `
-try {
-  await builder.loadStructure('${blobUrl}');
-  await builder.addCartoonRepresentation({ color: 'secondary-structure' });
-  builder.focusView();
-  console.log('Uploaded file loaded successfully');
-} catch (e) { 
-  console.error('Failed to load uploaded file:', e); 
-}`;
-          
+          const loadCode = `\ntry {\n  await builder.loadStructure('${blobUrl}');\n  await builder.addCartoonRepresentation({ color: 'secondary-structure' });\n  builder.focusView();\n  console.log('Uploaded file loaded successfully');\n} catch (e) { \n  console.error('Failed to load uploaded file:', e); \n}`;
           setCurrentCode(loadCode);
-          setCurrentStructureOrigin({
-            type: 'upload',
-            filename: result.file_info.filename,
-            metadata: {
-              file_id: result.file_info.file_id,
-              file_url: blobUrl,
-            },
-          });
-          
-          if (activeSessionId) {
-            saveVisualizationCode(activeSessionId, loadCode);
-          }
-          
+          setCurrentStructureOrigin({ type: 'upload', filename: result.file_info.filename, metadata: { file_id: result.file_info.file_id, file_url: blobUrl } });
+          if (activeSessionId) saveVisualizationCode(activeSessionId, loadCode);
           await executor.executeCode(loadCode);
           setViewerVisibleAndSave(true);
           setActivePane('viewer');
-          
-          setTimeout(() => {
-            URL.revokeObjectURL(blobUrl);
-          }, 5000);
+          setTimeout(() => URL.revokeObjectURL(blobUrl), 5000);
         } catch (viewerError) {
           console.error('Failed to auto-load uploaded file in viewer:', viewerError);
         } finally {
@@ -2592,72 +282,37 @@ try {
     } catch (error: any) {
       console.error('File upload failed:', error);
       setUploadError(error.message);
-      // Mark file as error
-      setFileUploads(prev => prev.map(item => 
-        item.file === file 
-          ? { ...item, status: 'error', error: error.message } 
-          : item
+      setFileUploads(prev => prev.map(item =>
+        item.file === file ? { ...item, status: 'error', error: error.message } : item
       ));
     }
   };
 
-  // Handle file selection - add to list and start upload immediately
   const handleFileSelected = (file: File) => {
-    const newFileState: FileUploadState = {
-      file,
-      status: 'uploading',
-    };
-    setFileUploads(prev => [...prev, newFileState]);
-    // Start upload immediately (file reference will be used to find it in state)
+    setFileUploads(prev => [...prev, { file, status: 'uploading' }]);
     uploadFile(file);
   };
-
-  // Handle multiple files selected
   const handleFilesSelected = (files: File[]) => {
-    const newFileStates: FileUploadState[] = files.map(file => ({
-      file,
-      status: 'uploading',
-    }));
-    setFileUploads(prev => [...prev, ...newFileStates]);
-    // Start uploads immediately for all files
-    files.forEach(file => {
-      uploadFile(file);
-    });
+    setFileUploads(prev => [...prev, ...files.map(file => ({ file, status: 'uploading' as const }))]);
+    files.forEach(file => uploadFile(file));
   };
-
-  // Handle pipeline selection
-  const handlePipelineSelect = () => {
-    setShowPipelineModal(true);
-  };
-
-  // Handle server files selection
-  const handleServerFilesSelect = () => {
-    setShowServerFilesDialog(true);
-  };
-
+  const handlePipelineSelect = () => setShowPipelineModal(true);
+  const handleServerFilesSelect = () => setShowServerFilesDialog(true);
   const handlePipelineSelected = (pipelineId: string) => {
     const { savedPipelines } = usePipelineStore.getState();
     const pipeline = savedPipelines.find(p => p.id === pipelineId);
-    if (pipeline) {
-      setSelectedPipeline({
-        id: pipeline.id,
-        name: pipeline.name,
-      });
-    }
+    if (pipeline) setSelectedPipeline({ id: pipeline.id, name: pipeline.name });
     setShowPipelineModal(false);
   };
 
+  // --- Submit ---
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!input.trim() || isLoading) return;
 
-    // Get uploaded file info (use first uploaded file)
     const uploadedFileInfo = fileUploads.find(f => f.status === 'uploaded' && f.fileInfo)?.fileInfo || null;
-
-    // Pipeline context: only include pipeline if user explicitly selected one
     const attachedPipeline = selectedPipeline;
 
-    // Create user message immediately and add to chat
     const userMessage: Message = {
       id: uuidv4(),
       content: input.trim(),
@@ -2665,628 +320,189 @@ try {
       timestamp: new Date(),
       uploadedFile: uploadedFileInfo || undefined,
       pipeline: attachedPipeline ? {
-        id: attachedPipeline.id,
-        name: attachedPipeline.name,
-        workflowDefinition: null, // Will be fetched by backend if needed
-        status: 'draft' as const,
+        id: attachedPipeline.id, name: attachedPipeline.name,
+        workflowDefinition: null, status: 'draft' as const,
       } : undefined,
     };
 
-    // Add user message to chat immediately (before any async operations)
     addMessage(userMessage);
     const messageInput = input.trim();
     setInput('');
     setIsLoading(true);
-
-    // Clear uploaded files and pipeline from state after message is sent
     setFileUploads([]);
-
-    // Build pipeline payload for backend (only when user explicitly attached a pipeline)
     const pipelineIdToSend = attachedPipeline?.id ?? undefined;
-    const pipelineDataToSend = undefined;
     setSelectedPipeline(null);
 
     try {
-      const text = messageInput;
-      let code = '';
-      let aiText = ''; // AI text response for better user experience
-      let thinkingProcess: ExtendedMessage['thinkingProcess'] | undefined = undefined;
-      try {
-        // Extract structure metadata from viewer when plugin and structure are available
-        let structureMetadata: Awaited<ReturnType<typeof extractStructureMetadata>> = null;
-        if (plugin) {
-          try {
-            const raw = await extractStructureMetadata(plugin);
-            structureMetadata = raw ? summarizeForAgent(raw) : null;
-          } catch (e) {
-            console.warn('[ChatPanel] Failed to extract structure metadata:', e);
-          }
-        }
-
-        const payload = {
-          input: text,
-          currentCode,
-          history: messages.slice(-6).map(m => ({ type: m.type, content: m.content })),
-          selection: selections.length > 0 ? selections[0] : null, // First selection for backward compatibility
-          selections: selections, // Full selections array for new multi-selection support
-          currentStructureOrigin: currentStructureOrigin || undefined,
-          uploadedFile: uploadedFileInfo
-            ? {
-                file_id: uploadedFileInfo.file_id,
-                filename: uploadedFileInfo.filename,
-                file_url: uploadedFileInfo.file_url,
-                atoms: uploadedFileInfo.atoms,
-                chains: uploadedFileInfo.chains,
-                chain_residue_counts: uploadedFileInfo.chain_residue_counts,
-                total_residues: uploadedFileInfo.total_residues,
-              }
-            : undefined,
-          structureMetadata: structureMetadata || undefined,
-          agentId: agentSettings.selectedAgentId || undefined, // Only send if manually selected
-          model: agentSettings.selectedModel || undefined, // Only send if manually selected
-          pipeline_id: pipelineIdToSend, // Pass pipeline ID to backend
-          ...(pipelineDataToSend ? { pipeline_data: pipelineDataToSend } : {}),
-          pdb_content: undefined as string | undefined, // TODO: populate when viewer exposes raw PDB content
-          langsmith: langsmithSettings?.enabled
-            ? {
-                enabled: true,
-                apiKey: langsmithSettings.apiKey || undefined,
-                project: langsmithSettings.project || undefined,
-              }
-            : { enabled: false },
-        };
-        console.log('[AI] route:request', payload);
-        console.log('[DEBUG] currentCode length:', currentCode?.length || 0);
-        console.log('[DEBUG] selections count:', selections.length);
-        console.log('[DEBUG] selections:', selections);
-
-        // LangGraph SDK path: stream via SSE to FastAPI
-        const sessionMessages = activeSession?.messages ?? [];
-        const lcMessages = [...toLangGraphMessages(sessionMessages), { type: 'human' as const, content: text }];
-        const configurable = {
-          currentCode,
-          history: payload.history,
-          selection: payload.selection,
-          selections: payload.selections,
-          uploadedFile: payload.uploadedFile,
-          structureMetadata: payload.structureMetadata,
-          pipeline_id: payload.pipeline_id,
-          pipeline_data: payload.pipeline_data,
-          model: payload.model,
-          agentId: payload.agentId,
-        };
-        console.log('[LG submit] lcMessages:', lcMessages.length, 'configurable keys:', Object.keys(configurable));
-        try {
-          await stream.submit(
-            { messages: lcMessages },
-            { config: { configurable } }
-          );
-          console.log('[LG submit] returned OK');
-        } catch (submitErr) {
-          console.error('[LG submit] ERROR:', submitErr);
-          addMessage({
-            id: uuidv4(),
-            type: 'ai',
-            content: `Stream error: ${submitErr instanceof Error ? submitErr.message : String(submitErr)}`,
-            timestamp: new Date(),
-          } as ExtendedMessage);
-          setIsLoading(false);
-        }
-        return; // onFinish will add message and set code/agentId
-
-        // Legacy NDJSON streaming path (kept for reference; SDK path returns above)
-        const streamingPlaceholderId = uuidv4();
-        let placeholderAdded = false;
-        const sessionId = activeSession?.id;
-        const addOrUpdateStreamingMessage = (content: string, merge?: Partial<ExtendedMessage>) => {
-          if (!sessionId) return;
-          const store = useChatHistoryStore.getState();
-          const session = store.sessions.find((s) => s.id === sessionId);
-          if (!session) return;
-          
-          if (!placeholderAdded) {
-            const newMsg = { id: streamingPlaceholderId, content, type: 'ai', timestamp: new Date(), ...merge } as ExtendedMessage;
-            useChatHistoryStore.setState({
-              sessions: store.sessions.map(s => s.id === sessionId ? { ...s, messages: [...s.messages, newMsg] } : s)
-            });
-            placeholderAdded = true;
-          } else {
-            useChatHistoryStore.setState({
-              sessions: store.sessions.map(s => s.id === sessionId ? {
-                ...s,
-                messages: s.messages.map(m => m.id === streamingPlaceholderId ? { ...m, content, ...merge } as ExtendedMessage : m)
-              } : s)
-            });
-          }
-        };
-        const removeStreamingPlaceholder = () => {
-          if (!sessionId || !placeholderAdded) return;
-          const store = useChatHistoryStore.getState();
-          useChatHistoryStore.setState({
-             sessions: store.sessions.map(s => s.id === sessionId ? {
-               ...s,
-               messages: s.messages.filter(m => m.id !== streamingPlaceholderId)
-             } : s)
-          });
-        };
-
-        let response: { data?: any } = {};
-        try {
-          for await (const chunk of streamAgentRoute(payload)) {
-            if (chunk.type === 'content' && chunk.data?.text) {
-              const store = useChatHistoryStore.getState();
-              const prev = store.sessions.find((s) => s.id === sessionId)?.messages?.find((m) => m.id === streamingPlaceholderId);
-              const nextContent = (prev?.content || '') + chunk.data.text;
-              addOrUpdateStreamingMessage(nextContent);
-            } else if (chunk.type === 'complete' && chunk.data) {
-              response = { data: chunk.data };
-              const finalContent = chunk.data.text ?? chunk.data.code ?? '';
-              const isActionOnly = typeof finalContent === 'string' && finalContent.trim().startsWith('{"action":');
-              if (placeholderAdded) {
-                addOrUpdateStreamingMessage(finalContent || '', { thinkingProcess: chunk.data.thinkingProcess ? convertThinkingData(chunk.data.thinkingProcess) : undefined });
-              } else if (finalContent && !isActionOnly) {
-                addOrUpdateStreamingMessage(finalContent, { thinkingProcess: chunk.data.thinkingProcess ? convertThinkingData(chunk.data.thinkingProcess) : undefined });
-              }
-              break;
-            } else if (chunk.type === 'error') {
-              addOrUpdateStreamingMessage(chunk.data?.error ?? 'Something went wrong.');
-              setIsLoading(false);
-              return;
-            }
-          }
-        } catch (streamErr: any) {
-          addOrUpdateStreamingMessage(streamErr?.message ?? 'Request failed.');
-          setIsLoading(false);
-          return;
-        }
-
-        if (!response.data) {
-          // Stream ended without a complete event — show error instead of silent failure
-          if (placeholderAdded) {
-            addOrUpdateStreamingMessage('Connection lost or server error. Please try again.');
-          } else {
-            addOrUpdateStreamingMessage('Connection lost or server error. Please try again.');
-          }
-          setIsLoading(false);
-          return;
-        }
-
-        setIsLoading(false); // End loading state as soon as stream completes
-        
-        const agentId = response.data?.agentId;
-        const agentType = response.data?.type as 'code' | 'text' | undefined;
-        const reason = response.data?.reason;
-        
-        // Enhanced logging for agent selection
-        if (agentId) {
-          console.log(`🎯 [AGENT SELECTED] ${agentId} (${agentType}) - Reason: ${reason}`);
-          
-          // Special logging for RAG agents
-          if (agentId === 'mvs-builder') {
-            console.log('🧠 [RAG AGENT] MVS agent will use Pinecone RAG enhancement');
-          } else if (agentId === 'code-builder') {
-            console.log('⚡ [SIMPLE AGENT] Basic Molstar builder agent');
-          } else if (agentId === 'bio-chat') {
-            console.log('💬 [CHAT AGENT] Bioinformatics Q&A agent');
-          }
-        }
-        
-        // Check if agent changed and we need to clear the viewer
-        // Only clear when switching to a code agent that will generate new structure code
-        const isCodeAgent = agentType === 'code';
-        const isTextAgent = agentType === 'text';
-        
-        if (agentId && agentId !== lastAgentId && lastAgentId !== '' && isCodeAgent) {
-          console.log(`[Agent Switch] ${lastAgentId} → ${agentId} (code agent), clearing viewer`);
-          
-          // Clear the current code and viewer state only for code agents
-          setCurrentCode('');
-          
-          // Clear the 3D viewer if plugin is available
-          const pluginRef = plugin;
-          if (pluginRef) {
-            try {
-              const executor = new CodeExecutor(pluginRef as PluginUIContext);
-              await executor.executeCode('try { await builder.clearStructure(); } catch(e) { console.warn("Clear failed:", e); }');
-              console.log('[Agent Switch] Viewer cleared successfully');
-            } catch (e) {
-              console.warn('[Agent Switch] Failed to clear viewer:', e);
-            }
-          }
-        } else if (isTextAgent && agentId !== lastAgentId) {
-          console.log(`[Agent Switch] ${lastAgentId} → ${agentId} (text agent), preserving current code`);
-        }
-        
-        // Update the last agent ID
-        if (agentId) {
-          setLastAgentId(agentId);
-        }
-
-        // Handle tool results (e.g. SMILES from tool-calling) before parsing text for structured actions
-        const toolResults = response.data?.toolResults as Array<{ name: string; result: { content?: string; filename?: string; error?: string } }> | undefined;
-        const smilesToolResult = toolResults?.find((t) => t.name === 'show_smiles_in_viewer');
-        const smilesResult = smilesToolResult?.result;
-        const content = smilesResult?.content;
-        const filename = smilesResult?.filename;
-        if (content && filename) {
-            removeStreamingPlaceholder();
-            loadSmilesResultInViewer({ content: content as string, filename: filename as string })
-              .then((loaded) => {
-                const msg: ExtendedMessage = {
-                  id: uuidv4(),
-                  content: 'Loaded the molecule in the 3D viewer. You can explore it in the right panel.',
-                  type: 'ai',
-                  timestamp: new Date(),
-                  smilesResult: { ...loaded },
-                };
-                addMessage(msg);
-              })
-              .catch((err) => {
-                addMessage({
-                  id: uuidv4(),
-                  content: err?.message ?? 'Failed to load SMILES in 3D viewer.',
-                  type: 'ai',
-                  timestamp: new Date(),
-                });
-              });
-            return;
-          }
-          const smilesError = smilesResult?.error;
-          if (smilesError) {
-            removeStreamingPlaceholder();
-            addMessage({
-              id: uuidv4(),
-              content: smilesError as string,
-              type: 'ai',
-              timestamp: new Date(),
-            });
-            return;
-          }
-
-        // Handle structured actions (e.g. show_smiles_in_viewer from JSON in text) from any agent so we never show raw JSON in chat
-        if (response.data?.text && handleAlphaFoldResponse(response.data.text)) {
-          return;
-        }
-
-        if (agentType === 'text') {
-          const aiText = response.data?.text || 'Okay.';
-          thinkingProcess = convertThinkingData(response.data?.thinkingProcess);
-          console.log('[AI] route:text', { text: aiText?.slice?.(0, 400), hasThinking: !!thinkingProcess });
-
-          // Check if this is an AlphaFold response
-          if (agentId === 'alphafold-agent') {
-            console.log('🧬 [AlphaFold] Agent detected, processing response');
-            console.log('📄 [AlphaFold] Agent response text:', aiText.slice(0, 200) + '...');
-            
-            if (handleAlphaFoldResponse(aiText)) {
-              console.log('✅ [AlphaFold] Response handled successfully, dialog should be shown');
-              return; // AlphaFold dialog will be shown
-            } else {
-              // Fallback: if JSON parsing failed, try to extract key info and show a basic dialog
-              console.log('⚠️ [AlphaFold] Fallback: attempting to parse non-JSON response');
-              console.log('🔍 [AlphaFold] Full response text:', aiText);
-              const fallbackData = {
-                action: 'confirm_folding',
-                sequence: 'NEEDS_EXTRACTION',
-                source: 'pdb:1TUP', // Default for demo
-                parameters: {
-                  algorithm: 'mmseqs2',
-                  e_value: 0.0001,
-                  iterations: 1,
-                  databases: ['small_bfd'],
-                  relax_prediction: false,
-                  skip_template_search: true
-                },
-                estimated_time: '2-5 minutes',
-                message: 'Ready to fold protein. Please confirm parameters.'
-              };
-              
-              // Handle the fallback data
-              handleAlphaFoldResponse(JSON.stringify(fallbackData));
-              return;
-            }
-          }
-
-          if (agentId === 'proteinmpnn-agent') {
-            console.log('🧪 [ProteinMPNN] Agent detected, processing response');
-            console.log('🧪 [ProteinMPNN] Agent response text:', aiText.slice(0, 200) + '...');
-
-            if (handleAlphaFoldResponse(aiText)) {
-              return;
-            }
-
-            console.log('⚠️ [ProteinMPNN] Fallback: attempting to parse non-JSON response');
-            const fallbackData = {
-              action: 'confirm_proteinmpnn_design',
-              pdbSource: 'upload',
-              parameters: {
-                numDesigns: 5,
-                temperature: 0.1,
-                chainIds: [],
-                fixedPositions: [],
-                options: {}
-              },
-              design_info: {
-                summary: 'ProteinMPNN inverse folding request detected.',
-                notes: ['Please upload a PDB file to continue.']
-              },
-              message: 'Ready to run ProteinMPNN. Please confirm backbone source and parameters.'
-            };
-            handleAlphaFoldResponse(JSON.stringify(fallbackData));
-            return;
-          }
-
-          if (agentId === 'openfold2-agent') {
-            if (handleAlphaFoldResponse(aiText)) {
-              return;
-            }
-            setShowOpenFold2Dialog(true);
-            return;
-          }
-
-          if (agentId === 'diffdock-agent') {
-            if (handleAlphaFoldResponse(aiText)) {
-              return;
-            }
-            setShowDiffDockDialog(true);
-            return;
-          }
-
-          // Check if this is an RFdiffusion response
-          if (agentId === 'rfdiffusion-agent') {
-            if (handleAlphaFoldResponse(aiText)) {
-              return; // RFdiffusion dialog will be shown
-            } else {
-              // Fallback: if JSON parsing failed, try to extract key info and show a basic dialog
-              console.log('[RFdiffusion] Fallback: attempting to parse non-JSON response');
-              const fallbackData = {
-                action: 'confirm_design',
-                parameters: {
-                  design_mode: 'unconditional',
-                  contigs: 'A50-150',
-                  hotspot_res: [],
-                  diffusion_steps: 15
-                },
-                design_info: {
-                  mode: 'unconditional',
-                  template: 'No template structure',
-                  contigs: 'A50-150',
-                  hotspots: 0,
-                  complexity: 'medium'
-                },
-                estimated_time: '3-8 minutes',
-                message: 'Ready to design a new protein structure. Please confirm parameters.'
-              };
-              
-              // Handle the fallback data
-              handleAlphaFoldResponse(JSON.stringify(fallbackData));
-              return;
-            }
-          }
-
-          // Try to parse and display pipeline blueprint from response
-          // Works for pipeline-agent and as fallback when any agent returns blueprint JSON
-          const tryParseBlueprint = (): { blueprint: PipelineBlueprint; rationale?: string; message?: string } | null => {
-            let blueprintData: any = null;
-            try {
-              if (response.data?.blueprint || (response.data?.type === 'blueprint' && response.data?.blueprint)) {
-                blueprintData = response.data;
-              } else {
-                try {
-                  blueprintData = JSON.parse(aiText);
-                } catch {
-                  const jsonMatch = aiText.match(/```(?:json)?\s*(\{[\s\S]*?\})\s*```/);
-                  if (jsonMatch) {
-                    blueprintData = JSON.parse(jsonMatch[1]);
-                  } else {
-                    const jsonObjectMatch = aiText.match(/\{[\s\S]*"type"\s*:\s*"blueprint"[\s\S]*\}/);
-                    if (jsonObjectMatch) {
-                      blueprintData = JSON.parse(jsonObjectMatch[0]);
-                    }
-                  }
-                }
-              }
-              if (!blueprintData || blueprintData.type !== 'blueprint') return null;
-              // Support nested (blueprint.blueprint) and flat (blueprint with nodes/edges at top level)
-              const blueprintObj = blueprintData.blueprint ?? (blueprintData.nodes ? blueprintData : null);
-              if (!blueprintObj || !Array.isArray(blueprintObj.nodes)) return null;
-              return {
-                blueprint: {
-                  rationale: blueprintObj.rationale ?? blueprintData.rationale ?? '',
-                  nodes: blueprintObj.nodes,
-                  edges: Array.isArray(blueprintObj.edges) ? blueprintObj.edges : [],
-                  missing_resources: Array.isArray(blueprintObj.missing_resources) ? blueprintObj.missing_resources : [],
-                },
-                rationale: blueprintData.rationale ?? blueprintObj.rationale,
-                message: blueprintData.message,
-              };
-            } catch {
-              return null;
-            }
-          };
-
-          const parsedBlueprint = tryParseBlueprint();
-          if (parsedBlueprint != null) {
-            const bp = parsedBlueprint as NonNullable<typeof parsedBlueprint>;
-            console.log('✅ [Pipeline] Blueprint detected in response', agentId === 'pipeline-agent' ? '(pipeline-agent)' : '(fallback)');
-            console.log('📋 [Pipeline] Blueprint nodes:', bp.blueprint.nodes?.length || 0);
-            setGhostBlueprint(bp.blueprint);
-            const chatMsg: ExtendedMessage = {
-              id: uuidv4(),
-              content: bp.message || aiText,
-              type: 'ai',
-              timestamp: new Date(),
-              blueprint: bp.blueprint,
-              blueprintRationale: bp.rationale,
-            };
-            if (thinkingProcess) chatMsg.thinkingProcess = thinkingProcess;
-            removeStreamingPlaceholder();
-            addMessage(chatMsg);
-            setIsLoading(false);
-            return;
-          }
-          
-          // Bio-chat and other text agents should never modify the editor code
-          console.log(`[${agentId}] Text response received, preserving current editor code`);
-          
-          const chatMsg: ExtendedMessage = {
-            id: uuidv4(),
-            content: aiText,
-            type: 'ai',
-            timestamp: new Date()
-          };
-          
-          // Add thinking process if available
-          if (thinkingProcess) {
-            chatMsg.thinkingProcess = thinkingProcess;
-          }
-          
-          removeStreamingPlaceholder();
-          addMessage(chatMsg);
-          setIsLoading(false);
-          return; // Exit early - no code generation or execution
-        }
-        code = response.data?.code || '';
-        // Extract AI text response for better user experience
-        aiText = response.data?.text || '';
-        thinkingProcess = convertThinkingData(response.data?.thinkingProcess);
-        console.log('[AI] route:code', { length: code?.length, hasThinking: !!thinkingProcess, hasText: !!aiText });
-      } catch (apiErr: any) {
-        console.warn('AI generation failed (backend unavailable or error).', apiErr);
-        
-        // Check if this is an API key error (503 with api_key_missing)
-        const isApiKeyError = apiErr?.response?.status === 503 && 
-          (apiErr?.response?.data?.error === 'api_key_missing' || 
-           apiErr?.response?.data?.message?.includes('OpenRouter API key'));
-        
-        const likelyVis = isLikelyVisualization(text);
-        if (likelyVis) {
-          if (plugin) {
-            const exec = new CodeExecutor(plugin);
-            code = exec.generateCodeFromPrompt(text);
-          } else {
-            // Fallback code if plugin not initialized yet
-            code = `// Fallback: Hemoglobin cartoon
-try {
-  await builder.loadStructure('1HHO');
-  await builder.addCartoonRepresentation({ color: 'secondary-structure' });
-  builder.focusView();
-} catch (e) { console.error(e); }`;
-          }
-        } else {
-          // Provide more specific error message for API key issues
-          const errorMessage = isApiKeyError
-            ? 'OpenRouter API key is invalid or missing. Please set OPENROUTER_API_KEY in server/.env with a valid key from https://openrouter.ai'
-            : 'AI backend is unavailable. Please start the server and try again.';
-          
-          const chatMsg: Message = {
-            id: uuidv4(),
-            content: errorMessage,
-            type: 'ai',
-            timestamp: new Date()
-          };
-          addMessage(chatMsg);
-          setIsLoading(false); // Reset loading state before returning
-          return;
-        }
-      }
-
-      // Sync code into editor
-      setCurrentCode(code);
-      
-      // Save code to session (localStorage cache)
-      if (activeSessionId) {
-        saveVisualizationCode(activeSessionId, code);
-        console.log('[ChatPanel] Saved visualization code to session:', activeSessionId);
-      }
-
-      // Determine message content: prefer AI text, then a descriptive message if code exists, otherwise loading message
-      let messageContent = aiText;
-      if (!messageContent && code && code.trim()) {
-        // Code was generated, provide a descriptive message
-        const request = text.toLowerCase().trim();
-        const subjectMatch = request.match(/(?:show|display|visualize|view|load|open|see)\s+(.+?)(?:\s|$)/i);
-        const subject = subjectMatch ? subjectMatch[1].trim() : request;
-        const cleanSubject = subject.replace(/\s+(structure|protein|molecule|chain|helix)$/i, '').trim();
-        if (cleanSubject && cleanSubject.length < 40 && cleanSubject.length > 0) {
-          const capitalized = cleanSubject.charAt(0).toUpperCase() + cleanSubject.slice(1);
-          messageContent = `Visualizing ${capitalized}...`;
-        } else {
-          messageContent = 'Visualizing structure...';
-        }
-      }
-      if (!messageContent) {
-        // Last resort: use the loading message
-        messageContent = getExecutionMessage(text);
-      }
-
-      const aiResponse: ExtendedMessage = {
-        id: uuidv4(),
-        content: messageContent,
-        type: 'ai',
-        timestamp: new Date()
-      };
-      
-      // Add thinking process if available
-      if (thinkingProcess) {
-        aiResponse.thinkingProcess = thinkingProcess;
-      }
-      
-      // Include threeDCanvas so message is persisted with canvas data (enables restore on refresh)
-      if (code && code.trim() && !code.includes('blob:http') && !code.includes('blob:https:')) {
-        aiResponse.threeDCanvas = {
-          id: aiResponse.id,
-          sceneData: code,
-        };
-      }
-      
-      addMessage(aiResponse);
-
+      let structureMetadata: Awaited<ReturnType<typeof extractStructureMetadata>> = null;
       if (plugin) {
-        setIsExecuting(true);
         try {
-          const exec = new CodeExecutor(plugin);
-          await exec.executeCode(code);
-          setViewerVisibleAndSave(true);
-          setActivePane('viewer');
-        } finally {
-          setIsExecuting(false);
+          const raw = await extractStructureMetadata(plugin);
+          structureMetadata = raw ? summarizeForAgent(raw) : null;
+        } catch (e) {
+          console.warn('[ChatPanel] Failed to extract structure metadata:', e);
         }
-      } else {
-        // If no plugin yet, queue code to run once viewer initializes
-        setPendingCodeToRun(code);
-        setViewerVisibleAndSave(true);
-        setActivePane('viewer');
+      }
+
+      const payload = {
+        input: messageInput,
+        currentCode,
+        history: messages.slice(-6).map(m => ({ type: m.type, content: m.content })),
+        selection: selections.length > 0 ? selections[0] : null,
+        selections,
+        currentStructureOrigin: currentStructureOrigin || undefined,
+        uploadedFile: uploadedFileInfo
+          ? { file_id: uploadedFileInfo.file_id, filename: uploadedFileInfo.filename, file_url: uploadedFileInfo.file_url, atoms: uploadedFileInfo.atoms, chains: uploadedFileInfo.chains, chain_residue_counts: uploadedFileInfo.chain_residue_counts, total_residues: uploadedFileInfo.total_residues }
+          : undefined,
+        structureMetadata: structureMetadata || undefined,
+        agentId: agentSettings.selectedAgentId || undefined,
+        model: agentSettings.selectedModel || undefined,
+        pipeline_id: pipelineIdToSend,
+        pdb_content: undefined as string | undefined,
+        langsmith: langsmithSettings?.enabled
+          ? { enabled: true, apiKey: langsmithSettings.apiKey || undefined, project: langsmithSettings.project || undefined }
+          : { enabled: false },
+      };
+
+      const sessionMessages = activeSession?.messages ?? [];
+      const lcMessages = [...toLangGraphMessages(sessionMessages), { type: 'human' as const, content: messageInput }];
+      const configurable = {
+        currentCode,
+        history: payload.history,
+        selection: payload.selection,
+        selections: payload.selections,
+        uploadedFile: payload.uploadedFile,
+        structureMetadata: payload.structureMetadata,
+        pipeline_id: payload.pipeline_id,
+        model: payload.model,
+        agentId: payload.agentId,
+      };
+
+      try {
+        await stream.submit({ messages: lcMessages }, { config: { configurable } });
+      } catch (submitErr) {
+        addMessage({
+          id: uuidv4(), type: 'ai',
+          content: `Stream error: ${submitErr instanceof Error ? submitErr.message : String(submitErr)}`,
+          timestamp: new Date(),
+        } as ExtendedMessage);
+        setIsLoading(false);
       }
     } catch (err) {
       console.error('[Molstar] chat flow failed', err);
-      const aiError: Message = {
-        id: uuidv4(),
-        content: 'Sorry, I could not visualize that just now.',
-        type: 'ai',
-        timestamp: new Date()
-      };
-      addMessage(aiError);
-    } finally {
+      addMessage({ id: uuidv4(), content: 'Sorry, I could not visualize that just now.', type: 'ai', timestamp: new Date() });
       setIsLoading(false);
     }
   };
 
-  const quickPrompts = [
-    'Show insulin',
-    'Display hemoglobin',
-    'Visualize DNA double helix',
-    'Show antibody structure'
-  ];
-
-  // Check if we have real user messages (not just the welcome message)
+  // --- Layout ---
+  const quickPrompts = ['Show insulin', 'Display hemoglobin', 'Visualize DNA double helix', 'Show antibody structure'];
   const hasUserMessages = messages.some(m => m.type === 'user');
-  // Check if we only have the initial welcome message
-  const isOnlyWelcomeMessage = messages.length === 1 && 
-    messages[0].type === 'ai' && 
-    messages[0].content.includes('Welcome to NovoProtein AI');
-  // Show centered layout when no user messages or only welcome message
-  const showCenteredLayout = !hasUserMessages && (messages.length === 0 || isOnlyWelcomeMessage);
+  const isOnlyWelcomeMessage = messages.length === 1 && messages[0].type === 'ai' && messages[0].content.includes('Welcome to NovoProtein AI');
+  const showCenteredLayout = !isLoading && !hasUserMessages && (messages.length === 0 || isOnlyWelcomeMessage);
+
+  // Viewer loading callbacks for result cards
+  const onLoadAlphaFoldInViewer = useCallback(async (result: any, message?: any) => {
+    if (!result.pdbContent || !plugin) return;
+    try {
+      setIsExecuting(true);
+      const executor = new CodeExecutor(plugin);
+      const storeRes = await api.post('/upload/pdb/from-content', { pdbContent: result.pdbContent, filename: result.filename || 'alphafold_result.pdb' });
+      const fileId = storeRes.data?.file_info?.file_id;
+      const apiUrl = fileId ? `/api/upload/pdb/${fileId}` : null;
+      if (!apiUrl) throw new Error('Failed to store PDB');
+      const blobRes = await api.get(`/upload/pdb/${fileId}`, { responseType: 'blob' });
+      const blob = new Blob([blobRes.data], { type: 'chemical/x-pdb' });
+      const blobUrl = URL.createObjectURL(blob);
+      const execCode = `\ntry {\n  await builder.clearStructure();\n  await builder.loadStructure('${blobUrl}');\n  await builder.addCartoonRepresentation({ color: 'secondary-structure' });\n  builder.focusView();\n} catch (e) { \n  console.error('Failed to load AlphaFold result:', e); \n}`;
+      const savedCode = `\ntry {\n  await builder.clearStructure();\n  await builder.loadStructure('${apiUrl}');\n  await builder.addCartoonRepresentation({ color: 'secondary-structure' });\n  builder.focusView();\n} catch (e) { \n  console.error('Failed to load AlphaFold result:', e); \n}`;
+      await executor.executeCode(execCode);
+      setTimeout(() => URL.revokeObjectURL(blobUrl), 5000);
+      setCurrentCode(savedCode);
+      if (activeSessionId) saveVisualizationCode(activeSessionId, savedCode, message?.id);
+      setViewerVisibleAndSave(true);
+      setActivePane('viewer');
+      setCurrentStructureOrigin({ type: 'alphafold', filename: result.filename || 'alphafold_result.pdb' });
+    } catch (err) { console.error('Failed to load AlphaFold result in viewer:', err); }
+    finally { setIsExecuting(false); }
+  }, [plugin, activeSessionId, saveVisualizationCode, setIsExecuting, setCurrentCode, setViewerVisibleAndSave, setActivePane, setCurrentStructureOrigin]);
+
+  const makeViewerCallback = useCallback((type: string, defaultFilename: string, colorScheme = 'bfactor') => {
+    return async (result: any, message?: any) => {
+      if (!plugin) return;
+      const pdbContent = result.pdbContent;
+      const resultUrl = result.pdb_url ?? (result.job_id ? `/api/${type}/result/${result.job_id}` : null);
+      try {
+        setIsExecuting(true);
+        const executor = new CodeExecutor(plugin);
+        let apiUrl: string;
+        let blobRes: { data: BlobPart };
+        if (resultUrl) {
+          apiUrl = resultUrl;
+          blobRes = await api.get(apiUrl.replace(/^\/api/, ''), { responseType: 'blob' });
+        } else if (pdbContent) {
+          const storeRes = await api.post('/upload/pdb/from-content', { pdbContent, filename: result.filename || defaultFilename });
+          const fileId = storeRes.data?.file_info?.file_id;
+          apiUrl = fileId ? `/api/upload/pdb/${fileId}` : '';
+          if (!apiUrl) throw new Error('Failed to store PDB');
+          blobRes = await api.get(`/upload/pdb/${fileId}`, { responseType: 'blob' });
+        } else return;
+        const blob = new Blob([blobRes.data], { type: 'chemical/x-pdb' });
+        const blobUrl = URL.createObjectURL(blob);
+        const execCode = `\ntry {\n  await builder.clearStructure();\n  await builder.loadStructure('${blobUrl}');\n  await builder.addCartoonRepresentation({ color: '${colorScheme}' });\n  builder.focusView();\n} catch (e) { console.error('Failed to load ${type} result:', e); }`;
+        const savedCode = `\ntry {\n  await builder.clearStructure();\n  await builder.loadStructure('${apiUrl}');\n  await builder.addCartoonRepresentation({ color: '${colorScheme}' });\n  builder.focusView();\n} catch (e) { console.error('Failed to load ${type} result:', e); }`;
+        await executor.executeCode(execCode);
+        setTimeout(() => URL.revokeObjectURL(blobUrl), 5000);
+        setCurrentCode(savedCode);
+        if (activeSessionId) saveVisualizationCode(activeSessionId, savedCode, message?.id);
+        setViewerVisibleAndSave(true);
+        setActivePane('viewer');
+        setCurrentStructureOrigin({ type: type as StructureOrigin['type'], filename: result.filename || defaultFilename });
+      } catch (err) { console.error(`Failed to load ${type} result in viewer:`, err); }
+      finally { setIsExecuting(false); }
+    };
+  }, [plugin, activeSessionId, saveVisualizationCode, setIsExecuting, setCurrentCode, setViewerVisibleAndSave, setActivePane, setCurrentStructureOrigin]);
+
+  const onLoadOpenFold2InViewer = useCallback(makeViewerCallback('openfold2', 'openfold2_result.pdb', 'bfactor'), [makeViewerCallback]);
+  const onLoadDiffDockInViewer = useCallback(makeViewerCallback('diffdock', 'diffdock_result.pdb', 'bfactor'), [makeViewerCallback]);
+  const onLoadRFdiffusionInViewer = useCallback(makeViewerCallback('rfdiffusion', 'rfdiffusion_design.pdb', 'secondary-structure'), [makeViewerCallback]);
+
+  const onLoadSmilesInViewer = useCallback(async (result: any, message?: any) => {
+    if (!result?.file_id || !plugin) return;
+    try {
+      setIsExecuting(true);
+      const executor = new CodeExecutor(plugin);
+      const blobRes = await api.get(`/upload/pdb/${result.file_id}`, { responseType: 'blob' });
+      const blob = new Blob([blobRes.data], { type: 'chemical/x-pdb' });
+      const blobUrl = URL.createObjectURL(blob);
+      const apiUrl = result.file_url;
+      const execCode = `\ntry {\n  await builder.clearStructure();\n  await builder.loadStructure('${blobUrl}');\n  await builder.addBallAndStickRepresentation({ color: 'element' });\n  builder.focusView();\n} catch (e) { console.error('Failed to load SMILES structure:', e); }`;
+      const savedCode = `\ntry {\n  await builder.clearStructure();\n  await builder.loadStructure('${apiUrl}');\n  await builder.addBallAndStickRepresentation({ color: 'element' });\n  builder.focusView();\n} catch (e) { console.error('Failed to load SMILES structure:', e); }`;
+      await executor.executeCode(execCode);
+      setTimeout(() => URL.revokeObjectURL(blobUrl), 5000);
+      setCurrentCode(savedCode);
+      if (activeSessionId) saveVisualizationCode(activeSessionId, savedCode, message?.id);
+      setViewerVisibleAndSave(true);
+      setActivePane('viewer');
+      setCurrentStructureOrigin({ type: 'upload', filename: result.filename, metadata: { file_id: result.file_id, file_url: result.file_url } });
+    } catch (err) { console.error('[ChatPanel] Failed to load SMILES result in viewer:', err); }
+    finally { setIsExecuting(false); }
+  }, [plugin, activeSessionId, saveVisualizationCode, setIsExecuting, setCurrentCode, setViewerVisibleAndSave, setActivePane, setCurrentStructureOrigin]);
+
+  const onDownloadSmiles = useCallback(async (result: any) => {
+    try {
+      const res = await api.get(`/upload/pdb/${result.file_id}`, { responseType: 'blob' });
+      const blob = new Blob([res.data], { type: 'chemical/x-pdb' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = result.filename || 'smiles_structure.pdb';
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    } catch (e) { console.error('[ChatPanel] Failed to download SMILES PDB:', e); }
+  }, []);
 
   return (
     <div className="h-full flex flex-col">
@@ -3297,9 +513,7 @@ try {
             <div>
               <h2 className="text-xs font-semibold text-gray-900">AI Assistant</h2>
               {activeSession && (
-                <p className="text-[10px] text-gray-500 truncate max-w-[180px]">
-                  {activeSession.title}
-                </p>
+                <p className="text-[10px] text-gray-500 truncate max-w-[180px]">{activeSession.title}</p>
               )}
             </div>
           </div>
@@ -3307,588 +521,77 @@ try {
       )}
 
       {!showCenteredLayout ? (
-        <div className="flex-1 overflow-y-auto px-3 py-1.5 space-y-2 min-h-0">
-          {messages.map((message) => (
-          <div
-            key={message.id}
-            className={`flex ${message.type === 'user' ? 'justify-end' : 'justify-start'}`}
-          >
-            <div
-              className={`max-w-[85%] p-2 rounded-lg ${
-                message.type === 'user'
-                  ? 'bg-blue-600 text-white'
-                  : 'bg-gray-100 text-gray-900'
-              }`}
-            >
-              {message.type === 'ai' ? (
-                <>
-                  {message.thinkingProcess && (
-                    <ThinkingProcessDisplay
-                      thinkingSteps={message.thinkingProcess.steps}
-                      isProcessing={!message.thinkingProcess.isComplete}
-                      currentStep={message.thinkingProcess.steps.findIndex(s => s.status === 'processing') + 1}
-                    />
-                  )}
-                  {/* Show JobLoadingPill for messages with jobId and jobType */}
-                  {message.jobId && message.jobType && (
-                    <JobLoadingPill
-                      message={message}
-                      onJobComplete={(data: any) => {
-                        // Update message with result
-                        if (activeSession) {
-                          const messages = activeSession.messages || [];
-                          const messageIndex = messages.findIndex(m => m.id === message.id);
-                          if (messageIndex !== -1) {
-                            const updatedMessages = [...messages];
-                            updatedMessages[messageIndex] = {
-                              ...updatedMessages[messageIndex],
-                              content: `RFdiffusion protein design completed successfully! The designed structure is ready for download and visualization.`,
-                              rfdiffusionResult: {
-                                pdbContent: data.pdbContent,
-                                filename: data.filename || `designed_${Date.now()}.pdb`,
-                                parameters: data.parameters,
-                                metadata: data.metadata
-                              },
-                              jobId: undefined,
-                              jobType: undefined
-                            };
-                            updateMessages(updatedMessages);
-                          }
-                        }
-                      }}
-                      onJobError={(error: string, errorData?: any) => {
-                        // Update message with error and AI summary
-                        if (activeSession) {
-                          const messages = activeSession.messages || [];
-                          const messageIndex = messages.findIndex(m => m.id === message.id);
-                          if (messageIndex !== -1) {
-                            // Use server error data if available for proper error handling
-                            const structuredError = errorData?.errorCode
-                              ? RFdiffusionErrorHandler.handleError(errorData, { jobId: message.jobId, feature: 'RFdiffusion' })
-                              : RFdiffusionErrorHandler.handleError(error, { jobId: message.jobId, feature: 'RFdiffusion' });
-                            
-                            // Use AI summary as the chat message content if available
-                            const displayContent = errorData?.aiSummary || structuredError.userMessage || error;
-                            
-                            const updatedMessages = [...messages];
-                            updatedMessages[messageIndex] = {
-                              ...updatedMessages[messageIndex],
-                              content: displayContent,
-                              error: structuredError,
-                              jobId: undefined,
-                              jobType: undefined
-                            };
-                            updateMessages(updatedMessages);
-                          }
-                        }
-                      }}
-                    />
-                  )}
-                  {renderMessageContent(message.content)}
-                  {/* Show pipeline blueprint if present */}
-                  {message.blueprint && (
-                    <div className="mt-3">
-                      <PipelineBlueprintDisplay
-                        blueprint={message.blueprint}
-                        rationale={message.blueprintRationale}
-                        isApproved={message.blueprintApproved || false}
-                        onApprove={(selectedNodeIds) => {
-                          console.log('[ChatPanel] Blueprint approved with nodes:', selectedNodeIds);
-                          
-                          // Update the message to show it's been approved
-                          if (activeSession) {
-                            const messages = activeSession.messages || [];
-                            const messageIndex = messages.findIndex(m => m.id === message.id);
-                            if (messageIndex !== -1) {
-                              const updatedMessages = [...messages];
-                              updatedMessages[messageIndex] = {
-                                ...updatedMessages[messageIndex],
-                                blueprintApproved: true,
-                                content: `Pipeline blueprint approved! Created pipeline with ${selectedNodeIds.length} node${selectedNodeIds.length === 1 ? '' : 's'}. You can now configure parameters in the pipeline canvas.`,
-                              } as ExtendedMessage;
-                              updateMessages(updatedMessages);
-                            }
-                          }
-                        }}
-                        onReject={() => {
-                          console.log('[ChatPanel] Blueprint rejected');
-                          
-                          // Update the message to show it's been rejected
-                          if (activeSession) {
-                            const messages = activeSession.messages || [];
-                            const messageIndex = messages.findIndex(m => m.id === message.id);
-                            if (messageIndex !== -1) {
-                              const updatedMessages = [...messages];
-                              updatedMessages[messageIndex] = {
-                                ...updatedMessages[messageIndex],
-                                blueprintApproved: false,
-                                content: message.content + '\n\nPipeline blueprint rejected.',
-                              } as ExtendedMessage;
-                              updateMessages(updatedMessages);
-                            }
-                          }
-                        }}
-                      />
-                    </div>
-                  )}
-                  {/* Show uploaded file attachment if the immediately previous message was a user message with a file */}
-                  {(() => {
-                    const messageIndex = messages.findIndex(m => m.id === message.id);
-                    if (messageIndex <= 0) return null;
-                    
-                    // Only check the immediately previous message (not all previous messages)
-                    const prevMsg = messages[messageIndex - 1];
-                    if (prevMsg.type === 'user' && prevMsg.uploadedFile && isValidUploadedFile(prevMsg.uploadedFile)) {
-                      return (
-                        <div className="mt-3">
-                          {renderFileAttachment(prevMsg.uploadedFile, false)}
-                        </div>
-                      );
-                    }
-                    return null;
-                  })()}
-                  {renderAlphaFoldResult(message.alphafoldResult, message)}
-                  {renderSmilesResult(message.smilesResult, message)}
-                  {renderOpenFold2Result(message.openfold2Result, message)}
-                  {renderDiffDockResult(message.diffdockResult, message)}
-                  {renderRFdiffusionResult(message.rfdiffusionResult, message)}
-                  {renderProteinMPNNResult(message.proteinmpnnResult)}
-                  {message.validationResult && renderValidationResult(message.validationResult)}
-                  {message.error && (
-                    <div className="mt-3">
-                      <ErrorDisplay 
-                        error={message.error}
-                        onRetry={() => {
-                          // Handle retry logic based on error type
-                          if (message.error?.context?.sequence && message.error?.context?.parameters) {
-                            handleAlphaFoldConfirm(
-                              message.error.context.sequence, 
-                              message.error.context.parameters
-                            );
-                          }
-                        }}
-                      />
-                    </div>
-                  )}
-                </>
-              ) : (
-                <>
-                  <p className="text-sm leading-relaxed">{message.content}</p>
-                  {message.uploadedFile && isValidUploadedFile(message.uploadedFile) && (
-                    <div className="mt-1.5">
-                      {renderFileAttachment(message.uploadedFile, true)}
-                    </div>
-                  )}
-                  {message.pipeline && (
-                    <div className="mt-1.5">
-                      {renderPipelineAttachment(message.pipeline, true)}
-                    </div>
-                  )}
-                </>
-              )}
-            </div>
-          </div>
-        ))}
-        {isLoading && (
-          <div className="flex justify-start">
-            <div className="bg-gray-100 p-2 rounded-lg">
-              <div className="flex space-x-1.5">
-                <div className="w-1.5 h-1.5 bg-gray-400 rounded-full animate-bounce"></div>
-                <div className="w-1.5 h-1.5 bg-gray-400 rounded-full animate-bounce" style={{ animationDelay: '0.1s' }}></div>
-                <div className="w-1.5 h-1.5 bg-gray-400 rounded-full animate-bounce" style={{ animationDelay: '0.2s' }}></div>
-              </div>
-            </div>
-          </div>
-        )}
-          <div ref={messagesEndRef} />
-        </div>
+        <MessageList
+          messages={messages as ExtendedMessage[]}
+          isLoading={isLoading}
+          hasStreamingContent={hasStreamingContent}
+          messagesEndRef={messagesEndRef as React.RefObject<HTMLDivElement>}
+          plugin={plugin}
+          activeSession={activeSession}
+          updateMessages={updateMessages}
+          setCurrentCode={setCurrentCode}
+          setPendingCodeToRun={setPendingCodeToRun}
+          onLoadAlphaFoldInViewer={onLoadAlphaFoldInViewer}
+          onLoadSmilesInViewer={onLoadSmilesInViewer}
+          onDownloadSmiles={onDownloadSmiles}
+          onLoadOpenFold2InViewer={onLoadOpenFold2InViewer}
+          onLoadDiffDockInViewer={onLoadDiffDockInViewer}
+          onLoadRFdiffusionInViewer={onLoadRFdiffusionInViewer}
+          onLoadFileInViewer={loadUploadedFileInViewer}
+          onValidateStructure={handleValidateStructure}
+          onRetryAlphaFold={jobHandlers.handleAlphaFoldConfirm}
+          setGhostBlueprint={setGhostBlueprint}
+          isValidUploadedFile={isValidUploadedFile}
+        />
       ) : (
-        // Centered welcome screen when no messages
-        <div className="flex-1 flex flex-col items-center justify-center px-4">
-          <h1 className="text-3xl font-bold text-gray-900 mb-8 text-center">
-            What can I do for you?
-          </h1>
-        </div>
+        <WelcomeScreen isLoading={isLoading} />
       )}
 
-      <div className={`px-3 py-1.5 flex-shrink-0 ${!showCenteredLayout ? 'border-t border-gray-200' : ''}`}>
-        {/* Multiple selection chips */}
-        {selections.length > 0 && (
-          <div className="mb-1.5">
-            <div className="flex items-center justify-between mb-1">
-              <div className="text-[10px] text-gray-500 font-medium">
-                Selected Residues ({selections.length})
-              </div>
-              {selections.length > 1 && (
-                <button
-                  onClick={clearSelections}
-                  className="text-xs text-gray-500 hover:text-gray-700"
-                >
-                  Clear All
-                </button>
-              )}
-            </div>
-            <div className="flex flex-wrap gap-2">
-              {selections.map((sel, index) => (
-                <div 
-                  key={index}
-                  className="inline-flex items-center gap-1 bg-blue-100 text-blue-800 border border-blue-200 rounded-full px-3 py-1 text-xs font-medium"
-                >
-                  <span>{formatSelection(sel)}</span>
-                  <button
-                    onClick={() => removeSelection(index)}
-                    className="ml-1 text-blue-600 hover:text-blue-800"
-                  >
-                    <X className="w-3 h-3" />
-                  </button>
-                </div>
-              ))}
-            </div>
-          </div>
-        )}
-        {/* Progress Tracker */}
-        <ProgressTracker
-          isVisible={alphafoldProgress.isVisible}
-          onCancel={handleAlphaFoldCancel}
-          isCancelling={isCancellingAlphaFold}
-          cancelLabel="Cancel"
-          className="mb-1.5"
-          title={alphafoldProgress.title}
-          eventName={alphafoldProgress.eventName}
-        />
-        <ProgressTracker
-          isVisible={proteinmpnnProgress.isVisible}
-          onCancel={proteinmpnnProgress.cancelProgress}
-          className="mb-1.5"
-          title={proteinmpnnProgress.title}
-          eventName={proteinmpnnProgress.eventName}
-        />
-
-        {!showCenteredLayout && (
-          <div className="mb-1.5">
-            <button
-              onClick={() => setIsQuickStartExpanded(!isQuickStartExpanded)}
-              className="flex items-center justify-between w-full text-[10px] text-gray-500 hover:text-gray-700 transition-colors mb-1"
-            >
-              <span>Quick start:</span>
-              {isQuickStartExpanded ? (
-                <ChevronUp className="w-2.5 h-2.5" />
-              ) : (
-                <ChevronDown className="w-2.5 h-2.5" />
-              )}
-            </button>
-            <div
-              className={`overflow-hidden transition-all duration-200 ease-in-out ${
-                isQuickStartExpanded ? 'max-h-24 opacity-100' : 'max-h-0 opacity-0'
-              }`}
-            >
-              <div className="flex flex-wrap gap-1">
-                {quickPrompts.map((prompt, index) => (
-                  <button
-                    key={index}
-                    onClick={() => setInput(prompt)}
-                    className="text-[10px] bg-gray-100 hover:bg-gray-200 text-gray-700 px-1.5 py-0.5 rounded transition-colors"
-                  >
-                    {prompt}
-                  </button>
-                ))}
-              </div>
-            </div>
-          </div>
-        )}
-
-        <form onSubmit={handleSubmit} className={`flex flex-col gap-2 ${showCenteredLayout ? 'max-w-2xl w-full mx-auto' : ''}`}>
-          {/* File uploads display with status */}
-          {fileUploads.length > 0 && (
-            <div className="flex items-center space-x-1.5 px-2 py-1 bg-blue-50 border border-blue-200 rounded-lg flex-wrap gap-1.5 mb-1.5">
-              {fileUploads.map((fileState, index) => {
-                const isUploading = fileState.status === 'uploading';
-                const isUploaded = fileState.status === 'uploaded';
-                const isError = fileState.status === 'error';
-                
-                return (
-                  <div 
-                    key={index} 
-                    className={`flex items-center space-x-1 px-2 py-1 rounded-md border ${
-                      isUploading 
-                        ? 'bg-yellow-50 border-yellow-300' 
-                        : isUploaded 
-                        ? 'bg-green-50 border-green-300' 
-                        : isError
-                        ? 'bg-red-50 border-red-300'
-                        : 'bg-white border-blue-200'
-                    }`}
-                  >
-                    {isUploading && (
-                      <div className="w-3 h-3 border-2 border-blue-600 border-t-transparent rounded-full animate-spin mr-1"></div>
-                    )}
-                    {isUploaded && (
-                      <span className="text-green-600 mr-1">✓</span>
-                    )}
-                    {isError && (
-                      <span className="text-red-600 mr-1">✗</span>
-                    )}
-                    <span 
-                      className={`text-xs truncate max-w-[200px] ${
-                        isUploading 
-                          ? 'text-yellow-700' 
-                          : isUploaded 
-                          ? 'text-green-700' 
-                          : isError
-                          ? 'text-red-700'
-                          : 'text-blue-700'
-                      }`} 
-                      title={fileState.file.name}
-                    >
-                      📎 {fileState.file.name}
-                    </span>
-                    {isError && fileState.error && (
-                      <span className="text-xs text-red-600 ml-1" title={fileState.error}>
-                        ⚠
-                      </span>
-                    )}
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setFileUploads(prev => prev.filter((_, i) => i !== index));
-                        setUploadError(null);
-                      }}
-                      className={`p-0.5 rounded ml-1 ${
-                        isUploading 
-                          ? 'hover:bg-yellow-100' 
-                          : isUploaded 
-                          ? 'hover:bg-green-100' 
-                          : isError
-                          ? 'hover:bg-red-100'
-                          : 'hover:bg-blue-100'
-                      }`}
-                      title="Remove file"
-                    >
-                      <X className={`w-3 h-3 ${
-                        isUploading 
-                          ? 'text-yellow-600' 
-                          : isUploaded 
-                          ? 'text-green-600' 
-                          : isError
-                          ? 'text-red-600'
-                          : 'text-blue-600'
-                      }`} />
-                    </button>
-                  </div>
-                );
-              })}
-            </div>
-          )}
-          
-          {/* Upload error display */}
-          {uploadError && (
-            <div className="px-2 py-1 bg-red-50 border border-red-200 rounded-lg mb-1.5">
-              <p className="text-[10px] text-red-700">{uploadError}</p>
-            </div>
-          )}
-
-          {/* Pipeline context: selected or current canvas (Including: [name]) */}
-          {displayAttachedPipeline && (
-            <div className="flex items-center space-x-1.5 px-2 py-1 bg-purple-50 border border-purple-200 rounded-lg flex-wrap gap-1.5 mb-1.5">
-              <div className="flex items-center space-x-1 px-2 py-1 rounded-md bg-purple-100 border border-purple-300">
-                <span className="text-purple-600 mr-1">⚙️</span>
-                <span className="text-xs text-purple-700 truncate max-w-[200px]" title={displayAttachedPipeline.name}>
-                  {displayAttachedPipeline.name}
-                </span>
-                <button
-                  type="button"
-                  onClick={() => setSelectedPipeline(null)}
-                  className="p-0.5 rounded ml-1 hover:bg-purple-200"
-                  title="Remove pipeline"
-                >
-                  <X className="w-3 h-3 text-purple-600" />
-                </button>
-              </div>
-            </div>
-          )}
-          
-          {/* Large text input area with integrated controls */}
-          <div className="relative bg-white border border-gray-300 rounded-lg focus-within:ring-2 focus-within:ring-blue-500 focus-within:border-transparent">
-            {/* Textarea with padding for controls */}
-            <textarea
-              ref={textareaRef}
-              value={input}
-              onChange={(e) => setInput(e.target.value)}
-              placeholder={"Chat, visualize, or build..."}
-              className={`w-full bg-transparent text-gray-900 focus:outline-none text-sm placeholder-gray-400 resize-none ${
-                showCenteredLayout ? 'min-h-[120px] text-base' : 'min-h-[60px]'
-              } px-2.5 pb-8 pt-2`}
-              rows={showCenteredLayout ? 4 : 1}
-              disabled={isLoading}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter' && !e.shiftKey) {
-                  e.preventDefault();
-                  handleSubmit(e as any);
-                }
-              }}
-            />
-            
-            {/* Bottom controls bar: Agent, Model selectors, Microphone, and Send button */}
-            <div className="absolute bottom-0 left-0 right-0 flex items-center justify-between gap-1.5 px-2 py-1 border-t border-gray-100 bg-white rounded-b-lg z-10">
-              {/* Leading actions: Agent and Model selectors */}
-              <div className="flex items-center gap-2 flex-shrink-0">
-                {/* Agent Selector */}
-                {agents.length > 0 && (
-                  <AgentSelector
-                    agents={agents}
-                  />
-                )}
-                
-                {/* Model Selector */}
-                <ModelSelector
-                  models={models}
-                />
-              </div>
-              
-              {/* Trailing actions: Attachment, Microphone, and Send button */}
-              <div className="flex items-center gap-1 flex-shrink-0 ml-auto">
-                {/* File upload attachment button */}
-                <AttachmentMenu
-                  onFileSelected={(file) => {
-                    handleFileSelected(file);
-                    setUploadError(null);
-                  }}
-                  onFilesSelected={(files) => {
-                    handleFilesSelected(files);
-                    setUploadError(null);
-                  }}
-                  onFileCleared={() => {
-                    setFileUploads([]);
-                    setUploadError(null);
-                  }}
-                  onError={(error) => {
-                    setUploadError(error);
-                    console.error('File upload error:', error);
-                  }}
-                  onPipelineSelect={handlePipelineSelect}
-                  onServerFilesSelect={handleServerFilesSelect}
-                  disabled={isLoading}
-                  pendingFiles={fileUploads.map(f => f.file)}
-                  sessionId={activeSessionId}
-                />
-                
-                {/* Microphone button */}
-                <button
-                  type="button"
-                  className="p-1.5 text-gray-400 hover:text-gray-600 transition-colors rounded-md hover:bg-gray-100"
-                  title="Voice input"
-                >
-                  <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z" />
-                  </svg>
-                </button>
-                
-                {/* Send button */}
-                <button
-                  type="submit"
-                  disabled={!input.trim() || isLoading}
-                  className="flex items-center justify-center p-1.5 text-gray-400 hover:text-gray-600 transition-colors disabled:opacity-50 disabled:cursor-not-allowed rounded-md hover:bg-gray-100"
-                  title="Send"
-                >
-                  <Send className="w-5 h-5" />
-                </button>
-              </div>
-            </div>
-          </div>
-        </form>
-
-        {/* Quick prompts below input when centered layout */}
-        {showCenteredLayout && (
-          <div className="mt-4 max-w-2xl w-full mx-auto">
-            <div className="flex flex-wrap gap-2 justify-center">
-              {quickPrompts.map((prompt, index) => (
-                <button
-                  key={index}
-                  onClick={() => setInput(prompt)}
-                  className="px-4 py-2 bg-white hover:bg-gray-50 text-gray-700 rounded-lg border border-gray-200 text-sm font-medium transition-colors flex items-center space-x-2"
-                >
-                  <span>{prompt}</span>
-                </button>
-              ))}
-              <button
-                onClick={() => setShowOpenFold2Dialog(true)}
-                className="px-4 py-2 bg-amber-50 hover:bg-amber-100 text-amber-800 rounded-lg border border-amber-200 text-sm font-medium transition-colors"
-                title="OpenFold2 structure prediction"
-              >
-                OpenFold2
-              </button>
-              <button
-                onClick={() => setShowDiffDockDialog(true)}
-                className="px-4 py-2 bg-teal-50 hover:bg-teal-100 text-teal-800 rounded-lg border border-teal-200 text-sm font-medium transition-colors"
-                title="DiffDock protein-ligand docking"
-              >
-                DiffDock
-              </button>
-              <button
-                onClick={() => {}}
-                className="px-4 py-2 bg-white hover:bg-gray-50 text-gray-700 rounded-lg border border-gray-200 text-sm font-medium transition-colors"
-              >
-                More
-              </button>
-            </div>
-          </div>
-        )}
-      </div>
-
-      {/* AlphaFold Dialog */}
-      <AlphaFoldDialog
-        isOpen={showAlphaFoldDialog}
-        onClose={handleAlphaFoldClose}
-        onConfirm={handleAlphaFoldConfirm}
-        initialData={alphafoldData}
+      <ChatInput
+        input={input}
+        setInput={setInput}
+        isLoading={isLoading}
+        showCenteredLayout={showCenteredLayout}
+        selections={selections}
+        removeSelection={removeSelection}
+        clearSelections={clearSelections}
+        formatSelection={formatSelection}
+        fileUploads={fileUploads}
+        setFileUploads={setFileUploads}
+        uploadError={uploadError}
+        setUploadError={setUploadError}
+        displayAttachedPipeline={displayAttachedPipeline}
+        setSelectedPipeline={setSelectedPipeline}
+        alphafoldProgress={alphafoldProgress}
+        proteinmpnnProgress={proteinmpnnProgress}
+        handleAlphaFoldCancel={handleAlphaFoldCancel}
+        isCancellingAlphaFold={isCancellingAlphaFold}
+        isQuickStartExpanded={isQuickStartExpanded}
+        setIsQuickStartExpanded={setIsQuickStartExpanded}
+        quickPrompts={quickPrompts}
+        models={models}
+        textareaRef={textareaRef as React.RefObject<HTMLTextAreaElement>}
+        handleSubmit={handleSubmit}
+        handleFileSelected={handleFileSelected}
+        handleFilesSelected={handleFilesSelected}
+        handlePipelineSelect={handlePipelineSelect}
+        handleServerFilesSelect={handleServerFilesSelect}
+        activeSessionId={activeSessionId}
+        setShowOpenFold2Dialog={setShowOpenFold2Dialog}
+        setShowDiffDockDialog={setShowDiffDockDialog}
       />
 
-      {/* RFdiffusion Dialog */}
-      <RFdiffusionDialog
-        isOpen={showRFdiffusionDialog}
-        onClose={handleRFdiffusionClose}
-        onConfirm={handleRFdiffusionConfirm}
-        initialData={rfdiffusionData}
-      />
-
-      <ProteinMPNNDialog
-        isOpen={showProteinMPNNDialog}
-        onClose={handleProteinMPNNClose}
-        onConfirm={handleProteinMPNNConfirm}
-        initialData={proteinmpnnData}
-      />
-
-      <OpenFold2Dialog
-        isOpen={showOpenFold2Dialog}
-        onClose={handleOpenFold2Close}
-        onConfirm={handleOpenFold2Confirm}
-      />
-
-      <DiffDockDialog
-        isOpen={showDiffDockDialog}
-        onClose={handleDiffDockClose}
-        onConfirm={handleDiffDockConfirm}
-      />
-
-      {/* Pipeline Selection Modal */}
-      <PipelineSelectionModal
-        isOpen={showPipelineModal}
-        onClose={() => setShowPipelineModal(false)}
-        onPipelineSelect={handlePipelineSelected}
-      />
-
-      {/* Server Files Dialog */}
+      <AlphaFoldDialog isOpen={showAlphaFoldDialog} onClose={jobHandlers.handleAlphaFoldClose} onConfirm={jobHandlers.handleAlphaFoldConfirm} initialData={alphafoldData} />
+      <RFdiffusionDialog isOpen={showRFdiffusionDialog} onClose={jobHandlers.handleRFdiffusionClose} onConfirm={jobHandlers.handleRFdiffusionConfirm} initialData={rfdiffusionData} />
+      <ProteinMPNNDialog isOpen={showProteinMPNNDialog} onClose={jobHandlers.handleProteinMPNNClose} onConfirm={jobHandlers.handleProteinMPNNConfirm} initialData={proteinmpnnData} />
+      <OpenFold2Dialog isOpen={showOpenFold2Dialog} onClose={jobHandlers.handleOpenFold2Close} onConfirm={jobHandlers.handleOpenFold2Confirm} />
+      <DiffDockDialog isOpen={showDiffDockDialog} onClose={jobHandlers.handleDiffDockClose} onConfirm={jobHandlers.handleDiffDockConfirm} />
+      <PipelineSelectionModal isOpen={showPipelineModal} onClose={() => setShowPipelineModal(false)} onPipelineSelect={handlePipelineSelected} />
       <ServerFilesDialog
         isOpen={showServerFilesDialog}
         onClose={() => setShowServerFilesDialog(false)}
-        onFileSelect={(file) => {
-          handleFileSelected(file);
-          setUploadError(null);
-        }}
-        onError={(error) => {
-          setUploadError(error);
-          console.error('Server file selection error:', error);
-        }}
+        onFileSelect={(file) => { handleFileSelected(file); setShowServerFilesDialog(false); }}
+        onError={(error) => setUploadError(error)}
       />
     </div>
   );

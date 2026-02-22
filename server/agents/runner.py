@@ -2140,3 +2140,222 @@ async def run_agent_stream(
         log_line("agent:stream:error", {**base_log, "error": str(e), "trace": traceback.format_exc()})
         yield {"type": "error", "data": {"error": str(e)}}
 
+
+# ---------------------------------------------------------------------------
+# Supervisor-pattern streaming: route → build sub-agent → stream
+# ---------------------------------------------------------------------------
+
+@traceable(name="RunSupervisorStream", run_type="chain")
+async def run_supervisor_stream(
+    *,
+    user_text: str,
+    current_code: Optional[str] = None,
+    history: Optional[List[Dict[str, Any]]] = None,
+    selection: Optional[Dict[str, Any]] = None,
+    selections: Optional[List[Dict[str, Any]]] = None,
+    uploaded_file_context: Optional[Dict[str, Any]] = None,
+    structure_metadata: Optional[Dict[str, Any]] = None,
+    pipeline_id: Optional[str] = None,
+    pipeline_data: Optional[Dict[str, Any]] = None,
+    model_override: Optional[str] = None,
+    manual_agent_id: Optional[str] = None,
+    temperature: float = 0.5,
+    max_tokens: int = 1000,
+) -> AsyncGenerator[Dict[str, Any], None]:
+    """Supervisor streaming: route to a sub-agent, then stream its ReAct loop.
+
+    Yields events:
+        routing   – which agent was chosen (frontend shows agent pill)
+        tool_call – when a tool is invoked (frontend shows tool pill)
+        content   – token-level text chunks
+        complete  – final result with agentId + toolsInvoked
+        error     – on failure
+    """
+    from .llm.model import get_chat_model
+    from .llm.messages import openrouter_to_langchain
+    from .supervisor.routing import route_to_agent
+    from .langchain_agent.result import react_state_to_app_result
+
+    model = model_override or os.getenv("CLAUDE_CHAT_MODEL", "claude-3-5-sonnet-20241022")
+    api_key = _get_openrouter_api_key()
+
+    # ── Step 1: Route ──
+    if manual_agent_id:
+        agent_id = manual_agent_id
+        routing_reason = "manual_override"
+    else:
+        try:
+            routing_llm = get_chat_model(model, api_key, temperature=0, max_tokens=50)
+            agent_id, routing_reason = await route_to_agent(routing_llm, user_text, history=history)
+        except Exception as e:
+            print(f"[supervisor] routing failed, defaulting to bio_chat: {e}")
+            agent_id = "bio_chat"
+            routing_reason = f"routing_error_fallback:{e}"
+
+    print(f"[supervisor] routed to: {agent_id} ({routing_reason})")
+    yield {"type": "routing", "data": {"agentId": agent_id, "reason": routing_reason}}
+
+    # ── Direct actions: dialog triggers bypass sub-agent entirely ──
+    _DIRECT_ACTION_MAP = {
+        "alphafold": {"action": "open_alphafold_dialog"},
+        "openfold": {"action": "open_openfold2_dialog"},
+        "rfdiffusion": {"action": "open_rfdiffusion_dialog"},
+        "proteinmpnn": {"action": "open_proteinmpnn_dialog"},
+        "diffdock": {"action": "open_diffdock_dialog"},
+    }
+    if agent_id in _DIRECT_ACTION_MAP:
+        action_json = json.dumps(_DIRECT_ACTION_MAP[agent_id])
+        print(f"[supervisor] direct action: {agent_id} → {action_json}")
+        yield {"type": "complete", "data": {
+            "type": "text",
+            "text": action_json,
+            "agentId": agent_id,
+            "toolsInvoked": [],
+        }}
+        return
+
+    # ── Step 2: Build sub-agent graph ──
+    try:
+        graph = await _build_supervisor_sub_agent(agent_id, model, api_key,
+                                                   user_query=user_text,
+                                                   temperature=temperature,
+                                                   max_tokens=max_tokens)
+    except Exception as e:
+        print(f"[supervisor] failed to build sub-agent {agent_id}: {e}")
+        yield {"type": "error", "data": {"error": f"Failed to build agent: {e}"}}
+        return
+
+    # ── Step 3: Build messages (reuse existing helper) ──
+    openrouter_messages = _build_react_messages(
+        user_text=user_text,
+        current_code=current_code,
+        history=history,
+        selection=selection,
+        selections=selections,
+        uploaded_file_context=uploaded_file_context,
+        structure_metadata=structure_metadata,
+        pipeline_id=pipeline_id,
+        pipeline_data=pipeline_data,
+    )
+    lc_messages = openrouter_to_langchain(openrouter_messages)
+    # Strip the hardcoded bio_chat system message — each sub-agent graph
+    # now prepends its own specialised system prompt via build_agent_graph.
+    from langchain_core.messages import SystemMessage as _SM
+    lc_messages = [m for m in lc_messages if not isinstance(m, _SM)]
+    config = {"recursion_limit": 25}
+    inputs = {"messages": lc_messages}
+
+    # ── Step 4: Stream sub-agent ──
+    streamed_content: list = []
+    tools_invoked: list = []
+    last_state: Optional[Dict[str, Any]] = None
+
+    try:
+        if hasattr(graph, "astream"):
+            print(f"[supervisor] Starting astream for {agent_id}, {len(lc_messages)} input messages")
+            event_idx = 0
+            async for event in graph.astream(inputs, config=config, stream_mode="messages"):
+                event_idx += 1
+                # Extract text content (AI messages only)
+                content = _supervisor_content_from_event(event)
+                if isinstance(content, str) and content:
+                    streamed_content.append(content)
+                    yield {"type": "content", "data": {"text": content}}
+                # Detect tool calls for tool pills
+                tool_name = _supervisor_tool_from_event(event)
+                if tool_name and tool_name not in tools_invoked:
+                    tools_invoked.append(tool_name)
+                    yield {"type": "tool_call", "data": {"name": tool_name}}
+            print(f"[supervisor] astream done: {event_idx} events, {len(streamed_content)} content chunks")
+
+        if streamed_content:
+            from langchain_core.messages import AIMessage as _AIMessage
+            full_text = "".join(streamed_content)
+            last_state = {"messages": lc_messages + [_AIMessage(content=full_text)]}
+        else:
+            print(f"[supervisor] No streamed content, falling back to ainvoke for {agent_id}")
+            if hasattr(graph, "ainvoke"):
+                last_state = await graph.ainvoke(inputs, config=config)
+            else:
+                last_state = graph.invoke(inputs, config=config)
+    except Exception as e:
+        print(f"[supervisor] EXCEPTION during {agent_id} execution: {e}")
+        log_line("supervisor:stream:error", {"agentId": agent_id, "error": str(e)})
+        yield {"type": "error", "data": {"error": str(e)}}
+        return
+
+    if last_state is None:
+        yield {"type": "error", "data": {"error": "No response from agent"}}
+        return
+
+    # ── Step 5: Build result with agent + tools metadata ──
+    result = react_state_to_app_result(last_state)
+    result["agentId"] = agent_id
+    result["toolsInvoked"] = tools_invoked
+    print(f"[supervisor] complete: agent={agent_id}, tools={tools_invoked}, type={result.get('type')}")
+    yield {"type": "complete", "data": result}
+
+
+def _supervisor_content_from_event(event: Any) -> Optional[str]:
+    """Extract text from a LangGraph stream event (AI messages only)."""
+    if isinstance(event, (list, tuple)) and len(event) >= 1:
+        chunk = event[0]
+        chunk_type = getattr(chunk, "type", None) or ""
+        if chunk_type not in ("ai", "AIMessageChunk"):
+            return None
+        if hasattr(chunk, "content"):
+            c = chunk.content
+            return c if isinstance(c, str) and c else None
+        return None
+    if hasattr(event, "content"):
+        event_type = getattr(event, "type", None) or ""
+        if event_type not in ("ai", "AIMessageChunk"):
+            return None
+        c = event.content
+        return c if isinstance(c, str) and c else None
+    if isinstance(event, dict):
+        if event.get("type") not in ("ai", "AIMessageChunk", None):
+            return None
+        return event.get("content") or (event.get("chunk") or {}).get("content")
+    return None
+
+
+def _supervisor_tool_from_event(event: Any) -> Optional[str]:
+    """Extract tool name from a stream event (ToolMessage/ToolMessageChunk)."""
+    chunk = event
+    if isinstance(event, (list, tuple)) and len(event) >= 1:
+        chunk = event[0]
+    chunk_type = getattr(chunk, "type", None) or ""
+    if chunk_type in ("tool", "ToolMessage", "ToolMessageChunk"):
+        return getattr(chunk, "name", None)
+    # AIMessageChunk with tool_calls
+    if chunk_type in ("ai", "AIMessageChunk"):
+        tool_calls = getattr(chunk, "tool_calls", None)
+        if tool_calls and len(tool_calls) > 0:
+            return tool_calls[0].get("name")
+    return None
+
+
+async def _build_supervisor_sub_agent(
+    agent_id: str,
+    model: str,
+    api_key: Optional[str],
+    *,
+    user_query: str = "",
+    temperature: float = 0.5,
+    max_tokens: int = 1000,
+) -> Any:
+    """Build and return the compiled sub-agent graph for the given agent_id."""
+    if agent_id == "code_builder":
+        from .sub_agents.code_builder import build_code_builder_agent
+        return await build_code_builder_agent(
+            model, api_key, user_query=user_query,
+            temperature=temperature, max_tokens=max_tokens,
+        )
+    elif agent_id == "pipeline":
+        from .sub_agents.pipeline import build_pipeline_agent
+        return build_pipeline_agent(model, api_key, temperature=temperature, max_tokens=max_tokens)
+    else:
+        # Default: bio_chat
+        from .sub_agents.bio_chat import build_bio_chat_agent
+        return build_bio_chat_agent(model, api_key, temperature=temperature, max_tokens=max_tokens)

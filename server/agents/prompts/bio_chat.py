@@ -67,6 +67,6 @@ BIO_CHAT_SYSTEM_PROMPT = (
 REACT_SYSTEM_PROMPT = (
     BIO_CHAT_SYSTEM_PROMPT
     + "\n\n"
-    + "Tools: You have tools for specific actions. Use them when the user's intent matches the tool description (e.g. show SMILES in 3D, search UniProt, open AlphaFold/DiffDock/OpenFold2/RFdiffusion dialogs). Do not use keywords to decide—use the tool's description and the user's request. After calling a tool, summarize the result for the user. For visualization code (Mol* builder or MolViewSpec), respond with the code in a markdown code block when the user asks to show, display, or visualize something; you do not have a tool for code—generate it in your response.\n"
+    + "Tools: You have tools for specific actions (UniProt search, structure validation, MVS Builder). Use them when the user's intent matches the tool description. Do not use keywords to decide—use the tool's description and the user's request. After calling a tool, summarize the result for the user.\n"
 )
 
