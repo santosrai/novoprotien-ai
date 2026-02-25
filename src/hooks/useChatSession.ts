@@ -2,6 +2,10 @@ import { useRef, useEffect, useCallback } from 'react';
 import type { Message } from '../types/chat';
 import { useChatHistoryStore } from '../stores/chatHistoryStore';
 
+export function getPaneForRestoredViewerVisibility(visible: boolean): 'viewer' | null {
+  return visible ? 'viewer' : null;
+}
+
 export interface UseChatSessionParams {
   activeSessionId: string | null;
   activeSession: { id: string; messages: Message[]; title: string } | null;
@@ -9,6 +13,8 @@ export interface UseChatSessionParams {
   currentCode: string | null;
   isViewerVisible: boolean;
   isSyncing: boolean;
+  authResolved: boolean;
+  restoreResolved: boolean;
   sessions: Array<{ id: string }>;
   createSession: () => void;
   getVisualizationCode: (sessionId: string) => Promise<string | undefined>;
@@ -29,6 +35,8 @@ export function useChatSession(params: UseChatSessionParams) {
     currentCode,
     isViewerVisible,
     isSyncing,
+    authResolved,
+    restoreResolved,
     sessions,
     createSession,
     getVisualizationCode,
@@ -63,7 +71,14 @@ export function useChatSession(params: UseChatSessionParams) {
   }, [activeSessionId]);
 
   useEffect(() => {
-    if (activeSessionId || isSyncing || hasAttemptedCreateRef.current || sessions.length > 0) {
+    if (
+      activeSessionId ||
+      isSyncing ||
+      !authResolved ||
+      !restoreResolved ||
+      hasAttemptedCreateRef.current ||
+      sessions.length > 0
+    ) {
       return;
     }
 
@@ -76,7 +91,7 @@ export function useChatSession(params: UseChatSessionParams) {
     }, 500);
 
     return () => clearTimeout(timeoutId);
-  }, [activeSessionId, isSyncing, sessions.length, createSession]);
+  }, [activeSessionId, isSyncing, authResolved, restoreResolved, sessions.length, createSession]);
 
   useEffect(() => {
     if (activeSessionId && !previousSessionIdRef.current) {
@@ -89,6 +104,7 @@ export function useChatSession(params: UseChatSessionParams) {
         const savedVisibility = getViewerVisibility(activeSessionId);
         if (savedVisibility !== undefined) {
           setViewerVisible(savedVisibility);
+          setActivePane(getPaneForRestoredViewerVisibility(savedVisibility));
         }
       }
     }
@@ -131,7 +147,9 @@ export function useChatSession(params: UseChatSessionParams) {
         console.log('[ChatPanel] Restoring visualization code from session messages:', activeSessionId);
         setCurrentCode(sessionCode);
         const savedVisibility = getViewerVisibility(activeSessionId);
-        setViewerVisible(savedVisibility !== undefined ? savedVisibility : true);
+        const shouldShowViewer = savedVisibility !== undefined ? savedVisibility : true;
+        setViewerVisible(shouldShowViewer);
+        setActivePane(getPaneForRestoredViewerVisibility(shouldShowViewer));
       } else {
         getVisualizationCode(activeSessionId).then((savedCode) => {
           const hasValidCode = savedCode &&
@@ -143,7 +161,9 @@ export function useChatSession(params: UseChatSessionParams) {
             console.log('[ChatPanel] Restoring visualization code for session:', activeSessionId);
             setCurrentCode(savedCode);
             const savedVisibility = getViewerVisibility(activeSessionId);
-            setViewerVisible(savedVisibility !== undefined ? savedVisibility : true);
+            const shouldShowViewer = savedVisibility !== undefined ? savedVisibility : true;
+            setViewerVisible(shouldShowViewer);
+            setActivePane(getPaneForRestoredViewerVisibility(shouldShowViewer));
           } else {
             if (currentCodeRef.current && currentCodeRef.current.trim()) {
               console.log('[ChatPanel] Clearing code for session without valid visualization:', activeSessionId);
@@ -159,7 +179,7 @@ export function useChatSession(params: UseChatSessionParams) {
     }
 
     previousSessionIdRef.current = activeSessionId;
-  }, [activeSessionId, activeSessionMessageCount, getVisualizationCode, getLastCanvasCodeFromSession, saveVisualizationCode, getViewerVisibility, saveViewerVisibility, setCurrentCode, setViewerVisible]);
+  }, [activeSessionId, activeSessionMessageCount, getVisualizationCode, getLastCanvasCodeFromSession, saveVisualizationCode, getViewerVisibility, saveViewerVisibility, setCurrentCode, setViewerVisible, setActivePane]);
 
   return { setViewerVisibleAndSave };
 }

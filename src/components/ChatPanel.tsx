@@ -3,6 +3,7 @@ import { Sparkles } from 'lucide-react';
 import { useAppStore } from '../stores/appStore';
 import type { StructureOrigin } from '../stores/appStore';
 import { useChatHistoryStore, useActiveSession, Message } from '../stores/chatHistoryStore';
+import { useAuthStore } from '../stores/authStore';
 import { CodeExecutor } from '../utils/codeExecutor';
 import { api, getAuthHeaders } from '../utils/api';
 import { toLangGraphMessages } from '../utils/langgraphTransport';
@@ -33,6 +34,7 @@ import { useActionRouter } from '../hooks/useActionRouter';
 
 import { MessageList } from './chat/MessageList';
 import { WelcomeScreen } from './chat/WelcomeScreen';
+import { PageRefreshSkeleton } from './chat/PageRefreshSkeleton';
 import { ChatInput } from './chat/ChatInput';
 
 export const ChatPanel: React.FC = () => {
@@ -91,7 +93,10 @@ export const ChatPanel: React.FC = () => {
   const diffdockPredictMutation = useDiffDockPredict();
 
   const isSyncing = useChatHistoryStore(state => state._isSyncing);
+  const restoreResolved = useChatHistoryStore(state => state.restoreResolved);
+  const isRestoring = useChatHistoryStore(state => state.isRestoring);
   const sessions = useChatHistoryStore(state => state.sessions);
+  const authResolved = useAuthStore(state => state.authResolved);
 
   useAgents();
   const { data: modelsData } = useModels();
@@ -103,7 +108,7 @@ export const ChatPanel: React.FC = () => {
 
   const { setViewerVisibleAndSave } = useChatSession({
     activeSessionId, activeSession, activeSessionMessageCount,
-    currentCode, isViewerVisible, isSyncing, sessions,
+    currentCode, isViewerVisible, isSyncing, authResolved, restoreResolved, sessions,
     createSession, getVisualizationCode, getLastCanvasCodeFromSession,
     saveVisualizationCode, getViewerVisibility, saveViewerVisibility,
     setCurrentCode, setViewerVisible, setActivePane,
@@ -399,7 +404,9 @@ export const ChatPanel: React.FC = () => {
   const quickPrompts = ['Show insulin', 'Display hemoglobin', 'Visualize DNA double helix', 'Show antibody structure'];
   const hasUserMessages = messages.some(m => m.type === 'user');
   const isOnlyWelcomeMessage = messages.length === 1 && messages[0].type === 'ai' && messages[0].content.includes('Welcome to NovoProtein AI');
-  const showCenteredLayout = !isLoading && !hasUserMessages && (messages.length === 0 || isOnlyWelcomeMessage);
+  const hasRenderableSession = !!activeSessionId || messages.length > 0;
+  const showRestoreLayout = (!authResolved || isRestoring || !restoreResolved) && !hasRenderableSession;
+  const showCenteredLayout = !showRestoreLayout && !isLoading && !hasUserMessages && (messages.length === 0 || isOnlyWelcomeMessage);
 
   // Viewer loading callbacks for result cards
   const onLoadAlphaFoldInViewer = useCallback(async (result: any, message?: any) => {
@@ -506,7 +513,7 @@ export const ChatPanel: React.FC = () => {
 
   return (
     <div className="h-full flex flex-col">
-      {!showCenteredLayout && (
+      {!showCenteredLayout && !showRestoreLayout && (
         <div className="px-3 py-1.5 border-b border-gray-200 flex-shrink-0">
           <div className="flex items-center space-x-2">
             <Sparkles className="w-3.5 h-3.5 text-blue-600" />
@@ -520,7 +527,9 @@ export const ChatPanel: React.FC = () => {
         </div>
       )}
 
-      {!showCenteredLayout ? (
+      {showRestoreLayout ? (
+        <PageRefreshSkeleton />
+      ) : !showCenteredLayout ? (
         <MessageList
           messages={messages as ExtendedMessage[]}
           isLoading={isLoading}

@@ -13,15 +13,35 @@ import { StructureElement, StructureProperties } from 'molstar/lib/mol-model/str
 import { CodeExecutor } from '../utils/codeExecutor';
 import { MolstarToolbar } from './MolstarToolbar';
 import { ConfidenceScorePanel } from './ConfidenceScorePanel';
+import { MolstarSkeleton } from './MolstarSkeleton';
 import { getCodeToExecute } from '../utils/codeUtils';
 
 export const MolstarViewer: React.FC = () => {
+  const MIN_SKELETON_MS = 300;
+  const SKELETON_FADE_MS = 200;
+  const isDev = typeof window !== 'undefined' && (
+    window.location.hostname === 'localhost' ||
+    window.location.hostname === '127.0.0.1'
+  );
+
   const containerRef = useRef<HTMLDivElement>(null);
   const lastExecutedCodeRef = useRef<string>('');
   const pluginRef = useRef<PluginUIContext | null>(null);
+  const initAttemptRef = useRef(0);
+  const initInProgressRef = useRef(false);
+  const mountedRef = useRef(true);
+  const loadingStartedAtRef = useRef<number | null>(null);
+  const loadingStateRef = useRef<'idle' | 'loading' | 'ending'>('idle');
   const [plugin, setPlugin] = useState<PluginUIContext | null>(null);
   const [isLoading, setIsLoading] = useState(false);
+  const [isLoadingExiting, setIsLoadingExiting] = useState(false);
   const [isInitialized, setIsInitialized] = useState(false);
+  const [initFailed, setInitFailed] = useState(false);
+  const [debugInit, setDebugInit] = useState<{ attempt: number; phase: string; at: string }>({
+    attempt: 0,
+    phase: 'idle',
+    at: '',
+  });
   const [pdbLoadError, setPdbLoadError] = useState<{ message: string; pdbId?: string } | null>(null);
   const { setPlugin: setStorePlugin, pendingCodeToRun, setPendingCodeToRun, setActivePane, setIsExecuting, currentCode, setCurrentCode, currentStructureOrigin } = useAppStore();
   const addSelection = useAppStore(state => state.addSelection);
@@ -53,6 +73,45 @@ export const MolstarViewer: React.FC = () => {
     return getCodeToExecute(currentCode, pendingCodeToRun, activeSessionId, getActiveSession);
   };
 
+  const markInitPhase = (phase: string): void => {
+    if (!isDev || !mountedRef.current) return;
+    setDebugInit({
+      attempt: initAttemptRef.current,
+      phase,
+      at: new Date().toLocaleTimeString(),
+    });
+  };
+
+  const beginLoading = (): void => {
+    if (loadingStateRef.current === 'loading') return;
+    loadingStateRef.current = 'loading';
+    loadingStartedAtRef.current = Date.now();
+    setIsLoadingExiting(false);
+    setIsLoading(true);
+  };
+
+  const endLoading = async (): Promise<void> => {
+    if (loadingStateRef.current !== 'loading') return;
+    loadingStateRef.current = 'ending';
+
+    const startedAt = loadingStartedAtRef.current ?? Date.now();
+    const elapsed = Date.now() - startedAt;
+    const remaining = Math.max(0, MIN_SKELETON_MS - elapsed);
+    if (remaining > 0) {
+      await new Promise((resolve) => setTimeout(resolve, remaining));
+    }
+
+    if (!mountedRef.current) return;
+    setIsLoadingExiting(true);
+    await new Promise((resolve) => setTimeout(resolve, SKELETON_FADE_MS));
+
+    if (!mountedRef.current) return;
+    setIsLoading(false);
+    setIsLoadingExiting(false);
+    loadingStartedAtRef.current = null;
+    loadingStateRef.current = 'idle';
+  };
+
   // Cleanup blob URLs from currentCode when session changes
   useEffect(() => {
     // Only clear if there's actually blob URL code
@@ -64,11 +123,19 @@ export const MolstarViewer: React.FC = () => {
   }, [activeSessionId]); // Run when session changes (intentionally not including currentCode to avoid loops)
 
   useEffect(() => {
+    // In React Strict Mode (dev), effect cleanup runs before setup reruns.
+    // Reset this flag on each setup so loading completion isn't blocked.
+    mountedRef.current = true;
+
     const initViewer = async () => {
-      if (!containerRef.current || isInitialized) return;
+      if (!containerRef.current || isInitialized || initInProgressRef.current) return;
 
       try {
-        setIsLoading(true);
+        initAttemptRef.current += 1;
+        initInProgressRef.current = true;
+        setInitFailed(false);
+        markInitPhase('start');
+        beginLoading();
         console.log('[Molstar] initViewer: start');
         console.log('[Molstar] initViewer: containerRef set?', !!containerRef.current);
 
@@ -108,6 +175,19 @@ export const MolstarViewer: React.FC = () => {
             ]
           },
         });
+
+        // StrictMode/dev can unmount before async init resolves.
+        // Dispose stale instances so they don't conflict with the next mount.
+        if (!mountedRef.current) {
+          try {
+            pluginInstance.dispose();
+          } catch (e) {
+            console.warn('[Molstar] stale init dispose failed', e);
+          }
+          return;
+        }
+
+        markInitPhase('plugin-ui-ready');
         clearTimeout(initTimeout);
         console.log('[Molstar] createPluginUI: success');
 
@@ -115,9 +195,7 @@ export const MolstarViewer: React.FC = () => {
         setPlugin(pluginInstance);
         setStorePlugin(pluginInstance);
         setIsInitialized(true);
-        // Clear loading overlay immediately so the viewer is visible.
-        // Code execution (below) runs in the background without blocking the UI.
-        setIsLoading(false);
+        markInitPhase('plugin-stored');
         console.log('[Molstar] initViewer: plugin stored and initialized');
 
         // Double-click detection built on top of the click event
@@ -162,6 +240,7 @@ export const MolstarViewer: React.FC = () => {
 
         // Priority 1: Run any queued code
         if (pendingCodeToRun && pendingCodeToRun.trim()) {
+          markInitPhase('running-pending-code');
           try {
             setIsExecuting(true);
             const exec = new CodeExecutor(pluginInstance);
@@ -179,7 +258,7 @@ export const MolstarViewer: React.FC = () => {
           } finally {
             setIsExecuting(false);
             setPendingCodeToRun(null);
-            setIsLoading(false); // Ensure loading state is cleared
+            await endLoading();
           }
           return;
         }
@@ -188,6 +267,7 @@ export const MolstarViewer: React.FC = () => {
         // getCode() uses shared utility that filters out blob URLs automatically
         const codeToExecute = getCode();
         if (codeToExecute) {
+          markInitPhase('running-restored-code');
           try {
             setIsExecuting(true);
             const exec = new CodeExecutor(pluginInstance);
@@ -209,18 +289,23 @@ export const MolstarViewer: React.FC = () => {
             console.error('[Molstar] execute code on mount failed', e);
           } finally {
             setIsExecuting(false);
-            setIsLoading(false); // Ensure loading state is cleared
+            await endLoading();
           }
           return;
         }
 
         // Viewer initialized - code will be executed when it becomes available
+        markInitPhase('initialized-waiting-code');
         console.log('[Molstar] initViewer: viewer initialized (waiting for code)');
         
       } catch (error) {
         console.error('[Molstar] initViewer: failed', error);
+        setInitFailed(true);
+        markInitPhase('failed');
       } finally {
-        setIsLoading(false);
+        await endLoading();
+        initInProgressRef.current = false;
+        markInitPhase('end');
         console.log('[Molstar] initViewer: end (loading=false)');
       }
     };
@@ -228,6 +313,7 @@ export const MolstarViewer: React.FC = () => {
     void initViewer();
 
     return () => {
+      mountedRef.current = false;
       console.log('[Molstar] cleanup: start');
       const instance = pluginRef.current;
       if (instance) {
@@ -244,6 +330,8 @@ export const MolstarViewer: React.FC = () => {
       if (containerRef.current?.firstChild) {
         containerRef.current.replaceChildren();
       }
+      initInProgressRef.current = false;
+      loadingStateRef.current = 'idle';
       console.log('[Molstar] cleanup: end');
     };
   }, []); // Only initialize once on mount
@@ -366,11 +454,11 @@ export const MolstarViewer: React.FC = () => {
           }
         `}</style>
         {isLoading && (
-          <div className="absolute inset-0 bg-gray-900 flex items-center justify-center z-10">
-            <div className="text-white text-center">
-              <div className="w-8 h-8 border-2 border-white border-t-transparent rounded-full animate-spin mx-auto mb-4"></div>
-              <div>Initializing Molstar Viewer...</div>
-            </div>
+          <div
+            className={`absolute inset-0 z-10 transition-opacity ${isLoadingExiting ? 'opacity-0' : 'opacity-100'}`}
+            style={{ transitionDuration: `${SKELETON_FADE_MS}ms` }}
+          >
+            <MolstarSkeleton message="Initializing Mol* viewer..." />
           </div>
         )}
 
@@ -409,12 +497,26 @@ export const MolstarViewer: React.FC = () => {
           </div>
         )}
 
-        {!isLoading && !isInitialized && (
+        {!isLoading && !isInitialized && initFailed && (
           <div className="absolute inset-0 bg-gray-900 flex items-center justify-center">
             <div className="text-white text-center">
               <div className="text-red-400 mb-2">Failed to initialize Molstar viewer</div>
               <div className="text-sm text-gray-400">Please refresh the page to try again</div>
             </div>
+          </div>
+        )}
+
+        {isDev && (
+          <div className="absolute left-2 top-2 z-30 rounded bg-black/55 px-2 py-1 text-[11px] text-gray-200 pointer-events-none">
+            <span className="font-mono">mol* init #{debugInit.attempt}</span>
+            <span className="mx-1">|</span>
+            <span>{debugInit.phase}</span>
+            {debugInit.at && (
+              <>
+                <span className="mx-1">|</span>
+                <span>{debugInit.at}</span>
+              </>
+            )}
           </div>
         )}
       </div>

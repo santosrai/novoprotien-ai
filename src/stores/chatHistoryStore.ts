@@ -151,6 +151,9 @@ interface ChatHistoryState {
   _lastSyncTime: number | null; // Track last sync time to prevent duplicate syncs
   _pendingMessages: PendingMessage[]; // Queue of messages that failed to save
   _isRetrying: boolean; // Flag to prevent concurrent retries
+  hasHydrated: boolean; // True after persisted state is rehydrated
+  isRestoring: boolean; // True while restoring chat state from backend
+  restoreResolved: boolean; // True once restore flow has completed
   
   // Core Session Actions
   createSession: (title?: string, messages?: Message[]) => Promise<string>; // Already async
@@ -389,6 +392,9 @@ export const useChatHistoryStore = create<ChatHistoryState>()(
       _lastSyncTime: null, // Track last sync timestamp
       _pendingMessages: [], // Queue of messages that failed to save
       _isRetrying: false, // Flag to prevent concurrent retries
+      hasHydrated: false,
+      isRestoring: false,
+      restoreResolved: false,
       
       createSession: async (title, messages = []) => {
         const sessionId = uuidv4();
@@ -1332,7 +1338,12 @@ export const useChatHistoryStore = create<ChatHistoryState>()(
         }
         
         // Mark as syncing
-        set({ _isSyncing: true, _lastSyncTime: now });
+        set({
+          _isSyncing: true,
+          _lastSyncTime: now,
+          isRestoring: true,
+          restoreResolved: false,
+        });
         
         // IMMEDIATELY clear sessions to prevent duplicates during sync
         set({ 
@@ -1344,7 +1355,7 @@ export const useChatHistoryStore = create<ChatHistoryState>()(
         
         if (!user) {
           console.log('User not authenticated, sessions cleared');
-          set({ _isSyncing: false });
+          set({ _isSyncing: false, isRestoring: false, restoreResolved: true });
           return;
         }
         
@@ -1358,7 +1369,7 @@ export const useChatHistoryStore = create<ChatHistoryState>()(
           // If no sessions in backend, keep empty array (already cleared above)
           if (backendSessions.length === 0) {
             console.log('[syncSessions] No sessions found in backend, initializing with empty chat history');
-            set({ _isSyncing: false });
+            set({ _isSyncing: false, isRestoring: false, restoreResolved: true });
             return;
           }
           
@@ -1439,7 +1450,7 @@ export const useChatHistoryStore = create<ChatHistoryState>()(
           });
         } finally {
           // Always clear syncing flag
-          set({ _isSyncing: false });
+          set({ _isSyncing: false, isRestoring: false, restoreResolved: true });
         }
       },
       
@@ -1804,99 +1815,104 @@ export const useChatHistoryStore = create<ChatHistoryState>()(
         // Don't persist internal sync flags
       }),
       onRehydrateStorage: () => (state) => {
-        if (state) {
-          // Always sync with backend after rehydration to ensure user-specific data
-          setTimeout(async () => {
-            try {
-              const user = useAuthStore.getState().user;
-              if (user && state.syncSessions) {
-                // Check if we just synced (e.g., from signin) - if so, skip to prevent duplicate
-                const now = Date.now();
-                if (state._lastSyncTime && (now - state._lastSyncTime) < 2000) {
-                  console.log('Skipping onRehydrateStorage sync - already synced recently');
-                } else {
-                  // Store current sessions with messages and titles as backup before clearing
-                  // This prevents messages and titles from disappearing during refresh
-                  const backupSessions = state.sessions.map(s => ({
-                    id: s.id,
-                    messages: s.messages || [],
-                    title: s.title,
-                  }));
-                  const previousActiveSessionId = state.activeSessionId;
+        if (!state) {
+          useChatHistoryStore.setState({ hasHydrated: true, isRestoring: false, restoreResolved: true });
+          return;
+        }
+        useChatHistoryStore.setState({ hasHydrated: true, isRestoring: true, restoreResolved: false });
+        // Always sync with backend after rehydration to ensure user-specific data
+        setTimeout(async () => {
+          try {
+            const user = useAuthStore.getState().user;
+            if (user && state.syncSessions) {
+              // Check if we just synced (e.g., from signin) - if so, skip to prevent duplicate
+              const now = Date.now();
+              if (state._lastSyncTime && (now - state._lastSyncTime) < 2000) {
+                console.log('Skipping onRehydrateStorage sync - already synced recently');
+              } else {
+                // Store current sessions with messages and titles as backup before clearing
+                // This prevents messages and titles from disappearing during refresh
+                const backupSessions = state.sessions.map(s => ({
+                  id: s.id,
+                  messages: s.messages || [],
+                  title: s.title,
+                }));
+                const previousActiveSessionId = state.activeSessionId;
+                
+                // Clear local sessions first, then sync from backend
+                // This ensures we start fresh and get only the current user's sessions
+                console.log('[onRehydrateStorage] Clearing sessions and syncing from backend...');
+                state.clearAllSessions();
+                
+                try {
+                  // Sync sessions (this will load messages for all sessions from backend)
+                  await state.syncSessions(previousActiveSessionId);
                   
-                  // Clear local sessions first, then sync from backend
-                  // This ensures we start fresh and get only the current user's sessions
-                  console.log('[onRehydrateStorage] Clearing sessions and syncing from backend...');
-                  state.clearAllSessions();
-                  
-                  try {
-                    // Sync sessions (this will load messages for all sessions from backend)
-                    await state.syncSessions(previousActiveSessionId);
-                    
-                    // Restore messages and titles from backup if backend doesn't have them
-                    // This prevents data loss during refresh
-                    const syncedSessions = state.sessions;
-                    let restoredCount = 0;
-                    for (const syncedSession of syncedSessions) {
-                      const backup = backupSessions.find(b => b.id === syncedSession.id);
-                      if (backup) {
-                        // Restore messages if backend doesn't have them
-                        if ((!syncedSession.messages || syncedSession.messages.length === 0) && backup.messages.length > 0) {
-                          console.log(`[onRehydrateStorage] Restoring ${backup.messages.length} messages from backup for session ${syncedSession.id}`);
-                          try {
-                            await state.updateSessionMessages(syncedSession.id, backup.messages);
-                            restoredCount++;
-                          } catch (err) {
-                            console.error(`[onRehydrateStorage] Failed to restore messages for session ${syncedSession.id}:`, err);
-                          }
-                        }
-                        // Restore title if backend has default/null title but we have a custom one
-                        const backendTitle = syncedSession.title || '';
-                        const backupTitle = backup.title || '';
-                        if ((backendTitle === 'New Chat' || !backendTitle) && backupTitle && backupTitle !== 'New Chat') {
-                          console.log(`[onRehydrateStorage] Restoring title "${backupTitle}" from backup for session ${syncedSession.id}`);
-                          state.updateSessionTitle(syncedSession.id, backupTitle).catch(err => {
-                            console.error(`[onRehydrateStorage] Failed to restore title for session ${syncedSession.id}:`, err);
-                          });
+                  // Restore messages and titles from backup if backend doesn't have them
+                  // This prevents data loss during refresh
+                  const syncedSessions = state.sessions;
+                  let restoredCount = 0;
+                  for (const syncedSession of syncedSessions) {
+                    const backup = backupSessions.find(b => b.id === syncedSession.id);
+                    if (backup) {
+                      // Restore messages if backend doesn't have them
+                      if ((!syncedSession.messages || syncedSession.messages.length === 0) && backup.messages.length > 0) {
+                        console.log(`[onRehydrateStorage] Restoring ${backup.messages.length} messages from backup for session ${syncedSession.id}`);
+                        try {
+                          await state.updateSessionMessages(syncedSession.id, backup.messages);
                           restoredCount++;
+                        } catch (err) {
+                          console.error(`[onRehydrateStorage] Failed to restore messages for session ${syncedSession.id}:`, err);
                         }
                       }
-                    }
-                    
-                    if (restoredCount > 0) {
-                      console.log(`[onRehydrateStorage] Restored data from backup for ${restoredCount} sessions`);
-                    }
-                  } catch (syncError) {
-                    console.error('[onRehydrateStorage] Failed to sync sessions from backend:', syncError);
-                    // If sync fails, we'll continue with empty sessions
-                    // The backup sessions are already in localStorage, so they'll be available
-                    // on the next successful sync. This prevents the app from crashing on refresh.
-                    if (backupSessions.length > 0) {
-                      console.log(`[onRehydrateStorage] Sync failed, but ${backupSessions.length} backup sessions are preserved in localStorage`);
+                      // Restore title if backend has default/null title but we have a custom one
+                      const backendTitle = syncedSession.title || '';
+                      const backupTitle = backup.title || '';
+                      if ((backendTitle === 'New Chat' || !backendTitle) && backupTitle && backupTitle !== 'New Chat') {
+                        console.log(`[onRehydrateStorage] Restoring title "${backupTitle}" from backup for session ${syncedSession.id}`);
+                        state.updateSessionTitle(syncedSession.id, backupTitle).catch(err => {
+                          console.error(`[onRehydrateStorage] Failed to restore title for session ${syncedSession.id}:`, err);
+                        });
+                        restoredCount++;
+                      }
                     }
                   }
+                  
+                  if (restoredCount > 0) {
+                    console.log(`[onRehydrateStorage] Restored data from backup for ${restoredCount} sessions`);
+                  }
+                } catch (syncError) {
+                  console.error('[onRehydrateStorage] Failed to sync sessions from backend:', syncError);
+                  // If sync fails, we'll continue with empty sessions
+                  // The backup sessions are already in localStorage, so they'll be available
+                  // on the next successful sync. This prevents the app from crashing on refresh.
+                  if (backupSessions.length > 0) {
+                    console.log(`[onRehydrateStorage] Sync failed, but ${backupSessions.length} backup sessions are preserved in localStorage`);
+                  }
                 }
-                
-                // Retry any pending messages after rehydration
-                if (state._pendingMessages && state._pendingMessages.length > 0) {
-                  console.log(`[onRehydrateStorage] Found ${state._pendingMessages.length} pending messages, retrying...`);
-                  setTimeout(() => {
-                    state.retryPendingMessages().catch(err => {
-                      console.error('[onRehydrateStorage] Failed to retry pending messages:', err);
-                    });
-                  }, 2000); // Wait a bit for connection to stabilize
-                }
-              } else if (!user) {
-                // If no user, clear all sessions
-                state.clearAllSessions();
               }
-            } catch (error) {
-              // Catch any unexpected errors to prevent app crash on refresh
-              console.error('[onRehydrateStorage] Unexpected error during rehydration:', error);
-              // Don't throw - allow app to continue with whatever state we have
+              
+              // Retry any pending messages after rehydration
+              if (state._pendingMessages && state._pendingMessages.length > 0) {
+                console.log(`[onRehydrateStorage] Found ${state._pendingMessages.length} pending messages, retrying...`);
+                setTimeout(() => {
+                  state.retryPendingMessages().catch(err => {
+                    console.error('[onRehydrateStorage] Failed to retry pending messages:', err);
+                  });
+                }, 2000); // Wait a bit for connection to stabilize
+              }
+            } else if (!user) {
+              // If no user, clear all sessions
+              state.clearAllSessions();
             }
-          }, 1000); // Delay to ensure auth is loaded
-        }
+          } catch (error) {
+            // Catch any unexpected errors to prevent app crash on refresh
+            console.error('[onRehydrateStorage] Unexpected error during rehydration:', error);
+            // Don't throw - allow app to continue with whatever state we have
+          } finally {
+            useChatHistoryStore.setState({ isRestoring: false, restoreResolved: true });
+          }
+        }, 1000); // Delay to ensure auth is loaded
       },
     }
   )

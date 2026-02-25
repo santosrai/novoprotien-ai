@@ -8,6 +8,7 @@ import { ResizablePanel } from './components/ResizablePanel';
 import { ErrorDashboard, useErrorDashboard } from './components/ErrorDashboard';
 import { FileBrowser } from './components/FileBrowser';
 import { FileEditor } from './components/FileEditor';
+import { MolstarSkeleton } from './components/MolstarSkeleton';
 import { PipelineCanvas, PipelineManager, PipelineExecution, PipelineThemeWrapper, PipelineProvider } from './components/pipeline-canvas';
 import { api, getAuthHeaders } from './utils/api';
 import { useAuthStore } from './stores/authStore';
@@ -149,12 +150,7 @@ function App() {
                          zIndex: activePane === 'viewer' ? 1 : 0 }}
               >
                 <Suspense fallback={
-                  <div className="h-full flex items-center justify-center text-gray-400">
-                    <div className="text-center">
-                      <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-gray-400 mx-auto mb-4"></div>
-                      <p>Loading molecular viewer...</p>
-                    </div>
-                  </div>
+                  <MolstarSkeleton message="Loading molecular viewer..." />
                 }>
                   <MolstarViewer />
                 </Suspense>
