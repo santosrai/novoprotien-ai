@@ -83,6 +83,21 @@ export const validatePDBId = (pdbId: string): boolean => {
   return /^[0-9][A-Za-z0-9]{3}$/.test(pdbId);
 };
 
+const RCSB_ENTRY_URL = 'https://data.rcsb.org/rest/v1/core/entry';
+
+/**
+ * Checks whether a PDB ID exists in the RCSB database.
+ * Uses the lightweight metadata endpoint to avoid downloading the full PDB file.
+ * @returns true if the entry exists, false if 404
+ * @throws on network or other errors (caller can catch and fall through to download)
+ */
+export const checkPDBExists = async (pdbId: string): Promise<boolean> => {
+  const id = pdbId.toUpperCase();
+  const response = await fetch(`${RCSB_ENTRY_URL}/${id}`);
+  if (response.status === 404) return false;
+  if (!response.ok) throw new Error(`RCSB entry check failed: ${response.status} ${response.statusText}`);
+  return true;
+};
 /**
  * Extracts PDB ID or name from text
  * Returns the PDB ID if found, or null otherwise

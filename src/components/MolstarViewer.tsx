@@ -22,6 +22,7 @@ export const MolstarViewer: React.FC = () => {
   const [plugin, setPlugin] = useState<PluginUIContext | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [isInitialized, setIsInitialized] = useState(false);
+  const [pdbLoadError, setPdbLoadError] = useState<{ message: string; pdbId?: string } | null>(null);
   const { setPlugin: setStorePlugin, pendingCodeToRun, setPendingCodeToRun, setActivePane, setIsExecuting, currentCode, setCurrentCode, currentStructureOrigin } = useAppStore();
   const addSelection = useAppStore(state => state.addSelection);
   const lastLoadedPdb = useAppStore(state => state.lastLoadedPdb);
@@ -30,6 +31,21 @@ export const MolstarViewer: React.FC = () => {
   // Helper function to check if code contains blob URLs (expired and should be ignored)
   const hasBlobUrl = (code: string): boolean => {
     return code.includes('blob:http://') || code.includes('blob:https://');
+  };
+
+  const PDB_NOT_FOUND_MARKER = 'not found in the RCSB database';
+  const setErrorIfPdbNotFound = (error: unknown): void => {
+    const message = error instanceof Error ? error.message : String(error);
+    if (!message.includes(PDB_NOT_FOUND_MARKER)) return;
+    const pdbIdMatch = message.match(/PDB ID "([^"]+)"/);
+    setPdbLoadError({ message, pdbId: pdbIdMatch?.[1] });
+  };
+  const clearErrorOnSuccess = (result: { success?: boolean; error?: string }): void => {
+    if (result?.success) setPdbLoadError(null);
+    else if (result?.error?.includes(PDB_NOT_FOUND_MARKER)) {
+      const pdbIdMatch = result.error.match(/PDB ID "([^"]+)"/);
+      setPdbLoadError({ message: result.error, pdbId: pdbIdMatch?.[1] });
+    }
   };
 
   // Get code to execute using shared utility
@@ -151,12 +167,14 @@ export const MolstarViewer: React.FC = () => {
             const exec = new CodeExecutor(pluginInstance);
             // Add timeout for code execution to prevent infinite loading
             const executionPromise = exec.executeCode(pendingCodeToRun);
-            const timeoutPromise = new Promise((_, reject) => 
+            const timeoutPromise = new Promise<never>((_, reject) =>
               setTimeout(() => reject(new Error('Code execution timeout after 30 seconds')), 30000)
             );
-            await Promise.race([executionPromise, timeoutPromise]);
+            const result = await Promise.race([executionPromise, timeoutPromise]);
+            clearErrorOnSuccess(result);
             setActivePane('viewer');
           } catch (e) {
+            setErrorIfPdbNotFound(e);
             console.error('[Molstar] pending code execution failed', e);
           } finally {
             setIsExecuting(false);
@@ -175,10 +193,11 @@ export const MolstarViewer: React.FC = () => {
             const exec = new CodeExecutor(pluginInstance);
             // Add timeout for code execution to prevent infinite loading
             const executionPromise = exec.executeCode(codeToExecute);
-            const timeoutPromise = new Promise((_, reject) => 
+            const timeoutPromise = new Promise<never>((_, reject) =>
               setTimeout(() => reject(new Error('Code execution timeout after 30 seconds')), 30000)
             );
-            await Promise.race([executionPromise, timeoutPromise]);
+            const result = await Promise.race([executionPromise, timeoutPromise]);
+            clearErrorOnSuccess(result);
             // Sync to store if it came from message
             if (!currentCode || currentCode.trim() === '') {
               setCurrentCode(codeToExecute);
@@ -186,6 +205,7 @@ export const MolstarViewer: React.FC = () => {
             setActivePane('viewer');
             lastExecutedCodeRef.current = codeToExecute;
           } catch (e) {
+            setErrorIfPdbNotFound(e);
             console.error('[Molstar] execute code on mount failed', e);
           } finally {
             setIsExecuting(false);
@@ -312,9 +332,11 @@ export const MolstarViewer: React.FC = () => {
       try {
         setIsExecuting(true);
         const exec = new CodeExecutor(plugin);
-        await exec.executeCode(code);
+        const result = await exec.executeCode(code);
+        clearErrorOnSuccess(result);
         lastExecutedCodeRef.current = code;
       } catch (e) {
+        setErrorIfPdbNotFound(e);
         console.error('[Molstar] re-execute currentCode failed', e);
       } finally {
         setIsExecuting(false);
@@ -356,6 +378,36 @@ export const MolstarViewer: React.FC = () => {
           ref={containerRef} 
           className="absolute inset-0 h-full w-full"
         />
+
+        {pdbLoadError && (
+          <div className="absolute inset-0 z-20 flex items-center justify-center bg-gray-900/80 p-4">
+            <div className="max-w-md rounded-lg bg-gray-800 p-4 shadow-xl ring-1 ring-gray-700">
+              <h3 className="mb-2 text-sm font-semibold text-red-400">Structure could not be loaded</h3>
+              <p className="mb-3 text-sm text-gray-200">
+                {pdbLoadError.pdbId ? (
+                  <>PDB ID <strong className="font-mono">{pdbLoadError.pdbId}</strong> was not found. The AI may have used an invalid or hallucinated ID.</>
+                ) : (
+                  <>This PDB ID doesn&apos;t exist. The AI may have hallucinated it.</>
+                )}
+              </p>
+              <a
+                href="https://www.rcsb.org/search"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="mb-3 inline-block text-sm text-blue-400 hover:underline"
+              >
+                Search RCSB PDB for a valid structure →
+              </a>
+              <button
+                type="button"
+                onClick={() => setPdbLoadError(null)}
+                className="w-full rounded bg-gray-700 py-2 text-sm font-medium text-white hover:bg-gray-600"
+              >
+                Dismiss
+              </button>
+            </div>
+          </div>
+        )}
 
         {!isLoading && !isInitialized && (
           <div className="absolute inset-0 bg-gray-900 flex items-center justify-center">

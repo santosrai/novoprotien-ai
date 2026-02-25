@@ -1,5 +1,5 @@
 import { PluginUIContext } from 'molstar/lib/mol-plugin-ui/context';
-import { getPDBUrl, validatePDBId } from './pdbUtils';
+import { getPDBUrl, validatePDBId, checkPDBExists } from './pdbUtils';
 import { getAuthHeaders } from './api';
 
 export interface ResidueSelector {
@@ -47,6 +47,19 @@ export const createMolstarBuilder = (
       // If it's not a URL, validate as PDB ID
       if (!isUrl && !validatePDBId(pdbIdOrUrl)) {
         throw new Error(`Invalid PDB ID or URL: ${pdbIdOrUrl}`);
+      }
+
+      // For PDB IDs, check existence in RCSB before downloading (avoids 404 on hallucinated IDs)
+      if (!isUrl) {
+        try {
+          const exists = await checkPDBExists(pdbIdOrUrl);
+          if (!exists) {
+            throw new Error(`PDB ID "${pdbIdOrUrl}" was not found in the RCSB database. It may be invalid or hallucinated. Search at https://www.rcsb.org/search`);
+          }
+        } catch (e) {
+          if (e instanceof Error && e.message.includes('not found in the RCSB database')) throw e;
+          // Network or other error: fall through to normal download
+        }
       }
 
       try {
