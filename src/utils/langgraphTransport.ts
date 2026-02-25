@@ -21,6 +21,14 @@ export interface LangGraphState extends Record<string, unknown> {
     type?: string;
     thinkingProcess?: unknown;
     toolsInvoked?: string[];
+    toolResults?: Array<{
+      name?: string;
+      result?: {
+        content?: string;
+        filename?: string;
+        error?: string;
+      };
+    }>;
   };
 }
 

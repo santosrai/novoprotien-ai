@@ -22,6 +22,16 @@ export interface UseLangGraphStreamParams {
   setViewerVisibleAndSave: (visible: boolean) => void;
   setActivePane: (pane: 'viewer' | 'editor' | 'files' | 'pipeline' | null) => void;
   routeAction: (responseData: any) => boolean;
+  loadSmilesResultInViewer: (payload: { content: string; filename: string }) => Promise<{ file_id: string; file_url: string; filename: string }>;
+}
+
+interface AppToolResult {
+  name?: string;
+  result?: {
+    content?: string;
+    filename?: string;
+    error?: string;
+  };
 }
 
 export function useLangGraphStream({
@@ -38,6 +48,7 @@ export function useLangGraphStream({
   setViewerVisibleAndSave,
   setActivePane,
   routeAction,
+  loadSmilesResultInViewer,
 }: UseLangGraphStreamParams) {
   const langGraphTransport = useMemo(() => createLangGraphTransport(), []);
   const langGraphInitialValues = useMemo(
@@ -104,7 +115,16 @@ export function useLangGraphStream({
       }
       lastProcessedValuesRef.current = state;
 
-      const appResult = (state as { appResult?: { text?: string; code?: string; agentId?: string; thinkingProcess?: unknown; toolsInvoked?: string[] } })?.appResult;
+      const appResult = (state as {
+        appResult?: {
+          text?: string;
+          code?: string;
+          agentId?: string;
+          thinkingProcess?: unknown;
+          toolsInvoked?: string[];
+          toolResults?: AppToolResult[];
+        };
+      })?.appResult;
       const msgs = (state as { messages?: Array<{ type: string; content: string }> })?.messages;
       const lastAi = msgs?.length ? msgs.filter((m) => m.type === 'ai').pop() : null;
       const content = lastAi?.content ?? appResult?.text ?? appResult?.code ?? '';
@@ -126,6 +146,46 @@ export function useLangGraphStream({
           ...(code && code.trim() && !code.includes('blob:http') && !code.includes('blob:https:')
             ? { threeDCanvas: { id: msgId, sceneData: code } }
             : {}),
+        } as ExtendedMessage);
+      }
+      const smilesToolResult = (appResult?.toolResults || []).find((toolResult) =>
+        toolResult?.name === 'show_smiles_in_viewer'
+      );
+      const smilesPayload = smilesToolResult?.result;
+      if (
+        smilesPayload &&
+        !smilesPayload.error &&
+        typeof smilesPayload.content === 'string' &&
+        smilesPayload.content.trim()
+      ) {
+        void (async () => {
+          try {
+            const smilesResult = await loadSmilesResultInViewer({
+              content: smilesPayload.content!,
+              filename: smilesPayload.filename || 'smiles_structure.pdb',
+            });
+            addMessage({
+              id: uuidv4(),
+              type: 'ai',
+              content: 'Loaded the SMILES molecule in the 3D viewer.',
+              timestamp: new Date(),
+              smilesResult,
+            } as ExtendedMessage);
+          } catch (err: any) {
+            addMessage({
+              id: uuidv4(),
+              type: 'ai',
+              content: err?.message || 'Failed to load SMILES structure in 3D viewer.',
+              timestamp: new Date(),
+            } as ExtendedMessage);
+          }
+        })();
+      } else if (smilesPayload?.error) {
+        addMessage({
+          id: uuidv4(),
+          type: 'ai',
+          content: smilesPayload.error,
+          timestamp: new Date(),
         } as ExtendedMessage);
       }
       if (appResult?.agentId) setLastAgentId(appResult.agentId);
@@ -176,7 +236,7 @@ export function useLangGraphStream({
       }
     }
     setIsLoading(false);
-  }, [stream.isLoading, stream.values, activeSessionId, addMessage, setLastAgentId, setCurrentCode, isLoading, stream.error, stream.messages, saveVisualizationCode, setIsExecuting, setPendingCodeToRun, setViewerVisibleAndSave, setActivePane]);
+  }, [stream.isLoading, stream.values, activeSessionId, addMessage, setLastAgentId, setCurrentCode, isLoading, stream.error, stream.messages, saveVisualizationCode, setIsExecuting, setPendingCodeToRun, setViewerVisibleAndSave, setActivePane, loadSmilesResultInViewer]);
 
   useEffect(() => {
     if (stream.error) {

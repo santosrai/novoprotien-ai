@@ -876,7 +876,11 @@ async def route_stream_sse(request: Request, user: Dict[str, Any] = Depends(get_
                     # Final AI message uses the same ID as the streamed chunks
                     lc_messages.append({"type": "ai", "id": ai_msg_id, "content": full_text})
                     # Include app result so frontend can handle agentId, code, actions, toolsInvoked, etc.
-                    app_result = {k: data.get(k) for k in ("agentId", "text", "code", "reason", "type", "thinkingProcess", "toolsInvoked") if data.get(k) is not None}
+                    app_result = {
+                        k: data.get(k)
+                        for k in ("agentId", "text", "code", "reason", "type", "thinkingProcess", "toolsInvoked", "toolResults")
+                        if data.get(k) is not None
+                    }
                     values_payload = _json.dumps({"messages": lc_messages, "appResult": app_result})
                     _log(f"[SSE] yielding values event, messages count: {len(lc_messages)}")
                     yield f"event: values\ndata: {values_payload}\n\n"

@@ -114,7 +114,7 @@ export const ChatPanel: React.FC = () => {
     setCurrentCode, setViewerVisible, setActivePane,
   });
 
-  const { loadUploadedFileInViewer, loadSmilesInViewer } = useViewerLoader({
+  const { loadUploadedFileInViewer, loadSmilesInViewer, loadSmilesResultInViewer } = useViewerLoader({
     plugin, activeSessionId, setIsExecuting, setCurrentCode,
     setCurrentStructureOrigin, setPendingCodeToRun, setViewerVisibleAndSave,
     setActivePane, saveVisualizationCode,
@@ -132,7 +132,7 @@ export const ChatPanel: React.FC = () => {
     rawMessages, activeSessionId, isLoading, setIsLoading,
     addMessage, setLastAgentId, setCurrentCode, saveVisualizationCode,
     setIsExecuting, setPendingCodeToRun, setViewerVisibleAndSave,
-    setActivePane, routeAction,
+    setActivePane, routeAction, loadSmilesResultInViewer,
   });
 
   const jobHandlers = useJobHandlers({

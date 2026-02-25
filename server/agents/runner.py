@@ -2248,6 +2248,8 @@ async def run_supervisor_stream(
     # ── Step 4: Stream sub-agent ──
     streamed_content: list = []
     tools_invoked: list = []
+    tool_calls_captured: list = []
+    tool_call_chunk_buffers: Dict[int, Dict[str, Any]] = {}
     last_state: Optional[Dict[str, Any]] = None
 
     try:
@@ -2262,18 +2264,40 @@ async def run_supervisor_stream(
                     streamed_content.append(content)
                     yield {"type": "content", "data": {"text": content}}
                 # Detect tool calls for tool pills
-                tool_name = _supervisor_tool_from_event(event)
+                tool_call = _supervisor_tool_call_from_event(event)
+                if tool_call:
+                    tool_calls_captured.append(tool_call)
+                chunk_entries = _supervisor_tool_call_chunks_from_event(event)
+                if chunk_entries:
+                    for chunk_entry in chunk_entries:
+                        idx = int(chunk_entry.get("index", 0) or 0)
+                        buf = tool_call_chunk_buffers.get(idx) or {"id": None, "name": None, "args_text": ""}
+                        if chunk_entry.get("id"):
+                            buf["id"] = chunk_entry.get("id")
+                        if chunk_entry.get("name"):
+                            buf["name"] = chunk_entry.get("name")
+                        args_fragment = chunk_entry.get("args")
+                        if isinstance(args_fragment, str):
+                            buf["args_text"] += args_fragment
+                        tool_call_chunk_buffers[idx] = buf
+                tool_name = tool_call.get("name") if isinstance(tool_call, dict) else _supervisor_tool_from_event(event)
                 if tool_name and tool_name not in tools_invoked:
                     tools_invoked.append(tool_name)
                     yield {"type": "tool_call", "data": {"name": tool_name}}
             print(f"[supervisor] astream done: {event_idx} events, {len(streamed_content)} content chunks")
 
-        if streamed_content:
+        if streamed_content and not tools_invoked:
             from langchain_core.messages import AIMessage as _AIMessage
             full_text = "".join(streamed_content)
             last_state = {"messages": lc_messages + [_AIMessage(content=full_text)]}
         else:
-            print(f"[supervisor] No streamed content, falling back to ainvoke for {agent_id}")
+            if streamed_content and tools_invoked:
+                print(
+                    f"[supervisor] tools invoked during stream ({tools_invoked}); "
+                    "running ainvoke once to preserve tool results in final state"
+                )
+            else:
+                print(f"[supervisor] No streamed content, falling back to ainvoke for {agent_id}")
             if hasattr(graph, "ainvoke"):
                 last_state = await graph.ainvoke(inputs, config=config)
             else:
@@ -2290,6 +2314,61 @@ async def run_supervisor_stream(
 
     # ── Step 5: Build result with agent + tools metadata ──
     result = react_state_to_app_result(last_state)
+    if tool_calls_captured or tool_call_chunk_buffers:
+        try:
+            try:
+                from .smiles_tool import process_tool_calls
+            except ImportError:
+                from agents.smiles_tool import process_tool_calls
+            normalized_calls = []
+            chunk_calls = []
+            for _, chunk_buf in sorted(tool_call_chunk_buffers.items(), key=lambda kv: kv[0]):
+                args_text = (chunk_buf.get("args_text") or "").strip()
+                if not args_text:
+                    continue
+                try:
+                    parsed_args = json.loads(args_text)
+                except json.JSONDecodeError:
+                    continue
+                chunk_calls.append({
+                    "id": chunk_buf.get("id", ""),
+                    "name": chunk_buf.get("name"),
+                    "args": parsed_args,
+                })
+            source_calls = chunk_calls if chunk_calls else tool_calls_captured
+            for tc in source_calls:
+                name = tc.get("name")
+                args = tc.get("args")
+                if not name or args is None:
+                    continue
+                if isinstance(args, dict) and not args.get("smiles") and name == "show_smiles_in_viewer":
+                    continue
+                normalized_calls.append({
+                    "id": tc.get("id", ""),
+                    "type": "function",
+                    "function": {
+                        "name": name,
+                        "arguments": args if isinstance(args, str) else json.dumps(args),
+                    },
+                })
+            stream_tool_results = process_tool_calls(normalized_calls) if normalized_calls else []
+            if stream_tool_results:
+                existing = result.get("toolResults") or []
+                merged = []
+                seen_names = set()
+                for tr in stream_tool_results:
+                    tname = tr.get("name")
+                    if tname:
+                        seen_names.add(tname)
+                    merged.append(tr)
+                for tr in existing:
+                    tname = tr.get("name")
+                    if tname and tname in seen_names:
+                        continue
+                    merged.append(tr)
+                result["toolResults"] = merged
+        except Exception as e:
+            print(f"[supervisor] failed to enrich stream tool results: {e}")
     result["agentId"] = agent_id
     result["toolsInvoked"] = tools_invoked
     print(f"[supervisor] complete: agent={agent_id}, tools={tools_invoked}, type={result.get('type')}")
@@ -2334,6 +2413,36 @@ def _supervisor_tool_from_event(event: Any) -> Optional[str]:
         if tool_calls and len(tool_calls) > 0:
             return tool_calls[0].get("name")
     return None
+
+
+def _supervisor_tool_call_from_event(event: Any) -> Optional[Dict[str, Any]]:
+    """Extract tool call (name+args) from a stream event when available."""
+    chunk = event
+    if isinstance(event, (list, tuple)) and len(event) >= 1:
+        chunk = event[0]
+    chunk_type = getattr(chunk, "type", None) or ""
+    if chunk_type in ("ai", "AIMessageChunk"):
+        tool_calls = getattr(chunk, "tool_calls", None)
+        if tool_calls and len(tool_calls) > 0 and isinstance(tool_calls[0], dict):
+            tc = tool_calls[0]
+            return {
+                "id": tc.get("id", ""),
+                "name": tc.get("name"),
+                "args": tc.get("args"),
+            }
+    return None
+
+
+def _supervisor_tool_call_chunks_from_event(event: Any) -> List[Dict[str, Any]]:
+    """Extract raw tool_call_chunks from stream events for incremental args reconstruction."""
+    chunk = event
+    if isinstance(event, (list, tuple)) and len(event) >= 1:
+        chunk = event[0]
+    chunk_type = getattr(chunk, "type", None) or ""
+    if chunk_type in ("ai", "AIMessageChunk"):
+        tool_call_chunks = getattr(chunk, "tool_call_chunks", None) or []
+        return [tc for tc in tool_call_chunks if isinstance(tc, dict)]
+    return []
 
 
 async def _build_supervisor_sub_agent(
