@@ -54,6 +54,12 @@ server/proteinmpnn_results/*
 server/rfdiffusion_results/*
 *.pdb
 server/uploads/pdb_index.json
+server/storage/**
+!server/storage/.gitkeep
+
+# Generated TestSprite artifacts (may contain secrets/runtime data)
+testsprite_tests/tmp/**
+!testsprite_tests/tmp/.gitkeep
 
 # Playwright
 /test-results/

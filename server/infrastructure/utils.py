@@ -1,9 +1,79 @@
 import json
 import os
+import hashlib
+import re
 from typing import Any, Dict, List, Optional
 
 
 LOG_AI = os.getenv("LOG_AI", "1") != "0"
+
+_REDACT_KEY_PATTERNS = (
+    "password",
+    "passwd",
+    "secret",
+    "api_key",
+    "apikey",
+    "token",
+    "authorization",
+    "cookie",
+    "proxy",
+)
+
+_SUMMARIZE_KEY_PATTERNS = (
+    "usertext",
+    "user_text",
+    "input",
+    "prompt",
+    "content",
+    "sequence",
+    "pdb",
+)
+
+_SECRET_VALUE_PATTERNS = (
+    re.compile(r"(^|[^A-Za-z0-9])sk-[A-Za-z0-9_\-]{12,}"),
+    re.compile(r"(^|[^A-Za-z0-9])gh[pousr]_[A-Za-z0-9]{20,}", re.IGNORECASE),
+    re.compile(r"^[A-Za-z0-9_\-]+\.[A-Za-z0-9_\-]+\.[A-Za-z0-9_\-]+$"),  # JWT-like
+    re.compile(r"://[^/\s:@]+:[^/\s@]+@"),  # credentialed URLs
+)
+
+
+def _hash_preview(value: str) -> str:
+    return hashlib.sha256(value.encode("utf-8", errors="ignore")).hexdigest()[:12]
+
+
+def _looks_like_secret(value: str) -> bool:
+    lowered = value.lower()
+    if any(marker in lowered for marker in ("api_key", "authorization", "bearer ")):
+        return True
+    return any(pattern.search(value) for pattern in _SECRET_VALUE_PATTERNS)
+
+
+def _redact_payload(payload: Any, key_hint: str = "") -> Any:
+    """Redact sensitive values while preserving useful debugging shape."""
+    key = (key_hint or "").lower()
+
+    if isinstance(payload, dict):
+        return {k: _redact_payload(v, str(k)) for k, v in payload.items()}
+    if isinstance(payload, list):
+        return [_redact_payload(v, key_hint) for v in payload]
+    if isinstance(payload, tuple):
+        return tuple(_redact_payload(v, key_hint) for v in payload)
+    if isinstance(payload, set):
+        return sorted(_redact_payload(v, key_hint) for v in payload)
+
+    if isinstance(payload, bytes):
+        return f"<redacted bytes len={len(payload)}>"
+
+    if isinstance(payload, str):
+        if any(pattern in key for pattern in _REDACT_KEY_PATTERNS):
+            return "<redacted>"
+        if any(pattern in key for pattern in _SUMMARIZE_KEY_PATTERNS):
+            return f"<redacted len={len(payload)} sha256={_hash_preview(payload)}>"
+        if _looks_like_secret(payload):
+            return "<redacted secret>"
+        return payload
+
+    return payload
 
 
 def _truncate(value: Any, max_len: int = 8000) -> str:
@@ -30,7 +100,8 @@ def log_line(section: str, message: Any) -> None:
     from datetime import datetime
 
     ts = datetime.utcnow().isoformat()
-    output = f"[{section}] {ts} {_truncate(message)}"
+    sanitized_message = _redact_payload(message)
+    output = f"[{section}] {ts} {_truncate(sanitized_message)}"
     try:
         print(output)
     except UnicodeEncodeError:

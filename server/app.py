@@ -244,12 +244,30 @@ def _rate_limit_key(request: Request) -> str:
     return get_remote_address(request)
 
 
+def _parse_cors_origins() -> list[str]:
+    """Load CORS origins with a safe default and no wildcard+credentials combination."""
+    configured = os.getenv("APP_ORIGIN", "").strip()
+    if not configured:
+        return ["http://localhost:5173", "http://127.0.0.1:5173"]
+
+    origins = [origin.strip() for origin in configured.split(",") if origin.strip()]
+    if "*" in origins:
+        filtered = [origin for origin in origins if origin != "*"]
+        log_line(
+            "cors_config_warning",
+            {"message": "Wildcard APP_ORIGIN is not allowed with credentials; ignoring '*'"}
+        )
+        return filtered or ["http://localhost:5173", "http://127.0.0.1:5173"]
+
+    return origins
+
+
 app = FastAPI()
 limiter = Limiter(key_func=_rate_limit_key)
 app.state.limiter = limiter
 app.add_middleware(SlowAPIMiddleware)
 
-allowed_origins = os.getenv("APP_ORIGIN", "*").split(",")
+allowed_origins = _parse_cors_origins()
 app.add_middleware(
     CORSMiddleware,
     allow_origins=allowed_origins,
@@ -913,7 +931,6 @@ async def alphafold_fold(request: Request, user: Dict[str, Any] = Depends(get_cu
         log_line("alphafold_request", {
             "jobId": job_id,
             "sequence_length": len(sequence) if sequence else 0,
-            "sequence_preview": sequence[:50] if sequence else None,
             "parameters": parameters,
             "client_ip": get_remote_address(request)
         })
@@ -951,7 +968,8 @@ async def alphafold_fold(request: Request, user: Dict[str, Any] = Depends(get_cu
             alphafold_handler.submit_folding_job({
                 "sequence": sequence,
                 "parameters": parameters,
-                "jobId": job_id
+                "jobId": job_id,
+                "userId": user.get("id"),
             })
         )
 
@@ -982,7 +1000,7 @@ async def alphafold_fold(request: Request, user: Dict[str, Any] = Depends(get_cu
 @limiter.limit("30/minute")
 async def alphafold_status(request: Request, job_id: str, user: Dict[str, Any] = Depends(get_current_user)):
     try:
-        status = alphafold_handler.get_job_status(job_id)
+        status = alphafold_handler.get_job_status(job_id, user_id=user.get("id"))
         return status
     except Exception as e:
         log_line("alphafold_status_failed", {"error": str(e), "trace": traceback.format_exc()})
@@ -996,7 +1014,7 @@ async def alphafold_status(request: Request, job_id: str, user: Dict[str, Any] =
 @limiter.limit("10/minute")
 async def alphafold_cancel(request: Request, job_id: str, user: Dict[str, Any] = Depends(get_current_user)):
     try:
-        result = alphafold_handler.cancel_job(job_id)
+        result = alphafold_handler.cancel_job(job_id, user_id=user.get("id"))
         return result
     except Exception as e:
         log_line("alphafold_cancel_failed", {"error": str(e), "trace": traceback.format_exc()})
@@ -1752,7 +1770,7 @@ async def rfdiffusion_design(request: Request, user: Dict[str, Any] = Depends(ge
 @limiter.limit("30/minute")
 async def rfdiffusion_status(request: Request, job_id: str, user: Dict[str, Any] = Depends(get_current_user)):
     try:
-        status = rfdiffusion_handler.get_job_status(job_id)
+        status = rfdiffusion_handler.get_job_status(job_id, user_id=user.get("id"))
         
         # If the job errored, generate an AI summary on the first status check
         if status.get("status") == "error" and "aiSummary" not in status:
@@ -1787,7 +1805,7 @@ async def rfdiffusion_status(request: Request, job_id: str, user: Dict[str, Any]
 @limiter.limit("10/minute")
 async def rfdiffusion_cancel(request: Request, job_id: str, user: Dict[str, Any] = Depends(get_current_user)):
     try:
-        result = rfdiffusion_handler.cancel_job(job_id)
+        result = rfdiffusion_handler.cancel_job(job_id, user_id=user.get("id"))
         return result
     except Exception as e:
         log_line("rfdiffusion_cancel_failed", {"error": str(e), "trace": traceback.format_exc()})

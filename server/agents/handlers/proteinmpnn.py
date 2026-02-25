@@ -77,6 +77,14 @@ class ProteinMPNNHandler:
             raise FileNotFoundError(f"Uploaded PDB {upload_id} not found")
         return Path(metadata["absolute_path"])
 
+    @staticmethod
+    def _path_is_within(path: Path, root: Path) -> bool:
+        try:
+            path.resolve().relative_to(root.resolve())
+            return True
+        except ValueError:
+            return False
+
     def _load_pdb_content(self, job_data: Dict[str, Any], user_id: Optional[str] = None) -> Tuple[str, Dict[str, Any]]:
         """Load PDB text and return with source metadata."""
         source_type = job_data.get("pdbSource") or job_data.get("source", {}).get("type")
@@ -107,7 +115,24 @@ class ProteinMPNNHandler:
                 "filename": path.name,
             }
         elif job_data.get("pdbPath"):
+            if not user_id:
+                raise ValueError("pdbPath source requires an authenticated user scope")
+
             path = Path(job_data["pdbPath"]).expanduser().resolve()
+            allowed_roots = [self._base_dir / "storage" / user_id]
+
+            # Keep backward compatibility for system jobs while blocking arbitrary filesystem access.
+            if user_id == "system":
+                allowed_roots.append(self._base_dir / "storage" / "system")
+
+            if not any(self._path_is_within(path, root) for root in allowed_roots):
+                raise ValueError("pdbPath is outside the allowed storage scope")
+
+            if path.suffix.lower() != ".pdb":
+                raise ValueError("pdbPath must reference a .pdb file")
+            if not path.exists() or not path.is_file():
+                raise FileNotFoundError("pdbPath file not found")
+
             pdb_text = path.read_text()
             source_meta = {
                 "type": "path",
