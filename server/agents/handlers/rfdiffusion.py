@@ -43,6 +43,7 @@ class RFdiffusionHandler:
         self.rfdiffusion_client = None  # Initialize when needed
         self.active_jobs = {}  # Track running jobs
         self.job_results = {}  # Store completed job results
+        self.job_owners = {}  # user_id by job_id
     
     def _get_rfdiffusion_client(self) -> RFdiffusionClient:
         """Get or create RFdiffusion client"""
@@ -311,6 +312,10 @@ class RFdiffusionHandler:
         """
         job_id = job_data.get("jobId")
         parameters = job_data.get("parameters", {})
+        user_id = job_data.get("userId")
+
+        if user_id and job_id:
+            self.job_owners[job_id] = str(user_id)
         
         if not job_id:
             return {
@@ -340,7 +345,6 @@ class RFdiffusionHandler:
             self.active_jobs[job_id] = "running"
             
             # Resolve PDB content from multiple sources
-            user_id = job_data.get("userId")
             logger.info(f"Resolving PDB content for job {job_id}, parameters keys: {list(parameters.keys())}, user_id: {user_id}")
             logger.info(f"Parameters uploadId: {parameters.get('uploadId')}, upload_file_id: {parameters.get('upload_file_id')}, pdb_id: {parameters.get('pdb_id')}")
             pdb_content = self._resolve_pdb_content(parameters, user_id=user_id)
@@ -402,8 +406,8 @@ class RFdiffusionHandler:
                 print(f"[RFdiffusion Handler] Design mode: {design_mode}")
                 print(f"[RFdiffusion Handler] Client params keys: {list(client_params.keys())}")
                 for key, value in client_params.items():
-                    if key == "input_pdb" and isinstance(value, str) and len(value) > 200:
-                        print(f"[RFdiffusion Handler]   {key}: {type(value).__name__} (length: {len(value)}, preview: {value[:100]}...)")
+                    if key == "input_pdb" and isinstance(value, str):
+                        print(f"[RFdiffusion Handler]   {key}: {type(value).__name__} (length: {len(value)})")
                     elif isinstance(value, (dict, list)):
                         print(f"[RFdiffusion Handler]   {key}: {type(value).__name__} = {value}")
                     else:
@@ -604,9 +608,16 @@ class RFdiffusionHandler:
                 "errorCode": "INTERNAL_ERROR",
             }
     
-    def get_job_status(self, job_id: str) -> Dict[str, Any]:
+    def get_job_status(self, job_id: str, user_id: Optional[str] = None) -> Dict[str, Any]:
         """Get status of a running job"""
         status = self.active_jobs.get(job_id, "not_found")
+        owner_id = self.job_owners.get(job_id)
+        if user_id and status != "not_found" and owner_id != user_id:
+            return {
+                "job_id": job_id,
+                "status": "not_found"
+            }
+
         response = {
             "job_id": job_id,
             "status": status
@@ -627,7 +638,7 @@ class RFdiffusionHandler:
             # Check if result file exists in storage (job may have completed before restart)
             try:
                 from ...domain.storage.file_access import get_file_metadata
-                file_metadata = get_file_metadata(job_id)
+                file_metadata = get_file_metadata(job_id, user_id=user_id) if user_id else get_file_metadata(job_id)
                 if file_metadata and file_metadata.get("file_type") == "rfdiffusion":
                     # Result file exists, try to load it
                     from pathlib import Path
@@ -662,8 +673,15 @@ class RFdiffusionHandler:
         
         return response
     
-    def cancel_job(self, job_id: str) -> Dict[str, Any]:
+    def cancel_job(self, job_id: str, user_id: Optional[str] = None) -> Dict[str, Any]:
         """Cancel a running job"""
+        owner_id = self.job_owners.get(job_id)
+        if user_id and owner_id != user_id:
+            return {
+                "job_id": job_id,
+                "status": "not_found"
+            }
+
         if job_id in self.active_jobs:
             self.active_jobs[job_id] = "cancelled"
             return {
