@@ -17,12 +17,12 @@ except ImportError:
 try:
     from ..infrastructure.utils import log_line, get_text_from_completion, strip_code_fences, trim_history, extract_code_and_text
     from ..infrastructure.safety import violates_whitelist, ensure_clear_on_change
-    from ..domain.protein.uniprot import search_uniprot
+    from ..domain.protein.uniprot import search_uniprot, fetch_uniprot_entry
     from .runner_utils import map_model_id
 except ImportError:
     from infrastructure.utils import log_line, get_text_from_completion, strip_code_fences, trim_history, extract_code_and_text
     from infrastructure.safety import violates_whitelist, ensure_clear_on_change
-    from domain.protein.uniprot import search_uniprot
+    from domain.protein.uniprot import search_uniprot, fetch_uniprot_entry
     from agents.runner_utils import map_model_id
 
 
@@ -1735,7 +1735,16 @@ async def run_agent(
                 )
             text = "\n".join(lines) if items else "No UniProt matches found."
         log_line("agent:uniprot:res", {"count": len(items), "fmt": fmt, "term": term})
-        return {"type": "text", "text": text}
+        # Return structured data alongside text for frontend card rendering
+        return {
+            "type": "text",
+            "text": text,
+            "uniprotSearchResult": {
+                "query": term,
+                "results": items,
+                "count": len(items),
+            },
+        }
 
     if agent.get("kind") == "code":
         return await _run_code_agent(
@@ -2214,6 +2223,64 @@ async def run_supervisor_stream(
         }}
         return
 
+    # ── Deterministic UniProt search (no LLM call) ──
+    if agent_id in ("uniprot_search", "uniprot-search"):
+        import re as _re
+        m_term = _re.search(r"(?:search|find)\s+(.+?)\s+(?:in\s+uniprot|protein)", user_text, flags=_re.I)
+        term = (m_term.group(1) if m_term else user_text).strip()
+        m_size = _re.search(r"(?:show|top|first)\s+(\d+)", user_text, flags=_re.I)
+        size = int(m_size.group(1)) if m_size else 5
+        # Check if this is a fetch request for a single accession
+        m_fetch = _re.search(r"(?:fetch|get|show)\s+(?:uniprot\s+(?:id\s+)?)?([A-Z0-9]{6,10})\b", user_text, flags=_re.I)
+        if m_fetch:
+            accession = m_fetch.group(1).upper()
+            try:
+                entry = await fetch_uniprot_entry(accession)
+                desc = entry.get("function_description") or ""
+                pdb_list = ", ".join(entry.get("pdb_ids", [])[:5]) or "none"
+                text = (
+                    f"**{entry.get('protein', 'Unknown')}** ({accession})\n\n"
+                    f"Organism: {entry.get('organism', '-')}\n"
+                    f"Length: {entry.get('length', '-')} aa\n"
+                    f"Gene: {', '.join(entry.get('gene_names', [])) or '-'}\n"
+                    f"PDB: {pdb_list}\n"
+                )
+                if desc:
+                    text += f"\nFunction: {desc[:300]}"
+                yield {"type": "content", "data": {"text": text}}
+                yield {"type": "complete", "data": {
+                    "type": "text",
+                    "text": text,
+                    "agentId": "uniprot-search",
+                    "toolsInvoked": ["fetch_uniprot_entry"],
+                    "uniprotDetailResult": entry,
+                }}
+            except Exception as e:
+                yield {"type": "error", "data": {"error": f"Failed to fetch UniProt entry {accession}: {e}"}}
+            return
+        # Search
+        try:
+            items = await search_uniprot(term, size=size)
+            count = len(items)
+            text = f"Found {count} UniProt result{'s' if count != 1 else ''} for \"{term}\"."
+            if not items:
+                text = f"No UniProt matches found for \"{term}\"."
+            yield {"type": "content", "data": {"text": text}}
+            yield {"type": "complete", "data": {
+                "type": "text",
+                "text": text,
+                "agentId": "uniprot-search",
+                "toolsInvoked": ["search_uniprot"],
+                "uniprotSearchResult": {
+                    "query": term,
+                    "results": items,
+                    "count": count,
+                },
+            }}
+        except Exception as e:
+            yield {"type": "error", "data": {"error": f"UniProt search failed: {e}"}}
+        return
+
     # ── Step 2: Build sub-agent graph ──
     try:
         graph = await _build_supervisor_sub_agent(agent_id, model, api_key,
@@ -2247,6 +2314,7 @@ async def run_supervisor_stream(
 
     # ── Step 4: Stream sub-agent ──
     streamed_content: list = []
+    streamed_token_usage: Optional[Dict[str, int]] = None
     tools_invoked: list = []
     tool_calls_captured: list = []
     tool_call_chunk_buffers: Dict[int, Dict[str, Any]] = {}
@@ -2263,6 +2331,9 @@ async def run_supervisor_stream(
                 if isinstance(content, str) and content:
                     streamed_content.append(content)
                     yield {"type": "content", "data": {"text": content}}
+                token_usage = _supervisor_token_usage_from_event(event)
+                if token_usage:
+                    streamed_token_usage = token_usage
                 # Detect tool calls for tool pills
                 tool_call = _supervisor_tool_call_from_event(event)
                 if tool_call:
@@ -2314,6 +2385,10 @@ async def run_supervisor_stream(
 
     # ── Step 5: Build result with agent + tools metadata ──
     result = react_state_to_app_result(last_state)
+    if streamed_token_usage and not result.get("tokenUsage"):
+        result["tokenUsage"] = streamed_token_usage
+    if not result.get("tokenUsage"):
+        result["tokenUsage"] = {"inputTokens": 0, "outputTokens": 0, "totalTokens": 0}
     if tool_calls_captured or tool_call_chunk_buffers:
         try:
             try:
@@ -2396,6 +2471,92 @@ def _supervisor_content_from_event(event: Any) -> Optional[str]:
         if event.get("type") not in ("ai", "AIMessageChunk", None):
             return None
         return event.get("content") or (event.get("chunk") or {}).get("content")
+    return None
+
+
+def _normalize_supervisor_token_usage(raw: Any) -> Optional[Dict[str, int]]:
+    if not isinstance(raw, dict):
+        return None
+
+    def _to_int(value: Any) -> Optional[int]:
+        try:
+            if value is None:
+                return None
+            return int(value)
+        except (TypeError, ValueError):
+            return None
+
+    input_tokens = _to_int(raw.get("input_tokens"))
+    if input_tokens is None:
+        input_tokens = _to_int(raw.get("prompt_tokens"))
+    output_tokens = _to_int(raw.get("output_tokens"))
+    if output_tokens is None:
+        output_tokens = _to_int(raw.get("completion_tokens"))
+    total_tokens = _to_int(raw.get("total_tokens"))
+
+    if input_tokens is None and output_tokens is None and total_tokens is None:
+        return None
+
+    if input_tokens is None:
+        if total_tokens is not None and output_tokens is not None:
+            input_tokens = max(total_tokens - output_tokens, 0)
+        else:
+            input_tokens = 0
+    if output_tokens is None:
+        if total_tokens is not None and input_tokens is not None:
+            output_tokens = max(total_tokens - input_tokens, 0)
+        else:
+            output_tokens = 0
+    if total_tokens is None:
+        total_tokens = input_tokens + output_tokens
+
+    return {
+        "inputTokens": input_tokens,
+        "outputTokens": output_tokens,
+        "totalTokens": total_tokens,
+    }
+
+
+def _supervisor_token_usage_from_event(event: Any) -> Optional[Dict[str, int]]:
+    chunk: Any = event
+    metadata: Any = None
+    if isinstance(event, (list, tuple)):
+        if len(event) >= 1:
+            chunk = event[0]
+        if len(event) >= 2:
+            metadata = event[1]
+
+    candidates: List[Any] = [chunk, metadata]
+    if isinstance(event, dict):
+        candidates.append(event)
+
+    for candidate in candidates:
+        if candidate is None:
+            continue
+        if isinstance(candidate, dict):
+            normalized = _normalize_supervisor_token_usage(
+                candidate.get("usage_metadata")
+                or candidate.get("usageMetadata")
+                or candidate.get("token_usage")
+            )
+            if normalized:
+                return normalized
+            response_metadata = candidate.get("response_metadata")
+            if isinstance(response_metadata, dict):
+                normalized = _normalize_supervisor_token_usage(response_metadata.get("token_usage"))
+                if normalized:
+                    return normalized
+            continue
+
+        usage_metadata = getattr(candidate, "usage_metadata", None)
+        normalized = _normalize_supervisor_token_usage(usage_metadata)
+        if normalized:
+            return normalized
+        response_metadata = getattr(candidate, "response_metadata", None)
+        if isinstance(response_metadata, dict):
+            normalized = _normalize_supervisor_token_usage(response_metadata.get("token_usage"))
+            if normalized:
+                return normalized
     return None
 
 

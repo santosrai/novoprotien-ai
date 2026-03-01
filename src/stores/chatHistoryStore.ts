@@ -35,6 +35,11 @@ export interface Message {
   // Supervisor agent metadata
   agentId?: string;
   toolsInvoked?: string[];
+  tokenUsage?: {
+    inputTokens: number;
+    outputTokens: number;
+    totalTokens: number;
+  };
   // Extended fields for AI messages
   thinkingProcess?: ThinkingProcess;
   alphafoldResult?: {
@@ -78,6 +83,32 @@ export interface Message {
     file_url: string;
     filename: string;
     smiles?: string;
+  };
+  uniprotSearchResult?: {
+    query: string;
+    results: Array<{
+      accession: string;
+      id: string;
+      protein: string | null;
+      organism: string | null;
+      length: number | null;
+      reviewed: boolean;
+      sequence: string;
+      pdb_ids: string[];
+    }>;
+    count: number;
+  };
+  uniprotDetailResult?: {
+    accession: string;
+    id: string;
+    protein: string | null;
+    organism: string | null;
+    length: number | null;
+    sequence: string;
+    pdb_ids: string[];
+    gene_names: string[];
+    function_description: string | null;
+    reviewed: boolean;
   };
   // File attachment for user messages (deprecated - use attachments array)
   uploadedFile?: {
@@ -339,6 +370,7 @@ const createSaveMessageToBackend = (getSessions: () => ChatSession[]) => async (
         metadata: {
           jobId: message.jobId,
           jobType: message.jobType,
+          tokenUsage: message.tokenUsage,
           thinkingProcess: message.thinkingProcess,
           alphafoldResult: message.alphafoldResult,
           proteinmpnnResult: message.proteinmpnnResult,
@@ -452,6 +484,7 @@ export const useChatHistoryStore = create<ChatHistoryState>()(
                     metadata: {
                       jobId: message.jobId,
                       jobType: message.jobType,
+                      tokenUsage: message.tokenUsage,
                       thinkingProcess: message.thinkingProcess,
                       alphafoldResult: message.alphafoldResult,
                       proteinmpnnResult: message.proteinmpnnResult,
@@ -1073,6 +1106,7 @@ export const useChatHistoryStore = create<ChatHistoryState>()(
                   metadata: {
                     jobId: message.jobId,
                     jobType: message.jobType,
+                    tokenUsage: message.tokenUsage,
                     thinkingProcess: message.thinkingProcess,
                     alphafoldResult: message.alphafoldResult,
                     proteinmpnnResult: message.proteinmpnnResult,
@@ -1519,6 +1553,9 @@ export const useChatHistoryStore = create<ChatHistoryState>()(
                 // Spread metadata fields to top level
                 ...(metadata.jobId && { jobId: metadata.jobId }),
                 ...(metadata.jobType && { jobType: metadata.jobType }),
+                ...(metadata.tokenUsage != null &&
+                    typeof metadata.tokenUsage === 'object' &&
+                    { tokenUsage: metadata.tokenUsage }),
                 ...(thinkingProcess && { thinkingProcess }),
                 // Check for result objects - use != null to check for both null and undefined
                 ...(metadata.alphafoldResult != null && { alphafoldResult: metadata.alphafoldResult }),

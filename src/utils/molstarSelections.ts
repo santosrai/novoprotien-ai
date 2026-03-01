@@ -16,6 +16,7 @@ import { compile } from 'molstar/lib/mol-script/runtime/query/compiler';
 import { Color } from 'molstar/lib/mol-util/color';
 import { QueryContext } from 'molstar/lib/mol-model/structure/query/context';
 import { Bundle } from 'molstar/lib/mol-model/structure/structure/element/bundle';
+import { OrderedSet } from 'molstar/lib/mol-data/int';
 
 // Standard amino acids (3-letter codes)
 export const AMINO_ACIDS = [
@@ -308,6 +309,35 @@ export function getSelectionLoci(plugin: PluginUIContext) {
   const entries = Array.from(plugin.managers.structure.selection.entries.values());
   if (entries.length === 0) return undefined;
   return entries[0]?.selection;
+}
+
+/**
+ * Get unique chain IDs represented by the current structure selection.
+ */
+export function getSelectedChainIds(plugin: PluginUIContext): string[] {
+  const chainIds = new Set<string>();
+  const entries = Array.from(plugin.managers.structure.selection.entries.values());
+
+  for (const entry of entries) {
+    const loci = entry.selection;
+    if (!StructureElement.Loci.is(loci) || StructureElement.Loci.isEmpty(loci)) continue;
+
+    for (const element of loci.elements) {
+      const unit = element.unit;
+      if (unit.kind !== 0) continue;
+      const indices = element.indices;
+      const chainIdColumn = unit.model.atomicHierarchy.chains.label_asym_id;
+      const chainAtomSegments = unit.model.atomicHierarchy.chainAtomSegments;
+
+      for (let i = 0, il = OrderedSet.size(indices); i < il; i++) {
+        const elementIdx = OrderedSet.getAt(indices, i);
+        const chainSegIdx = chainAtomSegments.index[elementIdx];
+        chainIds.add(chainIdColumn.value(chainSegIdx));
+      }
+    }
+  }
+
+  return Array.from(chainIds).sort();
 }
 
 // ============================================

@@ -56,12 +56,12 @@ def test_execute_show_smiles_in_viewer_invalid_args():
 
 @patch("server.agents.smiles_tool.smiles_to_structure")
 def test_process_tool_calls_smiles_success(mock_structure):
-    mock_structure.return_value = ("CONTENT", "smiles_structure.pdb")
+    mock_structure.return_value = ("CONTENT", "smiles_structure.sdf")
     tool_calls = [
         {
             "function": {
                 "name": "show_smiles_in_viewer",
-                "arguments": json.dumps({"smiles": "CCO", "format": "pdb"}),
+                "arguments": json.dumps({"smiles": "CCO", "format": "sdf"}),
             }
         },
     ]
@@ -69,8 +69,8 @@ def test_process_tool_calls_smiles_success(mock_structure):
     assert len(results) == 1
     assert results[0]["name"] == "show_smiles_in_viewer"
     assert results[0]["result"]["content"] == "CONTENT"
-    assert results[0]["result"]["filename"] == "smiles_structure.pdb"
-    mock_structure.assert_called_once_with("CCO", "pdb")
+    assert results[0]["result"]["filename"] == "smiles_structure.sdf"
+    mock_structure.assert_called_once_with("CCO", "sdf")
 
 
 @patch("server.agents.smiles_tool.smiles_to_structure")
@@ -80,7 +80,7 @@ def test_process_tool_calls_smiles_error_returns_error_result(mock_structure):
         {
             "function": {
                 "name": "show_smiles_in_viewer",
-                "arguments": json.dumps({"smiles": "invalid", "format": "pdb"}),
+                "arguments": json.dumps({"smiles": "invalid", "format": "sdf"}),
             }
         },
     ]

@@ -118,7 +118,7 @@ try {
     try {
       const res = await api.post<{ content: string; filename: string; format: string }>(
         '/smiles/to-structure',
-        { smiles: smilesData.smiles.trim(), format: 'pdb' }
+        { smiles: smilesData.smiles.trim(), format: smilesData.format || 'sdf' }
       );
       response = res.data;
     } catch (err: any) {
@@ -135,21 +135,21 @@ try {
     try {
       const storeRes = await api.post<{ file_info: { file_id: string; filename: string } }>(
         '/upload/pdb/from-content',
-        { pdbContent: response.content, filename: response.filename || 'smiles_structure.pdb' }
+        { pdbContent: response.content, filename: response.filename || 'smiles_structure.sdf' }
       );
       fileId = storeRes.data?.file_info?.file_id;
       apiUrl = fileId ? `/api/upload/pdb/${fileId}` : '';
-      if (!fileId || !apiUrl) throw new Error('Failed to store SMILES PDB');
+      if (!fileId || !apiUrl) throw new Error('Failed to store SMILES structure');
       window.dispatchEvent(new CustomEvent('session-file-added'));
     } catch (err: any) {
-      console.error('[ChatPanel] Failed to store SMILES PDB:', err);
+      console.error('[ChatPanel] Failed to store SMILES structure:', err);
       throw new Error(err?.response?.data?.detail || err?.message || 'Failed to store structure.');
     }
 
     setViewerVisibleAndSave(true);
     setActivePane('viewer');
 
-    const filename = response.filename || 'smiles_structure.pdb';
+    const filename = response.filename || 'smiles_structure.sdf';
     const fileInfo = { file_id: fileId, file_url: apiUrl, filename };
 
     const readyPlugin = await waitForPlugin();
@@ -217,21 +217,21 @@ try {
     try {
       const storeRes = await api.post<{ file_info: { file_id: string; filename: string } }>(
         '/upload/pdb/from-content',
-        { pdbContent: content, filename: filename || 'smiles_structure.pdb' }
+        { pdbContent: content, filename: filename || 'smiles_structure.sdf' }
       );
       fileId = storeRes.data?.file_info?.file_id;
       apiUrl = fileId ? `/api/upload/pdb/${fileId}` : '';
-      if (!fileId || !apiUrl) throw new Error('Failed to store SMILES PDB');
+      if (!fileId || !apiUrl) throw new Error('Failed to store SMILES structure');
       window.dispatchEvent(new CustomEvent('session-file-added'));
     } catch (err: any) {
-      console.error('[ChatPanel] Failed to store SMILES PDB:', err);
+      console.error('[ChatPanel] Failed to store SMILES structure:', err);
       throw new Error(err?.response?.data?.detail || err?.message || 'Failed to store structure.');
     }
 
     setViewerVisibleAndSave(true);
     setActivePane('viewer');
 
-    const fileInfo = { file_id: fileId, file_url: apiUrl, filename: filename || 'smiles_structure.pdb' };
+    const fileInfo = { file_id: fileId, file_url: apiUrl, filename: filename || 'smiles_structure.sdf' };
     const readyPlugin = await waitForPlugin();
     if (!readyPlugin) {
       setCurrentCode(`// SMILES structure stored as ${fileInfo.filename}; load when viewer is ready:\ntry {\n  await builder.clearStructure();\n  await builder.loadStructure('${apiUrl}');\n  await builder.addBallAndStickRepresentation({ color: 'element' });\n  builder.focusView();\n} catch (e) { console.error(e); }`);
@@ -287,10 +287,64 @@ try {
     }
   };
 
+  const loadPdbInViewer = async (pdbId: string) => {
+    const rcsbUrl = `https://files.rcsb.org/download/${pdbId.toUpperCase()}.cif`;
+
+    const code = `
+try {
+  await builder.clearStructure();
+  await builder.loadStructure('${rcsbUrl}');
+  await builder.addCartoonRepresentation({ color: 'secondary-structure' });
+  builder.focusView();
+  console.log('PDB ${pdbId.toUpperCase()} loaded successfully');
+} catch (e) {
+  console.error('Failed to load PDB:', e);
+}`;
+
+    setCurrentStructureOrigin({
+      type: 'pdb' as any,
+      filename: `${pdbId.toUpperCase()}.cif`,
+      metadata: { pdb_id: pdbId.toUpperCase() },
+    });
+
+    setCurrentCode('');
+    setViewerVisibleAndSave(true);
+    setActivePane('viewer');
+
+    const readyPlugin = await waitForPlugin();
+
+    if (!readyPlugin) {
+      setCurrentCode(code);
+      setPendingCodeToRun(code);
+      return;
+    }
+
+    try {
+      setIsExecuting(true);
+      const { createMolstarBuilder } = await import('../utils/molstarBuilder');
+      const builder = createMolstarBuilder(readyPlugin);
+      await builder.clearStructure();
+      await builder.loadStructure(rcsbUrl);
+      await builder.addCartoonRepresentation({ color: 'secondary-structure' });
+      builder.focusView();
+
+      setCurrentCode(code);
+      if (activeSessionId) {
+        saveVisualizationCode(activeSessionId, code);
+      }
+    } catch (err) {
+      console.error(`[ViewerLoader] Failed to load PDB ${pdbId}:`, err);
+      alert(`Failed to load PDB ${pdbId} in 3D viewer. Please try again.`);
+    } finally {
+      setIsExecuting(false);
+    }
+  };
+
   return {
     loadUploadedFileInViewer,
     loadSmilesInViewer,
     loadSmilesResultInViewer,
+    loadPdbInViewer,
     waitForPlugin,
   };
 }

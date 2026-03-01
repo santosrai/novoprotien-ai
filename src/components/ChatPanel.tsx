@@ -84,6 +84,7 @@ export const ChatPanel: React.FC = () => {
   const [showDiffDockDialog, setShowDiffDockDialog] = useState(false);
   const [showRFdiffusionDialog, setShowRFdiffusionDialog] = useState(false);
   const [rfdiffusionData, setRfdiffusionData] = useState<any>(null);
+  const [retryTargetMessageId, setRetryTargetMessageId] = useState<string | null>(null);
 
   // Progress and mutations
   const alphafoldProgress = useAlphaFoldProgress();
@@ -114,7 +115,7 @@ export const ChatPanel: React.FC = () => {
     setCurrentCode, setViewerVisible, setActivePane,
   });
 
-  const { loadUploadedFileInViewer, loadSmilesInViewer, loadSmilesResultInViewer } = useViewerLoader({
+  const { loadUploadedFileInViewer, loadSmilesInViewer, loadSmilesResultInViewer, loadPdbInViewer } = useViewerLoader({
     plugin, activeSessionId, setIsExecuting, setCurrentCode,
     setCurrentStructureOrigin, setPendingCodeToRun, setViewerVisibleAndSave,
     setActivePane, saveVisualizationCode,
@@ -128,11 +129,36 @@ export const ChatPanel: React.FC = () => {
     addMessage, loadSmilesInViewer,
   });
 
+  const replaceMessageById = useCallback((targetId: string, nextMessage: ExtendedMessage) => {
+    if (!activeSession) return;
+    const existingMessages = activeSession.messages || [];
+    const targetIdx = existingMessages.findIndex((m) => m.id === targetId);
+    if (targetIdx === -1) {
+      addMessage(nextMessage);
+      return;
+    }
+    const updatedMessages = [...existingMessages];
+    updatedMessages[targetIdx] = {
+      ...nextMessage,
+      id: targetId,
+      type: 'ai',
+      timestamp: new Date(),
+    } as ExtendedMessage;
+    void updateMessages(updatedMessages);
+  }, [activeSession, updateMessages, addMessage]);
+
+  const clearRetryTarget = useCallback(() => {
+    setRetryTargetMessageId(null);
+  }, []);
+
   const { stream, messages, hasStreamingContent } = useLangGraphStream({
     rawMessages, activeSessionId, isLoading, setIsLoading,
     addMessage, setLastAgentId, setCurrentCode, saveVisualizationCode,
     setIsExecuting, setPendingCodeToRun, setViewerVisibleAndSave,
     setActivePane, routeAction, loadSmilesResultInViewer,
+    replaceTargetMessageId: retryTargetMessageId,
+    replaceMessageById,
+    clearReplaceTarget: clearRetryTarget,
   });
 
   const jobHandlers = useJobHandlers({
@@ -215,6 +241,93 @@ export const ChatPanel: React.FC = () => {
       });
     }
   };
+
+  const handleFetchUniProtEntry = useCallback((accession: string) => {
+    const fetchMessage = `fetch uniprot ${accession}`;
+    setInput(fetchMessage);
+    // Auto-submit by simulating form submission
+    const userMessage: Message = {
+      id: uuidv4(),
+      content: fetchMessage,
+      type: 'user',
+      timestamp: new Date(),
+    };
+    addMessage(userMessage);
+    setIsLoading(true);
+    const sessionMessages = activeSession?.messages ?? [];
+    const lcMessages = [...toLangGraphMessages(sessionMessages), { type: 'human' as const, content: fetchMessage }];
+    const configurable = {
+      currentCode,
+      history: messages.slice(-6).map((m: any) => ({ type: m.type, content: m.content })),
+    };
+    stream.submit({ messages: lcMessages }, { config: { configurable } }).catch((err: any) => {
+      addMessage({
+        id: uuidv4(), type: 'ai',
+        content: `Failed to fetch UniProt entry: ${err instanceof Error ? err.message : String(err)}`,
+        timestamp: new Date(),
+      } as ExtendedMessage);
+      setIsLoading(false);
+    });
+    setInput('');
+  }, [addMessage, activeSession, currentCode, messages, stream, setIsLoading]);
+
+  const handleViewPdbStructure = useCallback((pdbId: string) => {
+    loadPdbInViewer(pdbId);
+  }, [loadPdbInViewer]);
+
+  const handleCopyMessage = useCallback(async (message: ExtendedMessage) => {
+    const content = message.content || '';
+    if (!content.trim()) return;
+    try {
+      await navigator.clipboard.writeText(content);
+    } catch (err) {
+      console.warn('[ChatPanel] Failed to copy message content:', err);
+    }
+  }, []);
+
+  const handleRetryMessage = useCallback(async (aiMessageId: string) => {
+    if (isLoading || !activeSession) return;
+    const sessionMessages = activeSession.messages || [];
+    const aiIndex = sessionMessages.findIndex((m) => m.id === aiMessageId && m.type === 'ai');
+    if (aiIndex <= 0) return;
+
+    let userIndex = -1;
+    for (let i = aiIndex - 1; i >= 0; i -= 1) {
+      if (sessionMessages[i].type === 'user') {
+        userIndex = i;
+        break;
+      }
+    }
+    if (userIndex === -1) return;
+
+    const userPrompt = sessionMessages[userIndex]?.content || '';
+    if (!userPrompt.trim()) return;
+    const contextMessages = sessionMessages.slice(0, userIndex);
+    const lcMessages = [...toLangGraphMessages(contextMessages), { type: 'human' as const, content: userPrompt }];
+    const configurable = {
+      currentCode,
+      history: contextMessages.slice(-6).map((m: any) => ({ type: m.type, content: m.content })),
+      selection: selections.length > 0 ? selections[0] : null,
+      selections,
+      agentId: agentSettings.selectedAgentId || undefined,
+      model: agentSettings.selectedModel || undefined,
+    };
+
+    setRetryTargetMessageId(aiMessageId);
+    setIsLoading(true);
+    try {
+      await stream.submit({ messages: lcMessages }, { config: { configurable } });
+    } catch (submitErr) {
+      addMessage({
+        id: uuidv4(),
+        type: 'ai',
+        content: `Retry failed: ${submitErr instanceof Error ? submitErr.message : String(submitErr)}`,
+        timestamp: new Date(),
+      } as ExtendedMessage);
+      setIsLoading(false);
+      setRetryTargetMessageId(null);
+    }
+  }, [isLoading, activeSession, currentCode, selections, agentSettings.selectedAgentId, agentSettings.selectedModel, stream, addMessage]);
 
   // --- File upload ---
   const uploadFile = async (file: File) => {
@@ -499,16 +612,18 @@ export const ChatPanel: React.FC = () => {
   const onDownloadSmiles = useCallback(async (result: any) => {
     try {
       const res = await api.get(`/upload/pdb/${result.file_id}`, { responseType: 'blob' });
-      const blob = new Blob([res.data], { type: 'chemical/x-pdb' });
+      const filename = result.filename || 'smiles_structure.sdf';
+      const isSdf = String(filename).toLowerCase().endsWith('.sdf');
+      const blob = new Blob([res.data], { type: isSdf ? 'chemical/x-mdl-sdfile' : 'chemical/x-pdb' });
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
-      a.download = result.filename || 'smiles_structure.pdb';
+      a.download = filename;
       document.body.appendChild(a);
       a.click();
       document.body.removeChild(a);
       URL.revokeObjectURL(url);
-    } catch (e) { console.error('[ChatPanel] Failed to download SMILES PDB:', e); }
+    } catch (e) { console.error('[ChatPanel] Failed to download SMILES structure:', e); }
   }, []);
 
   return (
@@ -551,6 +666,11 @@ export const ChatPanel: React.FC = () => {
           onRetryAlphaFold={jobHandlers.handleAlphaFoldConfirm}
           setGhostBlueprint={setGhostBlueprint}
           isValidUploadedFile={isValidUploadedFile}
+          onFetchUniProtEntry={handleFetchUniProtEntry}
+          onViewPdbStructure={handleViewPdbStructure}
+          onCopyMessage={handleCopyMessage}
+          onRetryMessage={handleRetryMessage}
+          retryingMessageId={retryTargetMessageId}
         />
       ) : (
         <WelcomeScreen isLoading={isLoading} />

@@ -5,6 +5,11 @@ import type { PipelineBlueprint } from '../components/pipeline-canvas';
 export type { Message };
 
 export interface ExtendedMessage extends Message {
+  tokenUsage?: {
+    inputTokens: number;
+    outputTokens: number;
+    totalTokens: number;
+  };
   diffdockResult?: {
     pdbContent?: string;
     filename?: string;

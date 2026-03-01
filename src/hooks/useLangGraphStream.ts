@@ -23,6 +23,9 @@ export interface UseLangGraphStreamParams {
   setActivePane: (pane: 'viewer' | 'editor' | 'files' | 'pipeline' | null) => void;
   routeAction: (responseData: any) => boolean;
   loadSmilesResultInViewer: (payload: { content: string; filename: string }) => Promise<{ file_id: string; file_url: string; filename: string }>;
+  replaceTargetMessageId?: string | null;
+  replaceMessageById?: (targetId: string, message: ExtendedMessage) => void;
+  clearReplaceTarget?: () => void;
 }
 
 interface AppToolResult {
@@ -49,6 +52,9 @@ export function useLangGraphStream({
   setActivePane,
   routeAction,
   loadSmilesResultInViewer,
+  replaceTargetMessageId,
+  replaceMessageById,
+  clearReplaceTarget,
 }: UseLangGraphStreamParams) {
   const langGraphTransport = useMemo(() => createLangGraphTransport(), []);
   const langGraphInitialValues = useMemo(
@@ -122,6 +128,11 @@ export function useLangGraphStream({
           agentId?: string;
           thinkingProcess?: unknown;
           toolsInvoked?: string[];
+          tokenUsage?: {
+            inputTokens: number;
+            outputTokens: number;
+            totalTokens: number;
+          };
           toolResults?: AppToolResult[];
         };
       })?.appResult;
@@ -134,19 +145,32 @@ export function useLangGraphStream({
 
       const code = appResult?.code ?? '';
       const msgId = uuidv4();
+
+      // Detect UniProt search/detail results from appResult
+      const uniprotSearchResult = (appResult as any)?.uniprotSearchResult ?? undefined;
+      const uniprotDetailResult = (appResult as any)?.uniprotDetailResult ?? undefined;
+
       if (content && !actionHandled) {
-        addMessage({
+        const aiMessage = {
           id: msgId,
           type: 'ai',
           content,
           timestamp: new Date(),
           ...(appResult?.agentId ? { agentId: appResult.agentId } : {}),
           ...(appResult?.toolsInvoked?.length ? { toolsInvoked: appResult.toolsInvoked } : {}),
+          ...(appResult?.tokenUsage ? { tokenUsage: appResult.tokenUsage } : {}),
           ...(appResult?.thinkingProcess ? { thinkingProcess: convertThinkingData(appResult.thinkingProcess) } : {}),
           ...(code && code.trim() && !code.includes('blob:http') && !code.includes('blob:https:')
             ? { threeDCanvas: { id: msgId, sceneData: code } }
             : {}),
-        } as ExtendedMessage);
+          ...(uniprotSearchResult ? { uniprotSearchResult } : {}),
+          ...(uniprotDetailResult ? { uniprotDetailResult } : {}),
+        } as ExtendedMessage;
+        if (replaceTargetMessageId && replaceMessageById) {
+          replaceMessageById(replaceTargetMessageId, aiMessage);
+        } else {
+          addMessage(aiMessage);
+        }
       }
       const smilesToolResult = (appResult?.toolResults || []).find((toolResult) =>
         toolResult?.name === 'show_smiles_in_viewer'
@@ -162,7 +186,7 @@ export function useLangGraphStream({
           try {
             const smilesResult = await loadSmilesResultInViewer({
               content: smilesPayload.content!,
-              filename: smilesPayload.filename || 'smiles_structure.pdb',
+              filename: smilesPayload.filename || 'smiles_structure.sdf',
             });
             addMessage({
               id: uuidv4(),
@@ -214,6 +238,9 @@ export function useLangGraphStream({
         })();
       }
       setIsLoading(false);
+      if (replaceTargetMessageId && clearReplaceTarget) {
+        clearReplaceTarget();
+      }
       return;
     }
 
@@ -227,16 +254,24 @@ export function useLangGraphStream({
         : '';
       console.log('[LG stream finished] No values, fallback from stream.messages:', fallbackContent?.slice(0, 100));
       if (fallbackContent) {
-        addMessage({
+        const fallbackMessage = {
           id: uuidv4(),
           type: 'ai',
           content: fallbackContent,
           timestamp: new Date(),
-        } as ExtendedMessage);
+        } as ExtendedMessage;
+        if (replaceTargetMessageId && replaceMessageById) {
+          replaceMessageById(replaceTargetMessageId, fallbackMessage);
+        } else {
+          addMessage(fallbackMessage);
+        }
       }
     }
     setIsLoading(false);
-  }, [stream.isLoading, stream.values, activeSessionId, addMessage, setLastAgentId, setCurrentCode, isLoading, stream.error, stream.messages, saveVisualizationCode, setIsExecuting, setPendingCodeToRun, setViewerVisibleAndSave, setActivePane, loadSmilesResultInViewer]);
+    if (replaceTargetMessageId && clearReplaceTarget) {
+      clearReplaceTarget();
+    }
+  }, [stream.isLoading, stream.values, activeSessionId, addMessage, setLastAgentId, setCurrentCode, isLoading, stream.error, stream.messages, saveVisualizationCode, setIsExecuting, setPendingCodeToRun, setViewerVisibleAndSave, setActivePane, loadSmilesResultInViewer, replaceTargetMessageId, replaceMessageById, clearReplaceTarget]);
 
   useEffect(() => {
     if (stream.error) {
@@ -250,9 +285,12 @@ export function useLangGraphStream({
           timestamp: new Date(),
         } as ExtendedMessage);
         setIsLoading(false);
+        if (replaceTargetMessageId && clearReplaceTarget) {
+          clearReplaceTarget();
+        }
       }
     }
-  }, [stream.error, activeSessionId, isLoading, addMessage]);
+  }, [stream.error, activeSessionId, isLoading, addMessage, replaceTargetMessageId, clearReplaceTarget]);
 
   useEffect(() => {
     if (!isLoading) return;

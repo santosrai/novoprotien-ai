@@ -23,6 +23,11 @@ export interface MessageListProps {
   onRetryAlphaFold: (sequence: string, parameters: any) => void;
   setGhostBlueprint: (blueprint: any) => void;
   isValidUploadedFile: (fileInfo: any) => boolean;
+  onFetchUniProtEntry: (accession: string) => void;
+  onViewPdbStructure: (pdbId: string) => void;
+  onCopyMessage: (message: ExtendedMessage) => void | Promise<void>;
+  onRetryMessage: (messageId: string) => void | Promise<void>;
+  retryingMessageId?: string | null;
 }
 
 export function MessageList({
@@ -46,6 +51,11 @@ export function MessageList({
   onRetryAlphaFold,
   setGhostBlueprint,
   isValidUploadedFile,
+  onFetchUniProtEntry,
+  onViewPdbStructure,
+  onCopyMessage,
+  onRetryMessage,
+  retryingMessageId,
 }: MessageListProps) {
   return (
     <div className="flex-1 overflow-y-auto px-3 py-1.5 space-y-2 min-h-0">
@@ -70,6 +80,11 @@ export function MessageList({
           onRetryAlphaFold={onRetryAlphaFold}
           setGhostBlueprint={setGhostBlueprint}
           isValidUploadedFile={isValidUploadedFile}
+          onFetchUniProtEntry={onFetchUniProtEntry}
+          onViewPdbStructure={onViewPdbStructure}
+          onCopyMessage={onCopyMessage}
+          onRetryMessage={onRetryMessage}
+          retryingMessageId={retryingMessageId}
         />
       ))}
       {isLoading && !hasStreamingContent && (

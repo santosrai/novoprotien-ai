@@ -117,20 +117,119 @@ def _suggest_rfdiffusion_contigs(chain_residue_counts: Dict[str, int]) -> str:
         return f"{first_chain}{start}-{end}"
 
 
+def filter_pdb_content(
+    content: str,
+    chains: Optional[List[str]] = None,
+    include_waters: bool = True,
+    include_ligands: bool = True,
+) -> str:
+    """Filter PDB text by chain and optional water/ligand inclusion."""
+    selected_chains = {c.strip() for c in (chains or []) if c and c.strip()}
+    water_resnames = {"HOH", "WAT", "H2O"}
+
+    passthrough_records = {
+        "HEADER", "TITLE", "COMPND", "SOURCE", "KEYWDS", "EXPDTA", "AUTHOR",
+        "REMARK", "CRYST1", "ORIGX1", "ORIGX2", "ORIGX3", "SCALE1", "SCALE2",
+        "SCALE3", "MTRIX1", "MTRIX2", "MTRIX3", "MODEL", "ENDMDL", "TER", "END",
+    }
+
+    kept_lines: List[str] = []
+    kept_atom_serials: set[int] = set()
+    keep_ter_for_chain: set[str] = set()
+
+    for line in content.splitlines():
+        if not line:
+            continue
+
+        record = line[:6].strip().upper()
+
+        if record in {"ATOM", "HETATM"}:
+            chain_id = line[21].strip() if len(line) >= 22 else "?"
+            chain_id = chain_id or "?"
+            if selected_chains and chain_id not in selected_chains:
+                continue
+
+            res_name = line[17:20].strip().upper() if len(line) >= 20 else ""
+            is_water = res_name in water_resnames
+
+            if is_water and not include_waters:
+                continue
+            if record == "HETATM" and not is_water and not include_ligands:
+                continue
+
+            if len(line) >= 11:
+                try:
+                    atom_serial = int(line[6:11].strip())
+                    kept_atom_serials.add(atom_serial)
+                except ValueError:
+                    pass
+
+            keep_ter_for_chain.add(chain_id)
+            kept_lines.append(line)
+            continue
+
+        if record == "ANISOU":
+            if len(line) >= 11:
+                try:
+                    atom_serial = int(line[6:11].strip())
+                except ValueError:
+                    atom_serial = None
+                if atom_serial is not None and atom_serial in kept_atom_serials:
+                    kept_lines.append(line)
+            continue
+
+        if record == "CONECT":
+            tokens = line[6:].split()
+            atom_ids: List[int] = []
+            for tok in tokens:
+                try:
+                    atom_ids.append(int(tok))
+                except ValueError:
+                    continue
+            if atom_ids and all(atom_id in kept_atom_serials for atom_id in atom_ids):
+                kept_lines.append(line)
+            continue
+
+        if record == "TER":
+            chain_id = line[21].strip() if len(line) >= 22 else "?"
+            chain_id = chain_id or "?"
+            if selected_chains and chain_id not in selected_chains:
+                continue
+            if chain_id in keep_ter_for_chain:
+                kept_lines.append(line)
+            continue
+
+        if record in passthrough_records:
+            kept_lines.append(line)
+
+    if not any(line[:6].strip().upper() == "END" for line in kept_lines):
+        kept_lines.append("END")
+
+    return "\n".join(kept_lines) + "\n"
+
+
 def save_uploaded_pdb(filename: str, content: bytes, user_id: str) -> Dict[str, object]:
-    """Persist an uploaded PDB file and return metadata about it."""
-    if not filename.lower().endswith(".pdb"):
-        raise HTTPException(status_code=400, detail="Only .pdb files are supported")
+    """Persist an uploaded PDB/SDF file and return metadata about it."""
+    lower_name = filename.lower()
+    is_pdb = lower_name.endswith(".pdb")
+    is_sdf = lower_name.endswith(".sdf")
+    if not is_pdb and not is_sdf:
+        raise HTTPException(status_code=400, detail="Only .pdb or .sdf files are supported")
 
     text_content = content.decode("utf-8", errors="ignore")
-    atoms, chains, chain_residue_counts = _analyze_pdb(text_content)
+    if is_pdb:
+        atoms, chains, chain_residue_counts = _analyze_pdb(text_content)
+    else:
+        # SDF structures are typically small molecules and do not carry PDB-style chain metadata.
+        atoms, chains, chain_residue_counts = 0, [], {}
     
     # Calculate suggested RFdiffusion parameters
     suggested_contigs = _suggest_rfdiffusion_contigs(chain_residue_counts)
     total_residues = sum(chain_residue_counts.values())
 
     file_id = uuid.uuid4().hex
-    stored_name = f"{file_id}.pdb"
+    extension = ".sdf" if is_sdf else ".pdb"
+    stored_name = f"{file_id}{extension}"
     upload_dir = _get_user_upload_dir(user_id)
     stored_path = upload_dir / stored_name
     stored_path.write_bytes(content)

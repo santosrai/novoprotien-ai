@@ -10,6 +10,7 @@ import {
   ProteinMPNNResultCard,
   FileAttachmentCard,
   PipelineAttachmentCard,
+  UniProtResultCard,
 } from './results';
 import { AgentPill } from '../AgentPill';
 import { ToolPill } from '../ToolPill';
@@ -21,6 +22,7 @@ import { ErrorDisplay } from '../ErrorDisplay';
 import { RFdiffusionErrorHandler } from '../../utils/errorHandler';
 import type { ExtendedMessage } from '../../types/chat';
 import type { ValidationReport } from '../../types/validation';
+import MessageToolbar from './messageToolbar.tsx';
 
 interface MessageBubbleProps {
   message: ExtendedMessage;
@@ -41,6 +43,11 @@ interface MessageBubbleProps {
   onRetryAlphaFold: (sequence: string, parameters: any) => void;
   setGhostBlueprint: (blueprint: any) => void;
   isValidUploadedFile: (fileInfo: any) => boolean;
+  onFetchUniProtEntry: (accession: string) => void;
+  onViewPdbStructure: (pdbId: string) => void;
+  onCopyMessage: (message: ExtendedMessage) => void | Promise<void>;
+  onRetryMessage: (messageId: string) => void | Promise<void>;
+  retryingMessageId?: string | null;
 }
 
 const MessageBubble: React.FC<MessageBubbleProps> = ({
@@ -61,7 +68,25 @@ const MessageBubble: React.FC<MessageBubbleProps> = ({
   onValidateStructure,
   onRetryAlphaFold,
   isValidUploadedFile,
+  onFetchUniProtEntry,
+  onViewPdbStructure,
+  onCopyMessage,
+  onRetryMessage,
+  retryingMessageId,
 }) => {
+  const [isCopying, setIsCopying] = React.useState(false);
+
+  const isRetryingThisMessage = retryingMessageId === message.id;
+
+  const handleCopy = async () => {
+    setIsCopying(true);
+    try {
+      await onCopyMessage(message);
+    } finally {
+      setTimeout(() => setIsCopying(false), 500);
+    }
+  };
+
   const renderMessageContent = (content: string) => {
     try {
       const parsed = JSON.parse(content);
@@ -110,7 +135,7 @@ colorByConfidence();`;
       className={`flex ${message.type === 'user' ? 'justify-end' : 'justify-start'}`}
     >
       <div
-        className={`max-w-[85%] p-2 rounded-lg ${
+        className={`group relative max-w-[85%] p-2 pb-8 rounded-lg ${
           message.type === 'user'
             ? 'bg-blue-600 text-white'
             : 'bg-gray-100 text-gray-900'
@@ -277,6 +302,11 @@ colorByConfidence();`;
               onLoadInViewer={() => onLoadRFdiffusionInViewer(message.rfdiffusionResult, message)}
             />
             <ProteinMPNNResultCard result={message.proteinmpnnResult} />
+            <UniProtResultCard
+              result={message.uniprotSearchResult}
+              onFetchEntry={onFetchUniProtEntry}
+              onViewStructure={onViewPdbStructure}
+            />
             {message.validationResult && renderValidationResult(message.validationResult)}
             {message.error && (
               <div className="mt-3">
@@ -316,6 +346,13 @@ colorByConfidence();`;
             )}
           </>
         )}
+        <MessageToolbar
+          message={message}
+          isCopying={isCopying}
+          isRetrying={isRetryingThisMessage}
+          onCopy={handleCopy}
+          onRetry={() => onRetryMessage(message.id)}
+        />
       </div>
     </div>
   );

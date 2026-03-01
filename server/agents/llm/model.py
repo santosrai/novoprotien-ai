@@ -43,5 +43,10 @@ def get_chat_model(
         "api_key": key,
         "temperature": temperature,
         "max_tokens": max_tokens,
+        # Ensure usage metadata is emitted in streaming and available on final AIMessage.
+        "stream_usage": True,
+        "model_kwargs": {
+            "stream_options": {"include_usage": True},
+        },
     }
     return init_chat_model(**kwargs)

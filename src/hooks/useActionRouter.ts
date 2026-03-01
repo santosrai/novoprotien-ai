@@ -94,12 +94,51 @@ export function useActionRouter(params: UseActionRouterParams): { routeAction: (
         return true;
       }
 
+      if (data.action === 'show_uniprot_results') {
+        console.log('[UniProt] Search results action detected, count:', data.count);
+        addMessage({
+          id: uuidv4(),
+          type: 'ai',
+          content: `Found ${data.count} UniProt result${data.count !== 1 ? 's' : ''} for "${data.query}".`,
+          timestamp: new Date(),
+          uniprotSearchResult: {
+            query: data.query,
+            results: data.results,
+            count: data.count,
+          },
+        } as ExtendedMessage);
+        return true;
+      }
+
+      if (data.action === 'show_uniprot_detail') {
+        console.log('[UniProt] Detail result action detected for:', data.accession);
+        addMessage({
+          id: uuidv4(),
+          type: 'ai',
+          content: `Fetched details for ${data.protein || data.accession} (${data.organism || 'unknown organism'}).`,
+          timestamp: new Date(),
+          uniprotDetailResult: {
+            accession: data.accession,
+            id: data.id,
+            protein: data.protein,
+            organism: data.organism,
+            length: data.length,
+            sequence: data.sequence,
+            pdb_ids: data.pdb_ids,
+            gene_names: data.gene_names,
+            function_description: data.function_description,
+            reviewed: data.reviewed,
+          },
+        } as ExtendedMessage);
+        return true;
+      }
+
       if (data.action === 'show_smiles_in_viewer' && data.smiles) {
         const friendlySuccessMessage =
           'Loaded the molecule in the 3D viewer. You can explore it in the right panel.';
         loadSmilesInViewer({
           smiles: data.smiles,
-          format: data.format || 'pdb',
+          format: 'sdf',
         })
           .then((smilesResult) => {
             const msg: ExtendedMessage = {

@@ -11,6 +11,7 @@ interface Props {
 
 const SmilesResultCard: React.FC<Props> = ({ result, plugin, onLoadInViewer, onDownload }) => {
   if (!result?.file_id || !result?.file_url) return null;
+  const isSdf = String(result.filename || '').toLowerCase().endsWith('.sdf');
 
   return (
     <div className="mt-3 p-4 bg-gradient-to-r from-emerald-50 to-teal-50 border border-emerald-200 rounded-lg">
@@ -29,7 +30,7 @@ const SmilesResultCard: React.FC<Props> = ({ result, plugin, onLoadInViewer, onD
           className="flex items-center space-x-1 px-3 py-2 bg-emerald-600 text-white rounded-md hover:bg-emerald-700 text-sm"
         >
           <Download className="w-4 h-4" />
-          <span>Download PDB</span>
+          <span>{isSdf ? 'Download SDF' : 'Download File'}</span>
         </button>
         <button
           onClick={onLoadInViewer}

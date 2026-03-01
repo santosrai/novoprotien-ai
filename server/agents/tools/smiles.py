@@ -34,17 +34,16 @@ def _make_smiles_tool() -> Any:
     """Build the @tool used by LangGraph ToolNode / LangChain agent."""
 
     @tool
-    def show_smiles_in_viewer(smiles: str, format: str = "pdb") -> str:
+    def show_smiles_in_viewer(smiles: str, format: str = "sdf") -> str:
         """Convert a SMILES string to a 3D structure (PDB or SDF) and show it in the molecular viewer.
         Use when the user provides a SMILES string and asks to show, display, or view it in 3D.
 
         Args:
             smiles: The SMILES string (e.g. O=C1NC2=C(N1)C(=O)NC(=O)N2). Extract exactly from the user message.
-            format: Output format: 'pdb' or 'sdf'. Use 'pdb' unless the user explicitly asks for SDF.
+            format: Output format: 'pdb' or 'sdf'. Use 'sdf' by default unless the user explicitly asks for PDB.
         """
-        fmt = (format or "pdb").lower()
-        if fmt not in ("pdb", "sdf"):
-            fmt = "pdb"
+        # Enforce SDF output for viewer/download consistency.
+        fmt = "sdf"
         try:
             content, filename = smiles_to_structure((smiles or "").strip(), fmt)
             return (

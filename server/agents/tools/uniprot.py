@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+
 try:
     from langchain_core.tools import tool
 except ImportError:
@@ -21,17 +23,19 @@ def get_uniprot_tool():
     @tool
     async def search_uniprot(query: str, size: int = 5) -> str:
         """Search UniProt for proteins by name, gene, organism, or keyword.
-        Returns a summary of matching entries (accession, name, organism, length).
+        Returns structured JSON with accession, name, organism, length,
+        sequence preview, and PDB cross-references.
         Use when the user asks to search UniProt, find a protein in UniProt,
         or look up a protein by name/gene."""
         items = await _search_uniprot(query, size=size)
         if not items:
             return "No UniProt entries found for that query."
-        lines = [
-            f"- {e.get('accession', '?')} ({e.get('protein', 'Unknown')}); "
-            f"{e.get('organism', '?')}; length {e.get('length', '?')}"
-            for e in items
-        ]
-        return "UniProt results:\n" + "\n".join(lines)
+        # Return JSON so it flows as structured data to the frontend
+        return json.dumps({
+            "action": "show_uniprot_results",
+            "query": query,
+            "results": items,
+            "count": len(items),
+        })
 
     return search_uniprot

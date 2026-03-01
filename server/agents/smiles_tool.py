@@ -35,8 +35,8 @@ SHOW_SMILES_IN_VIEWER_TOOL = {
                 "format": {
                     "type": "string",
                     "enum": ["pdb", "sdf"],
-                    "description": "Output format. Use 'pdb' unless the user explicitly asks for SDF.",
-                    "default": "pdb",
+                    "description": "Output format. Use 'sdf' by default unless the user explicitly asks for PDB.",
+                    "default": "sdf",
                 },
             },
             "required": ["smiles"],
@@ -75,9 +75,8 @@ def execute_show_smiles_in_viewer(tool_call: Dict[str, Any]) -> Dict[str, Any]:
     if not smiles:
         return {"error": "SMILES string is required."}
 
-    fmt = (args.get("format") or "pdb").lower()
-    if fmt not in ("pdb", "sdf"):
-        fmt = "pdb"
+    # Enforce SDF output for viewer/download consistency.
+    fmt = "sdf"
 
     try:
         content, filename = smiles_to_structure(smiles, fmt)

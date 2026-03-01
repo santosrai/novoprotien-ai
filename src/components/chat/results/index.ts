@@ -6,3 +6,4 @@ export { default as SmilesResultCard } from './SmilesResultCard';
 export { default as OpenFold2ResultCard } from './OpenFold2ResultCard';
 export { default as DiffDockResultCard } from './DiffDockResultCard';
 export { default as RFdiffusionResultCard } from './RFdiffusionResultCard';
+export { default as UniProtResultCard } from './UniProtResultCard';

@@ -100,7 +100,12 @@ export const createMolstarBuilder = (
           });
         }
 
-        const trajectory = await plugin.builders.structure.parseTrajectory(data, 'pdb');
+        let trajectory: any;
+        try {
+          trajectory = await plugin.builders.structure.parseTrajectory(data, 'pdb');
+        } catch {
+          trajectory = await plugin.builders.structure.parseTrajectory(data, 'sdf');
+        }
         const model = await plugin.builders.structure.createModel(trajectory);
         currentStructure = await plugin.builders.structure.createStructure(model);
         

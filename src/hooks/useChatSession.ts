@@ -1,6 +1,7 @@
 import { useRef, useEffect, useCallback } from 'react';
 import type { Message } from '../types/chat';
 import { useChatHistoryStore } from '../stores/chatHistoryStore';
+import { useAppStore } from '../stores/appStore';
 
 export function getPaneForRestoredViewerVisibility(visible: boolean): 'viewer' | null {
   return visible ? 'viewer' : null;
@@ -54,6 +55,16 @@ export function useChatSession(params: UseChatSessionParams) {
   const isViewerVisibleRef = useRef<boolean>(isViewerVisible);
   const hasAttemptedCreateRef = useRef<boolean>(false);
 
+  const setPaneIfChanged = useCallback(
+    (nextPane: 'viewer' | null) => {
+      const currentPane = useAppStore.getState().activePane;
+      if (currentPane !== nextPane) {
+        setActivePane(nextPane);
+      }
+    },
+    [setActivePane]
+  );
+
   const setViewerVisibleAndSave = useCallback(
     (visible: boolean) => {
       setViewerVisible(visible);
@@ -99,16 +110,16 @@ export function useChatSession(params: UseChatSessionParams) {
       const isNewSession = activeSessionMessageCount < 0 || activeSessionMessageCount === 0;
       if (isNewSession) {
         setViewerVisible(false);
-        setActivePane(null);
+        setPaneIfChanged(null);
       } else {
         const savedVisibility = getViewerVisibility(activeSessionId);
         if (savedVisibility !== undefined) {
           setViewerVisible(savedVisibility);
-          setActivePane(getPaneForRestoredViewerVisibility(savedVisibility));
+          setPaneIfChanged(getPaneForRestoredViewerVisibility(savedVisibility));
         }
       }
     }
-  }, [activeSessionId, activeSessionMessageCount, getViewerVisibility, setViewerVisible, setActivePane]);
+  }, [activeSessionId, activeSessionMessageCount, getViewerVisibility, setViewerVisible, setPaneIfChanged]);
 
   useEffect(() => {
     currentCodeRef.current = currentCode;
@@ -120,6 +131,7 @@ export function useChatSession(params: UseChatSessionParams) {
 
   useEffect(() => {
     if (!activeSessionId) return;
+    if (previousSessionIdRef.current === activeSessionId) return;
 
     if (previousSessionIdRef.current && previousSessionIdRef.current !== activeSessionId) {
       const codeToSave = currentCodeRef.current?.trim() || '';
@@ -139,7 +151,7 @@ export function useChatSession(params: UseChatSessionParams) {
         setCurrentCode('');
       }
       setViewerVisible(false);
-      setActivePane(null);
+      setPaneIfChanged(null);
       console.log('[ChatPanel] Hiding all panes for new session:', activeSessionId);
     } else {
       const sessionCode = getLastCanvasCodeFromSession(activeSessionId);
@@ -149,9 +161,12 @@ export function useChatSession(params: UseChatSessionParams) {
         const savedVisibility = getViewerVisibility(activeSessionId);
         const shouldShowViewer = savedVisibility !== undefined ? savedVisibility : true;
         setViewerVisible(shouldShowViewer);
-        setActivePane(getPaneForRestoredViewerVisibility(shouldShowViewer));
+        setPaneIfChanged(getPaneForRestoredViewerVisibility(shouldShowViewer));
       } else {
+        const targetSessionId = activeSessionId;
         getVisualizationCode(activeSessionId).then((savedCode) => {
+          if (useChatHistoryStore.getState().activeSessionId !== targetSessionId) return;
+
           const hasValidCode = savedCode &&
             savedCode.trim() &&
             !savedCode.includes('blob:http://') &&
@@ -163,7 +178,7 @@ export function useChatSession(params: UseChatSessionParams) {
             const savedVisibility = getViewerVisibility(activeSessionId);
             const shouldShowViewer = savedVisibility !== undefined ? savedVisibility : true;
             setViewerVisible(shouldShowViewer);
-            setActivePane(getPaneForRestoredViewerVisibility(shouldShowViewer));
+            setPaneIfChanged(getPaneForRestoredViewerVisibility(shouldShowViewer));
           } else {
             if (currentCodeRef.current && currentCodeRef.current.trim()) {
               console.log('[ChatPanel] Clearing code for session without valid visualization:', activeSessionId);
@@ -179,7 +194,7 @@ export function useChatSession(params: UseChatSessionParams) {
     }
 
     previousSessionIdRef.current = activeSessionId;
-  }, [activeSessionId, activeSessionMessageCount, getVisualizationCode, getLastCanvasCodeFromSession, saveVisualizationCode, getViewerVisibility, saveViewerVisibility, setCurrentCode, setViewerVisible, setActivePane]);
+  }, [activeSessionId, activeSessionMessageCount, activeSession, getVisualizationCode, getLastCanvasCodeFromSession, saveVisualizationCode, getViewerVisibility, saveViewerVisibility, setCurrentCode, setViewerVisible, setPaneIfChanged]);
 
   return { setViewerVisibleAndSave };
 }

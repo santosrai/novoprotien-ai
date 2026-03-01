@@ -48,7 +48,7 @@ from slowapi import Limiter
 from slowapi.util import get_remote_address
 from slowapi.middleware import SlowAPIMiddleware
 from slowapi.errors import RateLimitExceeded
-from fastapi.responses import JSONResponse, FileResponse, StreamingResponse
+from fastapi.responses import JSONResponse, FileResponse, StreamingResponse, Response
 
 try:
     from langsmith import traceable, tracing_context, Client as LangSmithClient
@@ -70,7 +70,7 @@ try:
     from .agents.handlers.proteinmpnn import proteinmpnn_handler
     from .agents.handlers.openfold2 import openfold2_handler
     from .agents.handlers.diffdock import diffdock_handler
-    from .domain.storage.pdb_storage import save_uploaded_pdb, get_uploaded_pdb
+    from .domain.storage.pdb_storage import save_uploaded_pdb, get_uploaded_pdb, filter_pdb_content
     from .domain.storage.file_access import list_user_files, verify_file_ownership, get_file_metadata, get_user_file_path
     from .tools.smiles_converter import smiles_to_structure
     from .database.db import get_db
@@ -100,7 +100,7 @@ except ImportError:
     from agents.handlers.proteinmpnn import proteinmpnn_handler
     from agents.handlers.openfold2 import openfold2_handler
     from agents.handlers.diffdock import diffdock_handler
-    from domain.storage.pdb_storage import save_uploaded_pdb, get_uploaded_pdb
+    from domain.storage.pdb_storage import save_uploaded_pdb, get_uploaded_pdb, filter_pdb_content
     from domain.storage.file_access import list_user_files, verify_file_ownership, get_file_metadata, get_user_file_path
     from tools.smiles_converter import smiles_to_structure
     from database.db import get_db
@@ -878,7 +878,7 @@ async def route_stream_sse(request: Request, user: Dict[str, Any] = Depends(get_
                     # Include app result so frontend can handle agentId, code, actions, toolsInvoked, etc.
                     app_result = {
                         k: data.get(k)
-                        for k in ("agentId", "text", "code", "reason", "type", "thinkingProcess", "toolsInvoked", "toolResults")
+                        for k in ("agentId", "text", "code", "reason", "type", "thinkingProcess", "toolsInvoked", "toolResults", "uniprotSearchResult", "uniprotDetailResult", "tokenUsage")
                         if data.get(k) is not None
                     }
                     values_payload = _json.dumps({"messages": lc_messages, "appResult": app_result})
@@ -1107,9 +1107,9 @@ async def smiles_to_structure_endpoint(
     try:
         body = await request.json()
         smiles = (body.get("smiles") or "").strip()
-        fmt = (body.get("format") or "pdb").lower()
+        fmt = (body.get("format") or "sdf").lower()
         if fmt not in ("pdb", "sdf"):
-            fmt = "pdb"
+            fmt = "sdf"
         if not smiles:
             return JSONResponse(
                 status_code=400,
@@ -1162,10 +1162,65 @@ async def download_uploaded_pdb(request: Request, file_id: str, user: Dict[str, 
     metadata = get_uploaded_pdb(file_id, user["id"])
     if not metadata:
         raise HTTPException(status_code=404, detail="Uploaded file not found")
+    filename = metadata.get("filename") or f"{file_id}.pdb"
+    media_type = "chemical/x-mdl-sdfile" if str(filename).lower().endswith(".sdf") else "chemical/x-pdb"
     return FileResponse(
         metadata["absolute_path"],
+        media_type=media_type,
+        filename=filename,
+    )
+
+
+@app.get("/api/upload/pdb/{file_id}/filtered")
+@limiter.limit("30/minute")
+async def download_filtered_uploaded_pdb(
+    request: Request,
+    file_id: str,
+    chains: Optional[str] = None,
+    include_waters: bool = True,
+    include_ligands: bool = True,
+    user: Dict[str, Any] = Depends(get_current_user),
+):
+    _ = request
+    metadata = get_uploaded_pdb(file_id, user["id"])
+    if not metadata:
+        raise HTTPException(status_code=404, detail="Uploaded file not found")
+
+    source_path = metadata.get("absolute_path")
+    if not source_path:
+        raise HTTPException(status_code=404, detail="Uploaded file path is missing")
+
+    try:
+        source_text = Path(str(source_path)).read_text(encoding="utf-8", errors="ignore")
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Failed to read source PDB: {exc}")
+
+    selected_chains = [c.strip() for c in (chains or "").split(",") if c.strip()]
+    filtered_content = filter_pdb_content(
+        source_text,
+        chains=selected_chains,
+        include_waters=include_waters,
+        include_ligands=include_ligands,
+    )
+
+    has_atoms = any(
+        line.startswith("ATOM") or line.startswith("HETATM")
+        for line in filtered_content.splitlines()
+    )
+    if not has_atoms:
+        raise HTTPException(status_code=400, detail="Filter produced an empty structure")
+
+    original_filename = str(metadata.get("filename") or f"{file_id}.pdb")
+    base_name = Path(original_filename).stem
+    chain_suffix = f"chains-{'-'.join(selected_chains)}" if selected_chains else "all-chains"
+    waters_suffix = "waters-on" if include_waters else "waters-off"
+    ligands_suffix = "ligands-on" if include_ligands else "ligands-off"
+    download_filename = f"{base_name}_{chain_suffix}_{waters_suffix}_{ligands_suffix}_filtered.pdb"
+
+    return Response(
+        content=filtered_content,
         media_type="chemical/x-pdb",
-        filename=metadata.get("filename") or f"{file_id}.pdb",
+        headers={"Content-Disposition": f'attachment; filename="{download_filename}"'},
     )
 
 

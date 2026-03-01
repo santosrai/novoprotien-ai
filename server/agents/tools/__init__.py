@@ -12,6 +12,7 @@ from .proteinmpnn import get_proteinmpnn_tool
 from .diffdock import get_diffdock_tool
 from .validation import get_validation_tool
 from .uniprot import get_uniprot_tool
+from .uniprot_fetch import get_uniprot_fetch_tool
 from .mvs_builder import get_mvs_builder_tool
 
 
@@ -21,6 +22,7 @@ AGENT_TOOL_MAP = {
     "bio_chat": [
         get_validation_tool,
         get_uniprot_tool,
+        get_uniprot_fetch_tool,
         get_mvs_builder_tool,
     ],
     "code_builder": [
@@ -50,6 +52,7 @@ __all__ = [
     "get_smiles_tool",
     "get_action_tools",
     "get_uniprot_tool",
+    "get_uniprot_fetch_tool",
     "get_all_react_tools",
     "get_tools_for_agent",
     "get_alphafold_tool",

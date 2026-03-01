@@ -29,6 +29,11 @@ export interface LangGraphState extends Record<string, unknown> {
         error?: string;
       };
     }>;
+    tokenUsage?: {
+      inputTokens: number;
+      outputTokens: number;
+      totalTokens: number;
+    };
   };
 }
 
