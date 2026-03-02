@@ -138,10 +138,15 @@ export function useLangGraphStream({
       })?.appResult;
       const msgs = (state as { messages?: Array<{ type: string; content: string }> })?.messages;
       const lastAi = msgs?.length ? msgs.filter((m) => m.type === 'ai').pop() : null;
-      const content = lastAi?.content ?? appResult?.text ?? appResult?.code ?? '';
+      // Prefer authoritative appResult.text over stream-aggregated lastAi content.
+      // This prevents tool payload JSON from overriding the intended assistant reply.
+      const content = appResult?.text ?? lastAi?.content ?? appResult?.code ?? '';
       console.log('[LG stream finished] from values — content:', content?.slice(0, 100), 'appResult:', appResult);
 
-      const actionHandled = content && routeAction(content);
+      const isStructuredActionPayload = typeof content === 'string'
+        && content.trim().startsWith('{')
+        && content.includes('"action"');
+      const actionHandled = isStructuredActionPayload && routeAction(content);
 
       const code = appResult?.code ?? '';
       const msgId = uuidv4();
@@ -149,6 +154,7 @@ export function useLangGraphStream({
       // Detect UniProt search/detail results from appResult
       const uniprotSearchResult = (appResult as any)?.uniprotSearchResult ?? undefined;
       const uniprotDetailResult = (appResult as any)?.uniprotDetailResult ?? undefined;
+      const alignmentResult = (appResult as any)?.alignmentResult ?? undefined;
 
       if (content && !actionHandled) {
         const aiMessage = {
@@ -165,6 +171,7 @@ export function useLangGraphStream({
             : {}),
           ...(uniprotSearchResult ? { uniprotSearchResult } : {}),
           ...(uniprotDetailResult ? { uniprotDetailResult } : {}),
+          ...(alignmentResult ? { alignmentResult } : {}),
         } as ExtendedMessage;
         if (replaceTargetMessageId && replaceMessageById) {
           replaceMessageById(replaceTargetMessageId, aiMessage);
@@ -306,20 +313,20 @@ export function useLangGraphStream({
     if (stream.isLoading && stream.messages.length > 0) {
       const allStreamMsgs = stream.messages as Array<{ type?: string; content?: unknown; id?: string }>;
       const streamAiMsgs = allStreamMsgs.filter((m) => m.type === 'ai');
-      const sessionAiCount = sessionList.filter((m) => m.type === 'ai').length;
+      const lastSessionAi = [...sessionList].reverse().find((m) => m.type === 'ai');
+      const lastSessionAiContent = typeof lastSessionAi?.content === 'string' ? lastSessionAi.content : '';
 
-      if (streamAiMsgs.length > sessionAiCount) {
-        const lastAiMsg = streamAiMsgs[streamAiMsgs.length - 1];
-        const streamingContent = typeof lastAiMsg.content === 'string' ? lastAiMsg.content : '';
-        if (streamingContent) {
-          return {
-            messages: [
-              ...sessionList,
-              { id: 'streaming-ai', content: streamingContent, type: 'ai' as const, timestamp: new Date() } as ExtendedMessage,
-            ],
-            hasStreamingContent: true,
-          };
-        }
+      const lastAiMsg = streamAiMsgs[streamAiMsgs.length - 1];
+      const streamingContent = typeof lastAiMsg?.content === 'string' ? lastAiMsg.content : '';
+      // Show temporary streaming bubble only when stream content differs from persisted last AI message.
+      if (streamingContent && streamingContent !== lastSessionAiContent) {
+        return {
+          messages: [
+            ...sessionList,
+            { id: 'streaming-ai', content: streamingContent, type: 'ai' as const, timestamp: new Date() } as ExtendedMessage,
+          ],
+          hasStreamingContent: true,
+        };
       }
     }
     return { messages: sessionList, hasStreamingContent: false };

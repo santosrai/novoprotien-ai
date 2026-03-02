@@ -5,6 +5,7 @@ import type { StructureOrigin } from '../stores/appStore';
 import { useChatHistoryStore, useActiveSession, Message } from '../stores/chatHistoryStore';
 import { useAuthStore } from '../stores/authStore';
 import { CodeExecutor } from '../utils/codeExecutor';
+import { createMolstarBuilder } from '../utils/molstarBuilder';
 import { api, getAuthHeaders } from '../utils/api';
 import { toLangGraphMessages } from '../utils/langgraphTransport';
 import { useModels, useAgents } from '../hooks/queries';
@@ -482,7 +483,8 @@ export const ChatPanel: React.FC = () => {
           : { enabled: false },
       };
 
-      const sessionMessages = activeSession?.messages ?? [];
+      // Fix 7: Only send last 10 messages — backend already truncates to 6 turns
+      const sessionMessages = (activeSession?.messages ?? []).slice(-10);
       const lcMessages = [...toLangGraphMessages(sessionMessages), { type: 'human' as const, content: messageInput }];
       const configurable = {
         currentCode,
@@ -587,6 +589,39 @@ export const ChatPanel: React.FC = () => {
   const onLoadDiffDockInViewer = useCallback(makeViewerCallback('diffdock', 'diffdock_result.pdb', 'bfactor'), [makeViewerCallback]);
   const onLoadRFdiffusionInViewer = useCallback(makeViewerCallback('rfdiffusion', 'rfdiffusion_design.pdb', 'secondary-structure'), [makeViewerCallback]);
 
+  const onLoadAlignmentInViewer = useCallback(async (result: any) => {
+    if (!result?.structure1?.pdbContent || !result?.structure2?.pdbContent || !plugin) return;
+    try {
+      setIsExecuting(true);
+      const builder = createMolstarBuilder(plugin);
+      // Clear all existing structures
+      await builder.clearStructure();
+      // Load both structures without clearing between them
+      const s1 = await builder.loadAdditionalStructure(result.structure1.pdbContent, 'pdb');
+      const s2 = await builder.loadAdditionalStructure(result.structure2.pdbContent, 'pdb');
+      // Run TM-align superposition (rotates s2 onto s1)
+      const alignResult = await builder.alignStructures(s1, s2);
+      // Add cartoon representations with distinct colors (purple + orange)
+      await plugin.builders.structure.representation.addRepresentation(s1, {
+        type: 'cartoon',
+        colorTheme: { name: 'uniform', params: { value: 0x9B59B6 } },
+      });
+      await plugin.builders.structure.representation.addRepresentation(s2, {
+        type: 'cartoon',
+        colorTheme: { name: 'uniform', params: { value: 0xF39C12 } },
+      });
+      // Focus camera on both structures
+      plugin.managers.camera.reset();
+      setViewerVisibleAndSave(true);
+      setActivePane('viewer');
+      return alignResult;
+    } catch (err) {
+      console.error('[ChatPanel] Failed to load alignment in viewer:', err);
+    } finally {
+      setIsExecuting(false);
+    }
+  }, [plugin, setIsExecuting, setViewerVisibleAndSave, setActivePane]);
+
   const onLoadSmilesInViewer = useCallback(async (result: any, message?: any) => {
     if (!result?.file_id || !plugin) return;
     try {
@@ -668,6 +703,7 @@ export const ChatPanel: React.FC = () => {
           isValidUploadedFile={isValidUploadedFile}
           onFetchUniProtEntry={handleFetchUniProtEntry}
           onViewPdbStructure={handleViewPdbStructure}
+          onLoadAlignmentInViewer={onLoadAlignmentInViewer}
           onCopyMessage={handleCopyMessage}
           onRetryMessage={handleRetryMessage}
           retryingMessageId={retryTargetMessageId}

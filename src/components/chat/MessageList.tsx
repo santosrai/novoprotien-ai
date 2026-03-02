@@ -25,6 +25,7 @@ export interface MessageListProps {
   isValidUploadedFile: (fileInfo: any) => boolean;
   onFetchUniProtEntry: (accession: string) => void;
   onViewPdbStructure: (pdbId: string) => void;
+  onLoadAlignmentInViewer: (result: any) => Promise<any>;
   onCopyMessage: (message: ExtendedMessage) => void | Promise<void>;
   onRetryMessage: (messageId: string) => void | Promise<void>;
   retryingMessageId?: string | null;
@@ -53,6 +54,7 @@ export function MessageList({
   isValidUploadedFile,
   onFetchUniProtEntry,
   onViewPdbStructure,
+  onLoadAlignmentInViewer,
   onCopyMessage,
   onRetryMessage,
   retryingMessageId,
@@ -82,6 +84,7 @@ export function MessageList({
           isValidUploadedFile={isValidUploadedFile}
           onFetchUniProtEntry={onFetchUniProtEntry}
           onViewPdbStructure={onViewPdbStructure}
+          onLoadAlignmentInViewer={onLoadAlignmentInViewer}
           onCopyMessage={onCopyMessage}
           onRetryMessage={onRetryMessage}
           retryingMessageId={retryingMessageId}

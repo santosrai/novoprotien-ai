@@ -21,6 +21,10 @@ export interface ExtendedMessage extends Message {
   blueprint?: PipelineBlueprint;
   blueprintRationale?: string;
   blueprintApproved?: boolean;
+  alignmentResult?: {
+    structure1: { pdbContent: string; label: string };
+    structure2: { pdbContent: string; label: string };
+  };
 }
 
 export interface FileUploadState {

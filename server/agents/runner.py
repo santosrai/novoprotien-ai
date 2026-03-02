@@ -885,6 +885,9 @@ async def _run_code_agent(
             if msg_type == "user":
                 conversation_history.append({"role": "user", "content": msg_content})
             elif msg_type == "ai":
+                # Fix 4: Truncate AI responses in history to save tokens
+                if len(msg_content) > 150:
+                    msg_content = msg_content[:150] + "…"
                 conversation_history.append({"role": "assistant", "content": msg_content})
     system_prompt = agent.get("system")
     if agent.get("id") == "mvs-builder":
@@ -1163,6 +1166,9 @@ async def _run_llm_text_agent(
             if msg_type == "user":
                 conversation_history.append({"role": "user", "content": msg_content})
             elif msg_type == "ai":
+                # Fix 4: Truncate AI responses in history to save tokens
+                if len(msg_content) > 150:
+                    msg_content = msg_content[:150] + "…"
                 conversation_history.append({"role": "assistant", "content": msg_content})
     messages = []
     context_parts = []
@@ -1193,6 +1199,12 @@ async def _run_llm_text_agent(
     return result
 
 
+_GREETING_WORDS = frozenset([
+    "hi", "hello", "hey", "greetings", "good morning",
+    "good afternoon", "good evening", "thanks", "thank you", "ok", "okay",
+])
+
+
 def _build_react_messages(
     *,
     user_text: str,
@@ -1204,8 +1216,17 @@ def _build_react_messages(
     structure_metadata: Optional[Dict[str, Any]] = None,
     pipeline_id: Optional[str] = None,
     pipeline_data: Optional[Dict[str, Any]] = None,
+    agent_id: Optional[str] = None,
 ) -> List[Dict[str, Any]]:
     """Build OpenRouter-style message list for the ReAct agent (system + context + history + user)."""
+
+    # ── Fix 1: Detect greetings to skip heavy context ──
+    user_text_lower = user_text.lower().strip()
+    is_greeting = (
+        any(p in user_text_lower for p in _GREETING_WORDS)
+        and len(user_text.strip()) < 30
+    )
+
     context_parts = []
     if uploaded_file_context:
         fn = uploaded_file_context.get("filename", "uploaded file")
@@ -1220,24 +1241,56 @@ def _build_react_messages(
             seq_id = (s or {}).get("labelSeqId") if (s or {}).get("labelSeqId") is not None else (s or {}).get("authSeqId")
             comp = (s or {}).get("compId") or "?"
             context_parts.append(f"SelectedResiduesContext: {comp}{seq_id} (Chain {chain}).")
-    if structure_metadata:
+
+    # ── Fix 1: Skip structure metadata for greetings ──
+    if structure_metadata and not is_greeting:
         summary = _build_summarized_structure_context(structure_metadata=structure_metadata)
         if summary:
             context_parts.append(summary)
-    if current_code and str(current_code).strip():
-        context_parts.append(f"CodeContext (current viewer code):\n{str(current_code)[:2000]}")
+
+    # ── Fix 1 + Fix 3: Skip or slim CodeContext based on greeting / agent ──
+    if current_code and str(current_code).strip() and not is_greeting:
+        if agent_id and agent_id != "code_builder":
+            # bio_chat only needs PDB ID, not full viewer code (per its system prompt)
+            import re as _re_cc
+            pdb_match = _re_cc.search(
+                r"loadStructure\s*\(\s*['\"]([0-9A-Za-z]{4})['\"]",
+                str(current_code),
+            )
+            if pdb_match:
+                context_parts.append(
+                    f"CodeContext: Current PDB loaded is {pdb_match.group(1).upper()}"
+                )
+            # else: uploaded/generated structure — skip code context for non-code agents
+        else:
+            context_parts.append(f"CodeContext (current viewer code):\n{str(current_code)[:2000]}")
+
     openrouter_messages = [{"role": "system", "content": ""}]
     try:
         from .prompts.bio_chat import REACT_SYSTEM_PROMPT
         openrouter_messages[0]["content"] = REACT_SYSTEM_PROMPT
     except Exception:
         pass
+
+    # ── Fix 6: trim_history safety net (already imported at module level) ──
+    trimmed_history = history
     if history:
-        for msg in history[-6:]:
+        try:
+            trimmed_history = trim_history(history, max_turns=6, max_chars=4000)
+        except Exception:
+            trimmed_history = history[-6:]
+
+    if trimmed_history:
+        for msg in trimmed_history[-6:]:
             if msg.get("type") == "user":
                 openrouter_messages.append({"role": "user", "content": msg.get("content", "")})
             elif msg.get("type") == "ai":
-                openrouter_messages.append({"role": "assistant", "content": msg.get("content", "")})
+                # ── Fix 4: Truncate AI responses in history ──
+                content = msg.get("content", "")
+                if len(content) > 150:
+                    content = content[:150] + "…"
+                openrouter_messages.append({"role": "assistant", "content": content})
+
     if context_parts:
         openrouter_messages.append({"role": "user", "content": "Context:\n" + "\n".join(context_parts)})
     openrouter_messages.append({"role": "user", "content": user_text})
@@ -1504,6 +1557,31 @@ async def run_agent(
         except Exception as e:
             log_line("agent:rfdiffusion:failed", {"error": str(e), "userText": user_text})
             return {"type": "text", "text": f"RFdiffusion processing failed: {str(e)}"}
+
+    # Special handling for Alignment agent - use handler instead of LLM
+    if agent.get("id") == "alignment-agent":
+        try:
+            from .handlers.alignment import alignment_handler
+            result = await alignment_handler.process_request(
+                user_text,
+                context={
+                    "current_code": current_code,
+                    "history": history,
+                    "user_id": None,
+                }
+            )
+
+            if result.get("action") == "error":
+                log_line("agent:alignment:error", {"error": result.get("error"), "userText": user_text})
+                return {"type": "text", "text": f"Error: {result.get('error')}"}
+            else:
+                import json
+                log_line("agent:alignment:success", {"userText": user_text})
+                return {"type": "text", "text": json.dumps(result)}
+
+        except Exception as e:
+            log_line("agent:alignment:failed", {"error": str(e), "userText": user_text})
+            return {"type": "text", "text": f"Structure alignment failed: {str(e)}"}
 
     # Special handling for ProteinMPNN agent - use handler instead of LLM
     if agent.get("id") == "proteinmpnn-agent":
@@ -1896,7 +1974,9 @@ async def run_agent_stream(
                     if msg_type == 'user':
                         conversation_history.append({"role": "user", "content": msg_content})
                     elif msg_type == 'ai':
-                        # Include full AI response content so AI understands what it previously suggested
+                        # Fix 4: Truncate AI responses in history to save tokens
+                        if len(msg_content) > 150:
+                            msg_content = msg_content[:150] + "…"
                         conversation_history.append({"role": "assistant", "content": msg_content})
 
             # Enhanced system prompt with RAG for MVS agent
@@ -2189,9 +2269,17 @@ async def run_supervisor_stream(
     api_key = _get_openrouter_api_key()
 
     # ── Step 1: Route ──
+    # Fix 2: Keyword pre-routing — skip LLM call for obvious greetings
+    _GREETING_EXACT = {
+        "hi", "hello", "hey", "greetings", "thanks", "thank you",
+        "ok", "okay", "good morning", "good afternoon", "good evening",
+    }
     if manual_agent_id:
         agent_id = manual_agent_id
         routing_reason = "manual_override"
+    elif user_text.strip().lower() in _GREETING_EXACT or len(user_text.strip()) < 5:
+        agent_id = "bio_chat"
+        routing_reason = "greeting_shortcut"
     else:
         try:
             routing_llm = get_chat_model(model, api_key, temperature=0, max_tokens=50)
@@ -2221,6 +2309,35 @@ async def run_supervisor_stream(
             "agentId": agent_id,
             "toolsInvoked": [],
         }}
+        return
+
+    # ── Alignment agent: fetch PDBs and return alignment result ──
+    if agent_id == "alignment":
+        try:
+            from .handlers.alignment import alignment_handler
+            result = await alignment_handler.process_request(
+                user_text,
+                context={
+                    "current_code": current_code,
+                    "history": history,
+                    "user_id": None,
+                }
+            )
+            if result.get("action") == "error":
+                yield {"type": "error", "data": {"error": result.get("error", "Alignment failed")}}
+            else:
+                result_json = json.dumps(result)
+                yield {"type": "content", "data": {"text": result.get("text", "Comparing structures...")}}
+                yield {"type": "complete", "data": {
+                    "type": "text",
+                    "text": result_json,
+                    "agentId": "alignment-agent",
+                    "toolsInvoked": ["alignment_handler"],
+                    "alignmentResult": result.get("alignmentResult"),
+                }}
+        except Exception as e:
+            print(f"[supervisor] alignment handler failed: {e}")
+            yield {"type": "error", "data": {"error": f"Structure alignment failed: {e}"}}
         return
 
     # ── Deterministic UniProt search (no LLM call) ──
@@ -2303,6 +2420,7 @@ async def run_supervisor_stream(
         structure_metadata=structure_metadata,
         pipeline_id=pipeline_id,
         pipeline_data=pipeline_data,
+        agent_id=agent_id,  # Fix 3: agent-aware CodeContext
     )
     lc_messages = openrouter_to_langchain(openrouter_messages)
     # Strip the hardcoded bio_chat system message — each sub-agent graph
@@ -2385,6 +2503,11 @@ async def run_supervisor_stream(
 
     # ── Step 5: Build result with agent + tools metadata ──
     result = react_state_to_app_result(last_state)
+    if streamed_content:
+        streamed_text = "".join(streamed_content)
+        if streamed_text.strip():
+            # Keep visible assistant text aligned with the streamed output to avoid end-of-stream replacement.
+            result["text"] = streamed_text
     if streamed_token_usage and not result.get("tokenUsage"):
         result["tokenUsage"] = streamed_token_usage
     if not result.get("tokenUsage"):

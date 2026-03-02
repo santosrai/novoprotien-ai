@@ -11,6 +11,7 @@ import {
   FileAttachmentCard,
   PipelineAttachmentCard,
   UniProtResultCard,
+  AlignmentResultCard,
 } from './results';
 import { AgentPill } from '../AgentPill';
 import { ToolPill } from '../ToolPill';
@@ -45,6 +46,7 @@ interface MessageBubbleProps {
   isValidUploadedFile: (fileInfo: any) => boolean;
   onFetchUniProtEntry: (accession: string) => void;
   onViewPdbStructure: (pdbId: string) => void;
+  onLoadAlignmentInViewer: (result: any) => Promise<any>;
   onCopyMessage: (message: ExtendedMessage) => void | Promise<void>;
   onRetryMessage: (messageId: string) => void | Promise<void>;
   retryingMessageId?: string | null;
@@ -70,6 +72,7 @@ const MessageBubble: React.FC<MessageBubbleProps> = ({
   isValidUploadedFile,
   onFetchUniProtEntry,
   onViewPdbStructure,
+  onLoadAlignmentInViewer,
   onCopyMessage,
   onRetryMessage,
   retryingMessageId,
@@ -307,6 +310,12 @@ colorByConfidence();`;
               onFetchEntry={onFetchUniProtEntry}
               onViewStructure={onViewPdbStructure}
             />
+            {message.alignmentResult && (
+              <AlignmentResultCard
+                result={message.alignmentResult}
+                onLoadInViewer={onLoadAlignmentInViewer}
+              />
+            )}
             {message.validationResult && renderValidationResult(message.validationResult)}
             {message.error && (
               <div className="mt-3">

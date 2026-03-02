@@ -18,13 +18,35 @@ except ImportError:
     from agents.prompts.mvs_builder import MVS_AGENT_SYSTEM_PROMPT_BASE
 
 
+# Fix 5: Keywords that signal the user needs the full MVS API docs.
+# Most simple viz requests ("show 1ZNI", "highlight residue 50") only need
+# the builder API (~1050 tokens). Including MVS (~2325 tokens) only when needed.
+_MVS_KEYWORDS = frozenset({
+    "opacity", "transparent", "transparency", "assembly", "symmetry",
+    "volume", "density", "primitive", "arrow", "measurement", "distance",
+    "compare", "overlay", "two structures", "annotation", "mvs",
+    "molviewspec", "canvas", "background", "camera", "isosurface",
+})
+
+
 async def _build_code_builder_prompt(user_query: str = "") -> str:
-    """Merge Mol* + MVS system prompts, then enhance with RAG examples."""
-    merged = (
-        CODE_AGENT_SYSTEM_PROMPT
-        + "\n\n--- MolViewSpec (MVS) Fluent API ---\n\n"
-        + MVS_AGENT_SYSTEM_PROMPT_BASE
-    )
+    """Merge Mol* + MVS system prompts, then enhance with RAG examples.
+
+    Fix 5: Only include the heavy MVS prompt (~2325 tokens) when the user
+    query contains MVS-related keywords.  Otherwise just the builder API.
+    """
+    query_lower = (user_query or "").lower()
+    needs_mvs = any(kw in query_lower for kw in _MVS_KEYWORDS)
+
+    if needs_mvs:
+        merged = (
+            CODE_AGENT_SYSTEM_PROMPT
+            + "\n\n--- MolViewSpec (MVS) Fluent API ---\n\n"
+            + MVS_AGENT_SYSTEM_PROMPT_BASE
+        )
+    else:
+        merged = CODE_AGENT_SYSTEM_PROMPT  # builder API only
+
     if not user_query:
         return merged
 

@@ -161,6 +161,19 @@ export function useActionRouter(params: UseActionRouterParams): { routeAction: (
         return true;
       }
 
+      if (data.action === 'show_alignment') {
+        console.log('[Alignment] Structural alignment result detected');
+        const alignmentMsg: ExtendedMessage = {
+          id: uuidv4(),
+          content: data.text || `Comparing ${data.alignmentResult?.structure1?.label} and ${data.alignmentResult?.structure2?.label} structures.`,
+          type: 'ai',
+          timestamp: new Date(),
+          alignmentResult: data.alignmentResult,
+        };
+        addMessage(alignmentMsg);
+        return true;
+      }
+
       if (data.action === 'validation_result') {
         console.log('[Validation] Validation result detected in agent response');
         const validationMsg: ExtendedMessage = {

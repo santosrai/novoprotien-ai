@@ -878,7 +878,7 @@ async def route_stream_sse(request: Request, user: Dict[str, Any] = Depends(get_
                     # Include app result so frontend can handle agentId, code, actions, toolsInvoked, etc.
                     app_result = {
                         k: data.get(k)
-                        for k in ("agentId", "text", "code", "reason", "type", "thinkingProcess", "toolsInvoked", "toolResults", "uniprotSearchResult", "uniprotDetailResult", "tokenUsage")
+                        for k in ("agentId", "text", "code", "reason", "type", "thinkingProcess", "toolsInvoked", "toolResults", "uniprotSearchResult", "uniprotDetailResult", "tokenUsage", "alignmentResult")
                         if data.get(k) is not None
                     }
                     values_payload = _json.dumps({"messages": lc_messages, "appResult": app_result})

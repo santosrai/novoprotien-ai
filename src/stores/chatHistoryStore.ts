@@ -84,6 +84,10 @@ export interface Message {
     filename: string;
     smiles?: string;
   };
+  alignmentResult?: {
+    structure1: { pdbContent: string; label: string };
+    structure2: { pdbContent: string; label: string };
+  };
   uniprotSearchResult?: {
     query: string;
     results: Array<{
