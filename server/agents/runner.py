@@ -2506,8 +2506,15 @@ async def run_supervisor_stream(
     if streamed_content:
         streamed_text = "".join(streamed_content)
         if streamed_text.strip():
-            # Keep visible assistant text aligned with the streamed output to avoid end-of-stream replacement.
-            result["text"] = streamed_text
+            # If result already has extracted code, strip code fences from streamed text
+            # to avoid duplicate code display (code appears in both text and code fields).
+            if result.get("code") and result["code"].strip():
+                _, clean_text = extract_code_and_text(streamed_text)
+                if clean_text.strip():
+                    result["text"] = clean_text
+            else:
+                # Keep visible assistant text aligned with the streamed output to avoid end-of-stream replacement.
+                result["text"] = streamed_text
     if streamed_token_usage and not result.get("tokenUsage"):
         result["tokenUsage"] = streamed_token_usage
     if not result.get("tokenUsage"):

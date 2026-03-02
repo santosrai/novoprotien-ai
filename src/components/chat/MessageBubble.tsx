@@ -13,6 +13,7 @@ import {
   UniProtResultCard,
   AlignmentResultCard,
 } from './results';
+import { CollapsibleSection } from './CollapsibleSection';
 import { AgentPill } from '../AgentPill';
 import { ToolPill } from '../ToolPill';
 import { ThinkingProcessDisplay } from '../ThinkingProcessDisplay';
@@ -94,9 +95,11 @@ const MessageBubble: React.FC<MessageBubbleProps> = ({
     try {
       const parsed = JSON.parse(content);
       return (
-        <pre className="text-[10px] whitespace-pre-wrap bg-white border border-gray-200 rounded p-1.5 overflow-x-auto leading-relaxed">
-          {JSON.stringify(parsed, null, 2)}
-        </pre>
+        <CollapsibleSection title="Details">
+          <pre className="text-[10px] whitespace-pre bg-white border border-gray-200 rounded p-1.5 overflow-auto leading-relaxed">
+            {JSON.stringify(parsed, null, 2)}
+          </pre>
+        </CollapsibleSection>
       );
     } catch {
       // not JSON
@@ -104,7 +107,36 @@ const MessageBubble: React.FC<MessageBubbleProps> = ({
 
     return (
       <div className="markdown-content text-sm leading-relaxed [&_h1]:text-lg [&_h1]:font-semibold [&_h1]:mt-2 [&_h1]:mb-1 [&_h2]:text-base [&_h2]:font-semibold [&_h2]:mt-2 [&_h2]:mb-1 [&_h3]:text-sm [&_h3]:font-semibold [&_h3]:mt-1.5 [&_h3]:mb-0.5 [&_p]:my-1 [&_p]:whitespace-pre-wrap [&_ul]:my-1 [&_ul]:pl-5 [&_ol]:my-1 [&_ol]:pl-5 [&_strong]:font-semibold [&_table]:w-full [&_table]:border-collapse [&_table]:border [&_table]:border-gray-200 [&_th]:text-left [&_th]:px-2 [&_th]:py-1 [&_th]:border [&_th]:border-gray-200 [&_th]:bg-gray-50 [&_td]:px-2 [&_td]:py-1 [&_td]:border [&_td]:border-gray-200 [&_tr:nth-child(even)]:bg-gray-50">
-        <ReactMarkdown remarkPlugins={[remarkGfm]}>{content}</ReactMarkdown>
+        <ReactMarkdown
+          remarkPlugins={[remarkGfm]}
+          components={{
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            code({ inline, className, children, ...props }: any) {
+              const match = /language-(\w+)/.exec(className || '');
+              if (inline) {
+                return (
+                  <code className={className} {...props}>
+                    {children}
+                  </code>
+                );
+              }
+              const languageLabel = match?.[1] ? match[1] : 'Code';
+              return (
+                <div className="my-1.5">
+                  <CollapsibleSection title={languageLabel}>
+                    <pre className="text-[10px] whitespace-pre bg-white border border-gray-200 rounded p-1.5 overflow-auto leading-relaxed">
+                      <code className={className} {...props}>
+                        {children}
+                      </code>
+                    </pre>
+                  </CollapsibleSection>
+                </div>
+              );
+            },
+          }}
+        >
+          {content}
+        </ReactMarkdown>
       </div>
     );
   };
@@ -214,6 +246,15 @@ colorByConfidence();`;
               />
             )}
             {renderMessageContent(message.content)}
+            {message.threeDCanvas?.sceneData && (
+              <div className="mt-2">
+                <CollapsibleSection title="Code Builder">
+                  <pre className="text-[10px] whitespace-pre bg-white border border-gray-200 rounded p-1.5 overflow-auto leading-relaxed">
+                    {message.threeDCanvas.sceneData}
+                  </pre>
+                </CollapsibleSection>
+              </div>
+            )}
             {message.blueprint && (
               <div className="mt-3">
                 <PipelineBlueprintDisplay
