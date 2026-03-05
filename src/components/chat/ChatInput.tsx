@@ -1,5 +1,5 @@
 import React from 'react';
-import { Send, ChevronDown, ChevronUp, X } from 'lucide-react';
+import { Send, Square, ChevronDown, ChevronUp, X } from 'lucide-react';
 import { AgentSelector } from '../AgentSelector';
 import { ModelSelector } from '../ModelSelector';
 import { AttachmentMenu } from '../AttachmentMenu';
@@ -31,6 +31,7 @@ interface ChatInputProps {
   models: any[];
   textareaRef: React.RefObject<HTMLTextAreaElement>;
   handleSubmit: (e: React.FormEvent) => void;
+  onStop?: () => void;
   handleFileSelected: (file: File) => void;
   handleFilesSelected: (files: File[]) => void;
   handlePipelineSelect: () => void;
@@ -65,6 +66,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({
   models,
   textareaRef,
   handleSubmit,
+  onStop,
   handleFileSelected,
   handleFilesSelected,
   handlePipelineSelect,
@@ -328,14 +330,25 @@ export const ChatInput: React.FC<ChatInputProps> = ({
                   </svg>
                 </button>
                 
-                <button
-                  type="submit"
-                  disabled={!input.trim() || isLoading}
-                  className="flex items-center justify-center p-1.5 text-gray-400 hover:text-gray-600 transition-colors disabled:opacity-50 disabled:cursor-not-allowed rounded-md hover:bg-gray-100"
-                  title="Send"
-                >
-                  <Send className="w-5 h-5" />
-                </button>
+                {isLoading ? (
+                  <button
+                    type="button"
+                    onClick={onStop}
+                    className="flex items-center justify-center p-1.5 text-red-500 hover:text-red-700 transition-colors rounded-md hover:bg-red-50"
+                    title="Stop generation"
+                  >
+                    <Square className="w-4 h-4 fill-current" />
+                  </button>
+                ) : (
+                  <button
+                    type="submit"
+                    disabled={!input.trim()}
+                    className="flex items-center justify-center p-1.5 text-gray-400 hover:text-gray-600 transition-colors disabled:opacity-50 disabled:cursor-not-allowed rounded-md hover:bg-gray-100"
+                    title="Send"
+                  >
+                    <Send className="w-5 h-5" />
+                  </button>
+                )}
               </div>
             </div>
           </div>

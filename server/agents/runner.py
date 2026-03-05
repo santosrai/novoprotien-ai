@@ -2250,6 +2250,7 @@ async def run_supervisor_stream(
     manual_agent_id: Optional[str] = None,
     temperature: float = 0.5,
     max_tokens: int = 1000,
+    abort_event: Optional["asyncio.Event"] = None,
 ) -> AsyncGenerator[Dict[str, Any], None]:
     """Supervisor streaming: route to a sub-agent, then stream its ReAct loop.
 
@@ -2260,10 +2261,14 @@ async def run_supervisor_stream(
         complete  – final result with agentId + toolsInvoked
         error     – on failure
     """
+    import asyncio as _asyncio
     from .llm.model import get_chat_model
     from .llm.messages import openrouter_to_langchain
     from .supervisor.routing import route_to_agent
     from .langchain_agent.result import react_state_to_app_result
+
+    def _is_aborted() -> bool:
+        return abort_event is not None and abort_event.is_set()
 
     model = model_override or os.getenv("CLAUDE_CHAT_MODEL", "claude-3-5-sonnet-20241022")
     api_key = _get_openrouter_api_key()
@@ -2292,6 +2297,10 @@ async def run_supervisor_stream(
     print(f"[supervisor] routed to: {agent_id} ({routing_reason})")
     yield {"type": "routing", "data": {"agentId": agent_id, "reason": routing_reason}}
 
+    if _is_aborted():
+        yield {"type": "error", "data": {"error": "Generation stopped by user"}}
+        return
+
     # ── Direct actions: dialog triggers bypass sub-agent entirely ──
     _DIRECT_ACTION_MAP = {
         "alphafold": {"action": "open_alphafold_dialog"},
@@ -2312,6 +2321,9 @@ async def run_supervisor_stream(
         return
 
     # ── Alignment agent: fetch PDBs and return alignment result ──
+    if _is_aborted():
+        yield {"type": "error", "data": {"error": "Generation stopped by user"}}
+        return
     if agent_id == "alignment":
         try:
             from .handlers.alignment import alignment_handler
@@ -2338,6 +2350,41 @@ async def run_supervisor_stream(
         except Exception as e:
             print(f"[supervisor] alignment handler failed: {e}")
             yield {"type": "error", "data": {"error": f"Structure alignment failed: {e}"}}
+        return
+
+    # ── AF2Bind binding-site prediction (external API) ──
+    if agent_id == "af2bind":
+        try:
+            from .handlers.af2bind import af2bind_handler
+            yield {"type": "content", "data": {"text": "Running AF2Bind binding-site prediction... This may take 30\u2013120 seconds."}}
+            if _is_aborted():
+                yield {"type": "error", "data": {"error": "Generation stopped by user"}}
+                return
+            result = await af2bind_handler.process_request(
+                user_text,
+                context={
+                    "current_code": current_code,
+                    "history": history,
+                    "user_id": None,
+                },
+                abort_event=abort_event,
+            )
+            if result.get("action") == "error":
+                yield {"type": "error", "data": {"error": result.get("error", "AF2Bind failed")}}
+            else:
+                yield {"type": "complete", "data": {
+                    "type": "text",
+                    "text": result.get("text", ""),
+                    "agentId": "af2bind-agent",
+                    "toolsInvoked": ["af2bind_handler"],
+                    "af2bindResult": result.get("af2bindResult"),
+                }}
+        except _asyncio.CancelledError:
+            print(f"[supervisor] af2bind cancelled by user")
+            yield {"type": "error", "data": {"error": "Generation stopped by user"}}
+        except Exception as e:
+            print(f"[supervisor] af2bind handler failed: {e}")
+            yield {"type": "error", "data": {"error": f"AF2Bind prediction failed: {e}"}}
         return
 
     # ── Deterministic UniProt search (no LLM call) ──
@@ -2443,6 +2490,9 @@ async def run_supervisor_stream(
             print(f"[supervisor] Starting astream for {agent_id}, {len(lc_messages)} input messages")
             event_idx = 0
             async for event in graph.astream(inputs, config=config, stream_mode="messages"):
+                if _is_aborted():
+                    print(f"[supervisor] Abort detected during astream for {agent_id}")
+                    break
                 event_idx += 1
                 # Extract text content (AI messages only)
                 content = _supervisor_content_from_event(event)
@@ -2487,10 +2537,17 @@ async def run_supervisor_stream(
                 )
             else:
                 print(f"[supervisor] No streamed content, falling back to ainvoke for {agent_id}")
+            if _is_aborted():
+                yield {"type": "error", "data": {"error": "Generation stopped by user"}}
+                return
             if hasattr(graph, "ainvoke"):
                 last_state = await graph.ainvoke(inputs, config=config)
             else:
                 last_state = graph.invoke(inputs, config=config)
+    except _asyncio.CancelledError:
+        print(f"[supervisor] Cancelled by user for {agent_id}")
+        yield {"type": "error", "data": {"error": "Generation stopped by user"}}
+        return
     except Exception as e:
         print(f"[supervisor] EXCEPTION during {agent_id} execution: {e}")
         log_line("supervisor:stream:error", {"agentId": agent_id, "error": str(e)})

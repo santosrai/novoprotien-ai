@@ -25,6 +25,15 @@ export interface ExtendedMessage extends Message {
     structure1: { pdbContent: string; label: string };
     structure2: { pdbContent: string; label: string };
   };
+  af2bindResult?: {
+    targetId: string;
+    chain: string;
+    pdbContent: string;
+    residues: Array<{ chain: string; resi: number; resn: string; pBind: number }>;
+    topResidues: Array<{ chain: string; resi: number; resn: string; pBind: number }>;
+    computeTime: number;
+    totalResidues: number;
+  };
 }
 
 export interface FileUploadState {

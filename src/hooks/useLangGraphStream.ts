@@ -1,4 +1,4 @@
-import { useMemo, useEffect, useRef } from 'react';
+import { useMemo, useEffect, useRef, useCallback } from 'react';
 import { useStream } from '@langchain/langgraph-sdk/react';
 import { createLangGraphTransport, toLangGraphMessages } from '../utils/langgraphTransport';
 import { v4 as uuidv4 } from 'uuid';
@@ -7,6 +7,7 @@ import { CodeExecutor } from '../utils/codeExecutor';
 import type { PluginUIContext } from 'molstar/lib/mol-plugin-ui/context';
 import type { ExtendedMessage } from '../types/chat';
 import { convertThinkingData } from '../utils/chatHelpers';
+import { getAuthHeaders } from '../utils/api';
 
 export interface UseLangGraphStreamParams {
   rawMessages: any[];
@@ -155,6 +156,7 @@ export function useLangGraphStream({
       const uniprotSearchResult = (appResult as any)?.uniprotSearchResult ?? undefined;
       const uniprotDetailResult = (appResult as any)?.uniprotDetailResult ?? undefined;
       const alignmentResult = (appResult as any)?.alignmentResult ?? undefined;
+      const af2bindResult = (appResult as any)?.af2bindResult ?? undefined;
 
       if (content && !actionHandled) {
         const aiMessage = {
@@ -172,6 +174,7 @@ export function useLangGraphStream({
           ...(uniprotSearchResult ? { uniprotSearchResult } : {}),
           ...(uniprotDetailResult ? { uniprotDetailResult } : {}),
           ...(alignmentResult ? { alignmentResult } : {}),
+          ...(af2bindResult ? { af2bindResult } : {}),
         } as ExtendedMessage;
         if (replaceTargetMessageId && replaceMessageById) {
           replaceMessageById(replaceTargetMessageId, aiMessage);
@@ -332,9 +335,43 @@ export function useLangGraphStream({
     return { messages: sessionList, hasStreamingContent: false };
   })();
 
+  // ── Stop / Abort generation ──
+  const handleStop = useCallback(async () => {
+    console.log('[LG stream] User requested stop');
+    // 1. Abort the SSE stream (calls AbortController.abort() internally)
+    try { await stream.stop(); } catch (e) {
+      console.warn('[LG stream] stop() error (expected if already stopped):', e);
+    }
+    // 2. Clean up loading state
+    setIsLoading(false);
+    // 3. Belt-and-suspenders: POST abort to backend so it cancels the generator
+    if (activeSessionId) {
+      try {
+        const headers = getAuthHeaders();
+        fetch('/api/agents/abort', {
+          method: 'POST',
+          headers: { ...headers, 'Content-Type': 'application/json' },
+          body: JSON.stringify({ session_id: activeSessionId }),
+        }).catch(() => {}); // fire-and-forget
+      } catch { /* ignore */ }
+    }
+    // 4. Add a "stopped" message to chat
+    addMessage({
+      id: uuidv4(),
+      type: 'ai',
+      content: 'Generation stopped.',
+      timestamp: new Date(),
+    } as ExtendedMessage);
+    // 5. Clean up replace target if active
+    if (replaceTargetMessageId && clearReplaceTarget) {
+      clearReplaceTarget();
+    }
+  }, [stream, setIsLoading, activeSessionId, addMessage, replaceTargetMessageId, clearReplaceTarget]);
+
   return {
     stream,
     messages,
     hasStreamingContent,
+    handleStop,
   };
 }

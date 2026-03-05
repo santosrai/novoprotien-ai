@@ -24,10 +24,11 @@ Agents:
 - proteinmpnn: Design sequences for a protein backbone, run ProteinMPNN, inverse folding, sequence design.
 - diffdock: Dock a ligand to a protein, protein-ligand docking, predict binding pose, run DiffDock.
 - alignment: Compare two protein structures, align structures, overlay structures, superpose proteins, TM-align, structural alignment, structure comparison.
+- af2bind: Predict ligand-binding sites, binding site prediction, run AF2Bind, identify where ligands bind on a protein, binding residues.
 
-Respond with ONLY the agent name: bio_chat, code_builder, pipeline, alphafold, openfold, rfdiffusion, proteinmpnn, diffdock, or alignment"""
+Respond with ONLY the agent name: bio_chat, code_builder, pipeline, alphafold, openfold, rfdiffusion, proteinmpnn, diffdock, alignment, or af2bind"""
 
-VALID_AGENTS = {"bio_chat", "code_builder", "pipeline", "alphafold", "openfold", "rfdiffusion", "proteinmpnn", "diffdock", "alignment"}
+VALID_AGENTS = {"bio_chat", "code_builder", "pipeline", "alphafold", "openfold", "rfdiffusion", "proteinmpnn", "diffdock", "alignment", "af2bind"}
 
 
 async def route_to_agent(

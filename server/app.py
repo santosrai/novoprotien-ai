@@ -779,6 +779,40 @@ def _body_to_stream_args(body: dict, user: Dict[str, Any]) -> dict:
     }
 
 
+# ---------------------------------------------------------------------------
+# Abort registry: allows frontend to cancel in-progress agent streams
+# ---------------------------------------------------------------------------
+import asyncio as _asyncio
+
+_abort_events: dict[str, _asyncio.Event] = {}
+
+def get_abort_event(session_id: str) -> _asyncio.Event:
+    """Get or create an abort event for a session."""
+    if session_id not in _abort_events:
+        _abort_events[session_id] = _asyncio.Event()
+    return _abort_events[session_id]
+
+def clear_abort_event(session_id: str):
+    """Clean up an abort event after the stream completes."""
+    _abort_events.pop(session_id, None)
+
+
+@app.post("/api/agents/abort")
+async def abort_agent_stream(request: Request, user: Dict[str, Any] = Depends(get_current_user)):
+    """Signal the backend to abort an in-progress agent stream."""
+    body = await request.json()
+    session_id = body.get("session_id", "")
+    if not session_id:
+        return {"status": "error", "message": "session_id required"}
+    event = _abort_events.get(session_id)
+    if event:
+        event.set()
+        print(f"[Abort] Set abort flag for session {session_id}", flush=True)
+        return {"status": "aborted"}
+    print(f"[Abort] No active stream for session {session_id}", flush=True)
+    return {"status": "no_active_stream"}
+
+
 @app.post("/api/agents/route/stream/sse")
 @limiter.limit("60/minute")
 async def route_stream_sse(request: Request, user: Dict[str, Any] = Depends(get_current_user)):
@@ -823,6 +857,11 @@ async def route_stream_sse(request: Request, user: Dict[str, Any] = Depends(get_
         return StreamingResponse(_err(), media_type="text/event-stream",
                                 headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
 
+    # --- Abort event for this session ---
+    configurable = body.get("config", {}).get("configurable", {})
+    session_id = configurable.get("session_id", "")
+    abort_event = get_abort_event(session_id) if session_id else _asyncio.Event()
+
     # --- Now create the streaming generator with pre-parsed data ---
     async def _generate():
         try:
@@ -836,8 +875,15 @@ async def route_stream_sse(request: Request, user: Dict[str, Any] = Depends(get_
             event_count = 0
             # Stable message ID so SDK MessageTupleManager concatenates all chunks
             ai_msg_id = str(_uuid.uuid4())
-            _log(f"[SSE] Starting supervisor stream, ai_msg_id={ai_msg_id}")
-            async for event in run_supervisor_stream(**stream_args):
+            _log(f"[SSE] Starting supervisor stream, ai_msg_id={ai_msg_id}, session_id={session_id}")
+            async for event in run_supervisor_stream(**stream_args, abort_event=abort_event):
+                # Check if client disconnected or abort was requested
+                if abort_event.is_set():
+                    _log(f"[SSE] Abort requested for session {session_id}, stopping stream")
+                    break
+                if await request.is_disconnected():
+                    _log(f"[SSE] Client disconnected, stopping stream")
+                    break
                 event_count += 1
                 etype = event.get("type")
                 _log(f"[SSE] event #{event_count}: type={etype}")
@@ -878,7 +924,7 @@ async def route_stream_sse(request: Request, user: Dict[str, Any] = Depends(get_
                     # Include app result so frontend can handle agentId, code, actions, toolsInvoked, etc.
                     app_result = {
                         k: data.get(k)
-                        for k in ("agentId", "text", "code", "reason", "type", "thinkingProcess", "toolsInvoked", "toolResults", "uniprotSearchResult", "uniprotDetailResult", "tokenUsage", "alignmentResult")
+                        for k in ("agentId", "text", "code", "reason", "type", "thinkingProcess", "toolsInvoked", "toolResults", "uniprotSearchResult", "uniprotDetailResult", "tokenUsage", "alignmentResult", "af2bindResult")
                         if data.get(k) is not None
                     }
                     values_payload = _json.dumps({"messages": lc_messages, "appResult": app_result})
@@ -887,14 +933,61 @@ async def route_stream_sse(request: Request, user: Dict[str, Any] = Depends(get_
                 elif etype == "error":
                     err = (event.get("data") or {}).get("error") or "Unknown error"
                     _log(f"[SSE] yielding error event: {err}")
-                    yield f"event: error\ndata: {_json.dumps({'message': str(err)})}\n\n"
+                    # Emit both: a messages event (so SDK aggregates content) and
+                    # a values event (so SDK completes the stream and frontend can display it).
+                    # Without the values event the SDK never transitions isLoading → false
+                    # and the frontend gets stuck in the loading state.
+                    error_text = f"⚠️ {err}"
+                    err_serialized = {"type": "AIMessageChunk", "id": ai_msg_id, "content": error_text}
+                    err_metadata = {"langgraph_node": "agent"}
+                    yield f"event: messages\ndata: {_json.dumps([err_serialized, err_metadata])}\n\n"
+                    # Build a values event with collected content + error
+                    history = stream_args.get("history") or []
+                    lc_messages_err: list = []
+                    for i, h in enumerate(history):
+                        role = h.get("type", "user")
+                        lc_messages_err.append({
+                            "type": "human" if role == "user" else "ai",
+                            "id": str(_uuid.uuid4()),
+                            "content": h.get("content") or "",
+                        })
+                    lc_messages_err.append({"type": "ai", "id": ai_msg_id, "content": error_text})
+                    err_values_payload = _json.dumps({
+                        "messages": lc_messages_err,
+                        "appResult": {"text": error_text},
+                    })
+                    _log(f"[SSE] yielding values event for error, messages count: {len(lc_messages_err)}")
+                    yield f"event: values\ndata: {err_values_payload}\n\n"
             _log(f"[SSE] stream ended, total events: {event_count}, collected content len: {len(''.join(collected_content))}")
         except Exception as e:
             _log(f"[SSE] EXCEPTION: {e}")
             import traceback as _tb
             _log(f"[SSE] traceback: {_tb.format_exc()}")
             log_line("agent_route_stream_sse_failed", {"error": str(e), "trace": _tb.format_exc()})
-            yield f"event: error\ndata: {_json.dumps({'message': str(e)})}\n\n"
+            # Same fix: emit a values event on exception so frontend never gets stuck
+            exc_text = f"⚠️ Something went wrong: {e}"
+            exc_serialized = {"type": "AIMessageChunk", "id": ai_msg_id, "content": exc_text}
+            exc_metadata = {"langgraph_node": "agent"}
+            yield f"event: messages\ndata: {_json.dumps([exc_serialized, exc_metadata])}\n\n"
+            history = stream_args.get("history") or []
+            lc_messages_exc: list = []
+            for i, h in enumerate(history):
+                role = h.get("type", "user")
+                lc_messages_exc.append({
+                    "type": "human" if role == "user" else "ai",
+                    "id": str(_uuid.uuid4()),
+                    "content": h.get("content") or "",
+                })
+            lc_messages_exc.append({"type": "ai", "id": ai_msg_id, "content": exc_text})
+            exc_values_payload = _json.dumps({
+                "messages": lc_messages_exc,
+                "appResult": {"text": exc_text},
+            })
+            _log(f"[SSE] yielding values event for exception, messages count: {len(lc_messages_exc)}")
+            yield f"event: values\ndata: {exc_values_payload}\n\n"
+        finally:
+            if session_id:
+                clear_abort_event(session_id)
 
     return StreamingResponse(
         _generate(),

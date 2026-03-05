@@ -152,7 +152,7 @@ export const ChatPanel: React.FC = () => {
     setRetryTargetMessageId(null);
   }, []);
 
-  const { stream, messages, hasStreamingContent } = useLangGraphStream({
+  const { stream, messages, hasStreamingContent, handleStop } = useLangGraphStream({
     rawMessages, activeSessionId, isLoading, setIsLoading,
     addMessage, setLastAgentId, setCurrentCode, saveVisualizationCode,
     setIsExecuting, setPendingCodeToRun, setViewerVisibleAndSave,
@@ -496,6 +496,7 @@ export const ChatPanel: React.FC = () => {
         pipeline_id: payload.pipeline_id,
         model: payload.model,
         agentId: payload.agentId,
+        session_id: activeSessionId,
       };
 
       try {
@@ -622,6 +623,26 @@ export const ChatPanel: React.FC = () => {
     }
   }, [plugin, setIsExecuting, setViewerVisibleAndSave, setActivePane]);
 
+  const onLoadAf2bindInViewer = useCallback(async (result: any) => {
+    if (!result?.pdbContent || !plugin) return;
+    try {
+      setIsExecuting(true);
+      const builder = createMolstarBuilder(plugin);
+      await builder.clearStructure();
+      await builder.loadStructureFromContent(result.pdbContent, 'pdb');
+      // B-factor coloring: the output PDB has B-factors = p(bind) * 100
+      // Molstar's "uncertainty" color theme uses B-factor by default (rwb scale)
+      await builder.addCartoonRepresentation({ color: 'uncertainty' });
+      plugin.managers.camera.reset();
+      setViewerVisibleAndSave(true);
+      setActivePane('viewer');
+    } catch (err) {
+      console.error('[ChatPanel] Failed to load AF2Bind result in viewer:', err);
+    } finally {
+      setIsExecuting(false);
+    }
+  }, [plugin, setIsExecuting, setViewerVisibleAndSave, setActivePane]);
+
   const onLoadSmilesInViewer = useCallback(async (result: any, message?: any) => {
     if (!result?.file_id || !plugin) return;
     try {
@@ -704,6 +725,7 @@ export const ChatPanel: React.FC = () => {
           onFetchUniProtEntry={handleFetchUniProtEntry}
           onViewPdbStructure={handleViewPdbStructure}
           onLoadAlignmentInViewer={onLoadAlignmentInViewer}
+          onLoadAf2bindInViewer={onLoadAf2bindInViewer}
           onCopyMessage={handleCopyMessage}
           onRetryMessage={handleRetryMessage}
           retryingMessageId={retryTargetMessageId}
@@ -737,6 +759,7 @@ export const ChatPanel: React.FC = () => {
         models={models}
         textareaRef={textareaRef as React.RefObject<HTMLTextAreaElement>}
         handleSubmit={handleSubmit}
+        onStop={handleStop}
         handleFileSelected={handleFileSelected}
         handleFilesSelected={handleFilesSelected}
         handlePipelineSelect={handlePipelineSelect}

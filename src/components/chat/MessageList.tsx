@@ -26,6 +26,7 @@ export interface MessageListProps {
   onFetchUniProtEntry: (accession: string) => void;
   onViewPdbStructure: (pdbId: string) => void;
   onLoadAlignmentInViewer: (result: any) => Promise<any>;
+  onLoadAf2bindInViewer: (result: any) => Promise<void>;
   onCopyMessage: (message: ExtendedMessage) => void | Promise<void>;
   onRetryMessage: (messageId: string) => void | Promise<void>;
   retryingMessageId?: string | null;
@@ -55,6 +56,7 @@ export function MessageList({
   onFetchUniProtEntry,
   onViewPdbStructure,
   onLoadAlignmentInViewer,
+  onLoadAf2bindInViewer,
   onCopyMessage,
   onRetryMessage,
   retryingMessageId,
@@ -85,6 +87,7 @@ export function MessageList({
           onFetchUniProtEntry={onFetchUniProtEntry}
           onViewPdbStructure={onViewPdbStructure}
           onLoadAlignmentInViewer={onLoadAlignmentInViewer}
+          onLoadAf2bindInViewer={onLoadAf2bindInViewer}
           onCopyMessage={onCopyMessage}
           onRetryMessage={onRetryMessage}
           retryingMessageId={retryingMessageId}

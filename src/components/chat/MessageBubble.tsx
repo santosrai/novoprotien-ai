@@ -12,6 +12,7 @@ import {
   PipelineAttachmentCard,
   UniProtResultCard,
   AlignmentResultCard,
+  AF2BindResultCard,
 } from './results';
 import { CollapsibleSection } from './CollapsibleSection';
 import { AgentPill } from '../AgentPill';
@@ -48,6 +49,7 @@ interface MessageBubbleProps {
   onFetchUniProtEntry: (accession: string) => void;
   onViewPdbStructure: (pdbId: string) => void;
   onLoadAlignmentInViewer: (result: any) => Promise<any>;
+  onLoadAf2bindInViewer: (result: any) => Promise<void>;
   onCopyMessage: (message: ExtendedMessage) => void | Promise<void>;
   onRetryMessage: (messageId: string) => void | Promise<void>;
   retryingMessageId?: string | null;
@@ -74,6 +76,7 @@ const MessageBubble: React.FC<MessageBubbleProps> = ({
   onFetchUniProtEntry,
   onViewPdbStructure,
   onLoadAlignmentInViewer,
+  onLoadAf2bindInViewer,
   onCopyMessage,
   onRetryMessage,
   retryingMessageId,
@@ -355,6 +358,12 @@ colorByConfidence();`;
               <AlignmentResultCard
                 result={message.alignmentResult}
                 onLoadInViewer={onLoadAlignmentInViewer}
+              />
+            )}
+            {message.af2bindResult && (
+              <AF2BindResultCard
+                result={message.af2bindResult}
+                onLoadInViewer={onLoadAf2bindInViewer}
               />
             )}
             {message.validationResult && renderValidationResult(message.validationResult)}
