@@ -16,7 +16,8 @@ import { useTheme } from './contexts/ThemeContext';
 import { useAppStore } from './stores/appStore';
 import { useSettingsStore } from './stores/settingsStore';
 import { useChatHistoryStore } from './stores/chatHistoryStore';
-import { useEffect, useState, Suspense, lazy, useMemo } from 'react';
+import { useEffect, useState, useCallback, Suspense, lazy, useMemo } from 'react';
+import { MobileSegmentedControl, MobileTab } from './components/MobileSegmentedControl';
 
 // Lazy load MolstarViewer - only load when viewer is visible
 const MolstarViewer = lazy(() => import('./components/MolstarViewer').then(module => ({ default: module.MolstarViewer })));
@@ -29,7 +30,50 @@ function App() {
   const user = useAuthStore((state) => state.user);
   const errorDashboard = useErrorDashboard();
   const { theme } = useTheme();
-  
+
+  // Mobile state
+  const [isMobile, setIsMobile] = useState(() => window.innerWidth < 768);
+  const [mobileActiveTab, setMobileActiveTab] = useState<MobileTab>('chat');
+
+  useEffect(() => {
+    const onResize = () => setIsMobile(window.innerWidth < 768);
+    window.addEventListener('resize', onResize);
+    return () => window.removeEventListener('resize', onResize);
+  }, []);
+
+  // Auto-switch mobile tab when viewer/pane becomes active
+  useEffect(() => {
+    if (!isMobile) return;
+    if (isViewerVisible && activePane) {
+      const paneToTab: Record<string, MobileTab> = {
+        viewer: 'viewer',
+        editor: 'viewer',
+        pipeline: 'pipeline',
+        files: 'files',
+      };
+      const tab = paneToTab[activePane];
+      if (tab) setMobileActiveTab(tab);
+    }
+  }, [isMobile, isViewerVisible, activePane]);
+
+  const handleMobileTabChange = useCallback((tab: MobileTab) => {
+    setMobileActiveTab(tab);
+    if (tab === 'chat') return; // chat doesn't change activePane
+    if (tab === 'viewer') {
+      setActivePane('viewer');
+      if (!isViewerVisible) {
+        // Ensure viewer is visible when switching to viewer tab
+        useAppStore.getState().setViewerVisible(true);
+      }
+    } else if (tab === 'pipeline') {
+      setActivePane('pipeline');
+      if (!isViewerVisible) useAppStore.getState().setViewerVisible(true);
+    } else if (tab === 'files') {
+      setActivePane('files');
+      if (!isViewerVisible) useAppStore.getState().setViewerVisible(true);
+    }
+  }, [setActivePane, isViewerVisible]);
+
   // Listen for pipeline manager open event
   useEffect(() => {
     const handleOpenPipelineManager = () => {
@@ -110,61 +154,39 @@ function App() {
       <div className="h-screen flex flex-col bg-app text-app" data-testid="app-container" data-app-ready="true">
         <Header />
       
-      <div className="flex-1 flex flex-col md:flex-row overflow-hidden">
-        {/* Chat History Sidebar */}
-        <ChatHistorySidebar />
-        
-        {/* Chat Panel - Resizable when viewer visible, full width when hidden */}
-        {isViewerVisible ? (
-          <>
-            {/* Desktop: Resizable panel */}
-            <ResizablePanel
-              defaultWidth={chatPanelWidth}
-              minWidth={280}
-              maxWidth={600}
-              position="left"
-              onWidthChange={setChatPanelWidth}
-              className="bg-white hidden md:block"
-            >
-              <ChatPanel />
-            </ResizablePanel>
-            {/* Mobile: Hide chat when viewer is visible (user can toggle viewer off to see chat) */}
-          </>
-        ) : (
-          <div className="flex-1 bg-white flex flex-col min-h-0 overflow-hidden">
+      {/* Mobile segmented control */}
+      {isMobile && <MobileSegmentedControl activeTab={mobileActiveTab} onTabChange={handleMobileTabChange} />}
+
+      {isMobile ? (
+        /* ── Mobile layout ── */
+        <div className="flex-1 flex flex-row min-h-0 overflow-hidden" style={{ paddingBottom: 'env(safe-area-inset-bottom, 0px)' }}>
+          {/* Sidebar — collapsed bar on mobile */}
+          <ChatHistorySidebar />
+
+          {/* Chat panel — always mounted, hidden via CSS */}
+          <div className={`flex-1 flex flex-col min-h-0 overflow-hidden bg-white ${mobileActiveTab !== 'chat' ? 'hidden' : ''}`}>
             <ChatPanel />
           </div>
-        )}
-        
-        {/* Right Panel - Pane (shown when any pane is active) */}
-        {(activePane === 'viewer' || activePane === 'editor' || activePane === 'files' || activePane === 'pipeline') && (
-          <div className="flex-1 flex flex-col min-w-0">
-            {/* Content Pane with fixed, responsive height */}
+
+          {/* Right-side panes — viewer / pipeline / files */}
+          <div className={`flex-1 flex flex-col min-w-0 ${mobileActiveTab === 'chat' ? 'hidden' : ''}`}>
             <div className="flex-1 min-h-0 relative">
-              {/* MolstarViewer is always mounted so the plugin stays alive for code execution.
-                  Hidden via CSS when another pane is active. */}
+              {/* Molstar viewer */}
               <div
                 className="absolute inset-0 bg-gray-900"
-                style={{ display: (activePane === 'viewer' || activePane === 'editor') ? 'block' : 'none',
-                         visibility: activePane === 'viewer' ? 'visible' : 'hidden',
-                         zIndex: activePane === 'viewer' ? 1 : 0 }}
+                style={{
+                  display: mobileActiveTab === 'viewer' ? 'block' : 'none',
+                  visibility: mobileActiveTab === 'viewer' ? 'visible' : 'hidden',
+                  zIndex: mobileActiveTab === 'viewer' ? 1 : 0,
+                }}
               >
-                <Suspense fallback={
-                  <MolstarSkeleton message="Loading molecular viewer..." />
-                }>
+                <Suspense fallback={<MolstarSkeleton message="Loading molecular viewer..." />}>
                   <MolstarViewer />
                 </Suspense>
               </div>
 
-              {/* Code Editor overlay - shown on top when editor pane active */}
-              {activePane === 'editor' && settings.codeEditor.enabled && (
-                <div className="absolute inset-0 z-10">
-                  <CodeEditor />
-                </div>
-              )}
-
-              {/* Pipeline pane */}
-              {activePane === 'pipeline' && (
+              {/* Pipeline */}
+              {mobileActiveTab === 'pipeline' && (
                 <div className="absolute inset-0 z-10">
                   <PipelineThemeWrapper externalTheme={theme} className="h-full">
                     <PipelineCanvas />
@@ -172,8 +194,8 @@ function App() {
                 </div>
               )}
 
-              {/* Files pane */}
-              {activePane === 'files' && (
+              {/* Files */}
+              {mobileActiveTab === 'files' && (
                 <div className="absolute inset-0 z-10">
                   {selectedFile ? (
                     <FileEditor
@@ -189,8 +211,78 @@ function App() {
               )}
             </div>
           </div>
-        )}
-      </div>
+        </div>
+      ) : (
+        /* ── Desktop layout (unchanged) ── */
+        <div className="flex-1 flex flex-col md:flex-row overflow-hidden">
+          <ChatHistorySidebar />
+
+          {isViewerVisible ? (
+            <ResizablePanel
+              defaultWidth={chatPanelWidth}
+              minWidth={280}
+              maxWidth={600}
+              position="left"
+              onWidthChange={setChatPanelWidth}
+              className="bg-white"
+            >
+              <ChatPanel />
+            </ResizablePanel>
+          ) : (
+            <div className="flex-1 bg-white flex flex-col min-h-0 overflow-hidden">
+              <ChatPanel />
+            </div>
+          )}
+
+          {(activePane === 'viewer' || activePane === 'editor' || activePane === 'files' || activePane === 'pipeline') && (
+            <div className="flex-1 flex flex-col min-w-0">
+              <div className="flex-1 min-h-0 relative">
+                <div
+                  className="absolute inset-0 bg-gray-900"
+                  style={{
+                    display: (activePane === 'viewer' || activePane === 'editor') ? 'block' : 'none',
+                    visibility: activePane === 'viewer' ? 'visible' : 'hidden',
+                    zIndex: activePane === 'viewer' ? 1 : 0,
+                  }}
+                >
+                  <Suspense fallback={<MolstarSkeleton message="Loading molecular viewer..." />}>
+                    <MolstarViewer />
+                  </Suspense>
+                </div>
+
+                {activePane === 'editor' && settings.codeEditor.enabled && (
+                  <div className="absolute inset-0 z-10">
+                    <CodeEditor />
+                  </div>
+                )}
+
+                {activePane === 'pipeline' && (
+                  <div className="absolute inset-0 z-10">
+                    <PipelineThemeWrapper externalTheme={theme} className="h-full">
+                      <PipelineCanvas />
+                    </PipelineThemeWrapper>
+                  </div>
+                )}
+
+                {activePane === 'files' && (
+                  <div className="absolute inset-0 z-10">
+                    {selectedFile ? (
+                      <FileEditor
+                        fileId={selectedFile.id}
+                        filename={selectedFile.filename || `file_${selectedFile.id}.pdb`}
+                        fileType={selectedFile.type}
+                        onClose={handleCloseFile}
+                      />
+                    ) : (
+                      <FileBrowser onFileSelect={handleFileSelect} />
+                    )}
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
       
       {/* Settings Dialog */}
       <SettingsDialog 
