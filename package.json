@@ -11,9 +11,15 @@
     "start:server": "./.venv/bin/uvicorn server.app:app --host 0.0.0.0 --port 8787",
     "dev:all": "npm-run-all --parallel start:server dev",
     "build:library": "cd src/components/pipeline-canvas && npm run build",
-    "test": "vitest run",
-    "test:watch": "vitest",
-    "test:coverage": "vitest run --coverage"
+    "test": "npm run test:frontend && npm run test:backend:unit",
+    "test:frontend": "vitest run",
+    "test:frontend:watch": "vitest",
+    "test:frontend:coverage": "vitest run --coverage",
+    "test:backend": "cd server && python3 -m pytest -v",
+    "test:backend:unit": "cd server && python3 -m pytest __tests__/unit/ -v",
+    "test:backend:integration": "cd server && python3 -m pytest __tests__/integration/ -v",
+    "test:e2e": "cd __tests__/e2e && python3 utils/test_runner.py",
+    "test:all": "npm run test:frontend && npm run test:backend && npm run test:e2e"
   },
   "dependencies": {
     "@langchain/core": "^1.1.16",

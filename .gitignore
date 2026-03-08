@@ -61,3 +61,8 @@ server/uploads/pdb_index.json
 /blob-report/
 /playwright/.cache/
 /playwright/.auth/
+
+# Test outputs
+__tests__/e2e/reports/latest/
+__tests__/e2e/reports/screenshots/
+coverage/

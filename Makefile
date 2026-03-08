@@ -24,19 +24,34 @@ dev:
 lint:
 	npm run lint
 
-# Run all tests (frontend + backend)
-test: test-frontend test-backend
+# Run fast tests (frontend + backend unit)
+test: test-frontend test-backend-unit
 
 # Run frontend unit tests (Vitest)
 test-frontend:
 	npx vitest run
 
-# Run backend unit tests (pytest)
+# Run all backend tests (unit + integration)
 test-backend:
-	cd server && python3 -m pytest tests/ -v
+	cd server && python3 -m pytest __tests__/ -v
+
+# Run backend unit tests only (fast, no external deps)
+test-backend-unit:
+	cd server && python3 -m pytest __tests__/unit/ -v
+
+# Run backend integration tests (need running server/APIs)
+test-backend-integration:
+	cd server && python3 -m pytest __tests__/integration/ -v
+
+# Run E2E browser tests
+test-e2e:
+	cd __tests__/e2e && python3 utils/test_runner.py
+
+# Run everything
+test-all: test-frontend test-backend test-e2e
 
 # Run all tests with coverage
 test-coverage:
 	npx vitest run --coverage
-	cd server && python3 -m pytest tests/ -v --cov=server --cov-report=term-missing
+	cd server && python3 -m pytest __tests__/unit/ -v --cov=server --cov-report=term-missing
 

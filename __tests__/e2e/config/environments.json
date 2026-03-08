@@ -1,0 +1,23 @@
+{
+  "local": {
+    "name": "Local Development",
+    "frontend": "http://localhost:3000",
+    "backend": "http://localhost:8787",
+    "apiBase": "http://localhost:8787/api",
+    "description": "Local development environment"
+  },
+  "staging": {
+    "name": "Staging",
+    "frontend": "https://staging.example.com",
+    "backend": "https://api-staging.example.com",
+    "apiBase": "https://api-staging.example.com/api",
+    "description": "Staging environment for pre-production testing"
+  },
+  "production": {
+    "name": "Production",
+    "frontend": "https://app.example.com",
+    "backend": "https://api.example.com",
+    "apiBase": "https://api.example.com/api",
+    "description": "Production environment"
+  }
+}
