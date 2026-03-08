@@ -9,14 +9,13 @@ import { ErrorDashboard, useErrorDashboard } from './components/ErrorDashboard';
 import { FileBrowser } from './components/FileBrowser';
 import { FileEditor } from './components/FileEditor';
 import { MolstarSkeleton } from './components/MolstarSkeleton';
-import { PipelineCanvas, PipelineManager, PipelineExecution, PipelineThemeWrapper, PipelineProvider } from './components/pipeline-canvas';
-import { api, getAuthHeaders } from './utils/api';
-import { useAuthStore } from './stores/authStore';
+import { PipelineCanvas, PipelineManager, PipelineExecution, PipelineThemeWrapper } from './components/pipeline-canvas';
+import { api } from './utils/api';
 import { useTheme } from './contexts/ThemeContext';
 import { useAppStore } from './stores/appStore';
 import { useSettingsStore } from './stores/settingsStore';
 import { useChatHistoryStore } from './stores/chatHistoryStore';
-import { useEffect, useState, useCallback, Suspense, lazy, useMemo } from 'react';
+import { useEffect, useState, useCallback, Suspense, lazy } from 'react';
 import { MobileSegmentedControl, MobileTab } from './components/MobileSegmentedControl';
 
 // Lazy load MolstarViewer - only load when viewer is visible
@@ -27,7 +26,6 @@ function App() {
   const { settings, isSettingsDialogOpen, setSettingsDialogOpen } = useSettingsStore();
   const { isHistoryPanelOpen, setHistoryPanelOpen } = useChatHistoryStore();
   const [isPipelineManagerOpen, setIsPipelineManagerOpen] = useState(false);
-  const user = useAuthStore((state) => state.user);
   const errorDashboard = useErrorDashboard();
   const { theme } = useTheme();
 
@@ -131,12 +129,6 @@ function App() {
     setActivePane('viewer');
   };
 
-  // Memoize authState to prevent PipelineProvider from re-syncing on every render
-  const authState = useMemo(
-    () => ({ user: user ?? null, isAuthenticated: !!user }),
-    [user?.id]
-  );
-
   // Mark App as ready for test detection
   useEffect(() => {
     const timer = setTimeout(() => {
@@ -146,12 +138,7 @@ function App() {
   }, []);
 
   return (
-    <PipelineProvider
-      apiClient={api}
-      authState={authState}
-      getAuthHeaders={getAuthHeaders}
-    >
-      <div className="h-screen flex flex-col bg-app text-app" data-testid="app-container" data-app-ready="true">
+    <div className="h-screen flex flex-col bg-app text-app" data-testid="app-container" data-app-ready="true">
         <Header />
       
       {/* Mobile segmented control */}
@@ -309,9 +296,8 @@ function App() {
       />
 
       {/* Pipeline Execution Monitor */}
-      <PipelineExecution apiClient={api} />
+      <PipelineExecution />
       </div>
-    </PipelineProvider>
   );
 }
 
