@@ -24,7 +24,7 @@ jobs:
       - name: Install test dependencies
         run: pip install pytest pytest-asyncio pytest-cov
       - name: Run unit tests
-        run: cd server && python -m pytest tests/unit/ -v --tb=short
+        run: cd server && python -m pytest __tests__/unit/ -v --tb=short
         env:
           PYTHONPATH: ${{ github.workspace }}
 
@@ -43,7 +43,7 @@ jobs:
       - name: Install test dependencies
         run: pip install pytest pytest-asyncio
       - name: Run integration tests
-        run: cd server && python -m pytest tests/integration/ -v --tb=short -m integration
+        run: cd server && python -m pytest __tests__/integration/ -v --tb=short -m integration
         env:
           PYTHONPATH: ${{ github.workspace }}
         continue-on-error: true
