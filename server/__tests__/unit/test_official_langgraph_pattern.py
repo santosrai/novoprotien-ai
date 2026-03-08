@@ -13,8 +13,7 @@ def test_main_graph_uses_official_imports():
         from langgraph.graph import StateGraph, START, END
     except ImportError:
         pytest.skip("langgraph not installed")
-    
-    # Verify imports are correct
+
     assert StateGraph is not None
     assert START is not None
     assert END is not None
@@ -23,10 +22,10 @@ def test_main_graph_uses_official_imports():
 def test_main_graph_uses_typeddict_state():
     """Verify state is defined using TypedDict (official pattern)."""
     from server.agents.graph_state import AgentGraphState
-    from typing import TypedDict
-    
-    # Verify AgentGraphState is a TypedDict
-    assert issubclass(AgentGraphState, TypedDict)
+
+    assert hasattr(AgentGraphState, "__annotations__")
+    assert "input" in AgentGraphState.__annotations__
+    assert "routed_agent_id" in AgentGraphState.__annotations__
 
 
 def test_build_main_graph_follows_official_pattern():
@@ -45,18 +44,14 @@ def test_build_main_graph_follows_official_pattern():
     
     from server.agents.main_graph import build_main_graph
     from server.agents.graph_state import AgentGraphState
-    
-    # Build the graph
+
     workflow = build_main_graph()
-    
-    # Verify it's compiled (has invoke/ainvoke methods)
+
     assert hasattr(workflow, "invoke") or hasattr(workflow, "ainvoke")
-    
-    # Verify graph structure can be inspected
+
     graph = workflow.get_graph()
     assert graph is not None
-    
-    # Verify nodes exist
+
     nodes = graph.nodes
     assert "router" in nodes
     assert "agent" in nodes
@@ -72,8 +67,7 @@ def test_graph_can_be_invoked():
     from server.agents.main_graph import build_main_graph
     
     workflow = build_main_graph()
-    
-    # Verify invoke methods exist (official pattern)
+
     assert hasattr(workflow, "invoke") or hasattr(workflow, "ainvoke")
 
 
@@ -88,8 +82,7 @@ def test_graph_can_be_visualized():
     
     workflow = build_main_graph()
     graph = workflow.get_graph()
-    
-    # Verify visualization method exists (official pattern)
+
     assert hasattr(graph, "draw_mermaid_png") or hasattr(graph, "draw_ascii")
 
 
@@ -97,12 +90,11 @@ def test_conditional_edges_follow_pattern():
     """Verify conditional edges use the official pattern (function returning node name or END)."""
     from server.agents.main_graph import _should_route_to_agent
     from langgraph.graph import END
-    
-    # Test conditional function returns string node name or END
+
     state_with_agent = {"routed_agent_id": "test-agent"}
     result = _should_route_to_agent(state_with_agent)
-    assert result == "agent"  # Returns node name
-    
+    assert result == "agent"
+
     state_without_agent = {}
     result = _should_route_to_agent(state_without_agent)
-    assert result == END  # Returns END constant
+    assert result == END

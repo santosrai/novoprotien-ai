@@ -3,10 +3,6 @@ import pytest
 from unittest.mock import AsyncMock, patch, MagicMock
 
 
-# ---------------------------------------------------------------------------
-# Graph state
-# ---------------------------------------------------------------------------
-
 def test_agent_graph_state_keys():
     """AgentGraphState TypedDict allows expected keys."""
     from server.agents.graph_state import AgentGraphState
@@ -31,10 +27,6 @@ def test_agent_graph_state_optional_keys():
     assert state.get("selection") is None
     assert state.get("result_code") is None
 
-
-# ---------------------------------------------------------------------------
-# Router node
-# ---------------------------------------------------------------------------
 
 @pytest.mark.asyncio
 async def test_router_node_passthrough_when_manual():
@@ -73,10 +65,6 @@ async def test_router_node_calls_router():
     mock_router.ainvoke.assert_called_once()
 
 
-# ---------------------------------------------------------------------------
-# Agent dispatcher node
-# ---------------------------------------------------------------------------
-
 @pytest.mark.asyncio
 async def test_agent_dispatcher_node_no_agent():
     """When routed_agent_id or agent_config missing, returns error result."""
@@ -98,7 +86,7 @@ async def test_agent_dispatcher_node_calls_run_agent():
         "routed_agent_id": "bio-chat",
         "agent_config": {"id": "bio-chat", "name": "Bio Chat", "system": "You are helpful."},
     }
-    with patch("server.agents.graph_nodes.run_agent", new_callable=AsyncMock) as run_agent:
+    with patch("server.agents.runner.run_agent", new_callable=AsyncMock) as run_agent:
         run_agent.return_value = {"type": "text", "text": "Hello back!"}
         out = await agent_dispatcher_node(state)
 
@@ -109,10 +97,6 @@ async def test_agent_dispatcher_node_calls_run_agent():
     assert call_kw["agent"]["id"] == "bio-chat"
     assert call_kw["user_text"] == "hello"
 
-
-# ---------------------------------------------------------------------------
-# Main graph
-# ---------------------------------------------------------------------------
 
 def test_build_main_graph_requires_langgraph():
     """build_main_graph raises when langgraph is not available."""
@@ -125,9 +109,6 @@ def test_build_main_graph_requires_langgraph():
                     main_graph_mod.build_main_graph()
                 except RuntimeError as e:
                     assert "langgraph" in str(e).lower()
-                else:
-                    # If langgraph is installed, graph builds
-                    pass
 
 
 def test_build_main_graph_returns_compiled_when_available():
@@ -142,10 +123,6 @@ def test_build_main_graph_returns_compiled_when_available():
     assert graph is not None
     assert hasattr(graph, "ainvoke") or hasattr(graph, "invoke")
 
-
-# ---------------------------------------------------------------------------
-# App helpers (state build and response map)
-# ---------------------------------------------------------------------------
 
 def test_build_initial_state():
     """_build_initial_state maps body and params to state dict."""
