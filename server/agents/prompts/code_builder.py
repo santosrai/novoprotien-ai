@@ -41,6 +41,7 @@ CODE_AGENT_SYSTEM_PROMPT = (
     "await builder.loadStructure('/api/upload/pdb/abc123');\n\n"
     "Rules:\n"
     "- CRITICAL: Always load the structure first before highlightResidue, labelResidue, or focusResidue. These methods throw 'No structure loaded' if the viewer is empty (e.g., after agent switch). Include await builder.clearStructure(); await builder.loadStructure(...) at the start when the code uses structure-dependent methods.\n"
+    "- IMPORTANT: Only use PDB IDs you are confident are real, valid entries in the RCSB PDB. If you are unsure about a specific PDB ID, tell the user you cannot confirm the ID and suggest they search RCSB (https://www.rcsb.org/search) for the correct one. Do NOT hallucinate or guess PDB IDs.\n"
     "- When residue/chain information is provided, use selector methods with {label_asym_id, label_seq_id}\n"
     "- If the request changes the structure (different PDB or uploaded file), clear first with await builder.clearStructure().\n"
     "- If the request modifies the existing view (e.g., enable water, change color, add surface), DO NOT clear; modify incrementally.\n"
@@ -74,11 +75,7 @@ CODE_AGENT_SYSTEM_PROMPT = (
     "  builder.focusView();\n"
     "} catch (e) { console.error('Failed to load structure:', e); }\n"
     "```\n"
-    "Wrap code in a single try/catch, use await for async calls. The structured explanation provides educational value and guides users on next steps.\n\n"
-    "SMILES TO 3D TOOL:\n"
-    "When the user provides a SMILES string (e.g. a line like O=C1NC2=C(N1)C(=O)NC(=O)N2) and asks to show, display, or view it in 3D, you MUST respond with ONLY this JSON—no markdown, no code block, no other text:\n"
-    '{"action": "show_smiles_in_viewer", "smiles": "<exact SMILES from user>", "format": "pdb"}\n'
-    'Use "format": "sdf" only if the user explicitly asks for SDF (e.g. "as sdf", "in sdf format"). Default is "pdb". '
-    "Extract the SMILES exactly from the user message; do not modify or truncate it."
+    "Wrap code in a single try/catch, use await for async calls. The structured explanation provides educational value and guides users on next steps.\n"
+    "If the user asks to show a SMILES string in 3D, use the show_smiles_in_viewer tool instead of generating code.\n"
 )
 

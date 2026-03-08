@@ -26,6 +26,8 @@ if os.path.exists(server_env_path):
     load_dotenv(server_env_path, override=True)
     print(f"Also loaded .env from: {server_env_path}")
 
+
+
 # LangSmith tracing (must run after env load, before agent imports)
 try:
     from .infrastructure.langsmith_config import setup_langsmith
@@ -39,18 +41,6 @@ except ImportError:
 except Exception:
     pass
 
-# Debug: Check if key environment variables are loaded
-api_key = os.getenv('OPENROUTER_API_KEY')
-if api_key:
-    print(f"OPENROUTER_API_KEY loaded: {api_key[:20]}...")
-else:
-    print("Warning: OPENROUTER_API_KEY not found in environment")
-
-nvidia_key = (os.getenv('NVCF_RUN_KEY') or "").strip()
-if nvidia_key:
-    print(f"NVCF_RUN_KEY loaded: {nvidia_key[:20]}...")
-else:
-    print("Warning: NVCF_RUN_KEY not found or empty (AlphaFold/RFdiffusion will fail)")
 
 from fastapi import FastAPI, Request, UploadFile, File, HTTPException, Depends
 from fastapi.middleware.cors import CORSMiddleware
@@ -58,7 +48,7 @@ from slowapi import Limiter
 from slowapi.util import get_remote_address
 from slowapi.middleware import SlowAPIMiddleware
 from slowapi.errors import RateLimitExceeded
-from fastapi.responses import JSONResponse, FileResponse
+from fastapi.responses import JSONResponse, FileResponse, StreamingResponse, Response
 
 try:
     from langsmith import traceable, tracing_context, Client as LangSmithClient
@@ -72,15 +62,15 @@ except ImportError:
 
 try:
     from .agents.registry import agents, list_agents
-    from .agents.router import init_router, routerGraph
-    from .agents.runner import run_agent
+    from .agents.router import init_router
+    from .agents.runner import run_react_agent
     from .infrastructure.utils import log_line, spell_fix
     from .agents.handlers.alphafold import alphafold_handler
     from .agents.handlers.rfdiffusion import rfdiffusion_handler
     from .agents.handlers.proteinmpnn import proteinmpnn_handler
     from .agents.handlers.openfold2 import openfold2_handler
     from .agents.handlers.diffdock import diffdock_handler
-    from .domain.storage.pdb_storage import save_uploaded_pdb, get_uploaded_pdb
+    from .domain.storage.pdb_storage import save_uploaded_pdb, get_uploaded_pdb, filter_pdb_content
     from .domain.storage.file_access import list_user_files, verify_file_ownership, get_file_metadata, get_user_file_path
     from .tools.smiles_converter import smiles_to_structure
     from .database.db import get_db
@@ -102,15 +92,15 @@ except ImportError:
         tracing_context = None
         LangSmithClient = None
     from agents.registry import agents, list_agents
-    from agents.router import init_router, routerGraph
-    from agents.runner import run_agent
+    from agents.router import init_router
+    from agents.runner import run_react_agent
     from infrastructure.utils import log_line, spell_fix
     from agents.handlers.alphafold import alphafold_handler
     from agents.handlers.rfdiffusion import rfdiffusion_handler
     from agents.handlers.proteinmpnn import proteinmpnn_handler
     from agents.handlers.openfold2 import openfold2_handler
     from agents.handlers.diffdock import diffdock_handler
-    from domain.storage.pdb_storage import save_uploaded_pdb, get_uploaded_pdb
+    from domain.storage.pdb_storage import save_uploaded_pdb, get_uploaded_pdb, filter_pdb_content
     from domain.storage.file_access import list_user_files, verify_file_ownership, get_file_metadata, get_user_file_path
     from tools.smiles_converter import smiles_to_structure
     from database.db import get_db
@@ -165,6 +155,57 @@ def _langsmith_context(langsmith_config: Optional[Dict[str, Any]]):
     return nullcontext()
 
 
+def _build_initial_state(
+    *,
+    input_text: str,
+    body: Dict[str, Any],
+    manual_agent_id: Optional[str],
+    pipeline_id: Optional[str],
+    pipeline_data: Optional[Dict[str, Any]],
+    model_override: Optional[str],
+    user: Optional[Dict[str, Any]],
+) -> Dict[str, Any]:
+    """Build LangGraph initial state from request."""
+    uploaded = body.get("uploadedFile") or {}
+    state = {
+        "input": input_text,
+        "selection": body.get("selection"),
+        "selections": body.get("selections"),
+        "history": body.get("history"),
+        "currentCode": body.get("currentCode"),
+        "uploadedFileId": uploaded.get("file_id"),
+        "uploadedFileContext": body.get("uploadedFile"),
+        "currentStructureOrigin": body.get("currentStructureOrigin"),
+        "structureMetadata": body.get("structureMetadata"),
+        "pipeline_id": pipeline_id,
+        "pipeline_data": pipeline_data,
+        "model_override": model_override,
+        "user_id": user.get("id") if user else None,
+        "pdb_content": body.get("pdb_content"),
+    }
+    if manual_agent_id and manual_agent_id in agents:
+        state["routed_agent_id"] = manual_agent_id
+        state["agent_config"] = agents[manual_agent_id]
+        state["routing_reason"] = f"Manually selected: {agents[manual_agent_id].get('name', manual_agent_id)}"
+    return state
+
+
+def _final_state_to_response(final_state: Dict[str, Any]) -> Dict[str, Any]:
+    """Map graph final state to API response format."""
+    out = {
+        "agentId": final_state.get("routed_agent_id"),
+        "reason": final_state.get("routing_reason"),
+        "type": final_state.get("result_type", "text"),
+        "text": final_state.get("result_text"),
+        "code": final_state.get("result_code"),
+        "toolResults": final_state.get("tool_results"),
+        "thinkingProcess": final_state.get("thinking_process"),
+    }
+    if final_state.get("result_type") == "error":
+        out["error"] = final_state.get("result_text") or final_state.get("error") or "Agent execution failed"
+    return out
+
+
 @traceable(name="AgentRoute", run_type="chain")
 async def _invoke_route_and_agent(
     *,
@@ -176,25 +217,8 @@ async def _invoke_route_and_agent(
     model_override: Optional[str],
     user: Optional[Dict[str, Any]],
 ) -> Dict[str, Any]:
-    """LangSmith-traced route + agent invocation (router → run_agent)."""
-    if manual_agent_id and manual_agent_id in agents:
-        agent_id = manual_agent_id
-        reason = f"Manually selected: {agents[agent_id].get('name', agent_id)}"
-    else:
-        routed = await routerGraph.ainvoke({
-            "input": input_text,
-            "selection": body.get("selection"),
-            "selections": body.get("selections"),
-            "currentCode": body.get("currentCode"),
-            "history": body.get("history"),
-            "pipeline_id": pipeline_id,
-        })
-        agent_id = routed.get("routedAgentId")
-        reason = routed.get("reason")
-    if not agent_id:
-        return {"error": "router_no_decision", "reason": reason}
-    res = await run_agent(
-        agent=agents[agent_id],
+    """ReAct agent: LLM + tool calling. No keyword routing; tools are triggered by the model from descriptions."""
+    res = await run_react_agent(
         user_text=input_text,
         current_code=body.get("currentCode"),
         history=body.get("history"),
@@ -206,10 +230,11 @@ async def _invoke_route_and_agent(
         pipeline_id=pipeline_id,
         pipeline_data=pipeline_data,
         model_override=model_override,
-        user_id=user.get("id") if user else None,
-        pdb_content=body.get("pdb_content"),
     )
-    return {"agentId": agent_id, **res, "reason": reason}
+    reason = "tool_calling"
+    if manual_agent_id and manual_agent_id in agents:
+        reason = f"Manual: {agents[manual_agent_id].get('name', manual_agent_id)}"
+    return {"agentId": "react", **res, "reason": reason}
 
 
 def _rate_limit_key(request: Request) -> str:
@@ -609,12 +634,15 @@ async def route(request: Request, user: Dict[str, Any] = Depends(get_current_use
             "is_alphafold": agent_id == "alphafold-agent",
             "manual_override": bool(manual_agent_id)
         })
+        tool_results = result.get("toolResults") or []
         log_line("agent_completed", {
             "agentId": agent_id,
             "response_type": result.get("type"),
             "has_text": "text" in result,
             "has_code": "code" in result,
-            "text_length": len(result.get("text", "")) if result.get("text") else 0
+            "text_length": len(result.get("text", "")) if result.get("text") else 0,
+            "tools_used": bool(tool_results),
+            "tool_names": [t.get("name") for t in tool_results if isinstance(t, dict)] if tool_results else [],
         })
         
         return result
@@ -624,6 +652,348 @@ async def route(request: Request, user: Dict[str, Any] = Depends(get_current_use
         if DEBUG_API:
             content["detail"] = str(e)
         return JSONResponse(status_code=500, content=content)
+
+
+@app.post("/api/agents/route/stream")
+@limiter.limit("60/minute")
+async def route_stream(request: Request, user: Dict[str, Any] = Depends(get_current_user)):
+    """Stream agent execution via LangGraph. Yields SSE events: node updates, then final complete event."""
+    import json as _json
+
+    async def _generate():
+        try:
+            body = await request.json()
+        except Exception:
+            yield _json.dumps({"type": "error", "data": {"error": "invalid_json"}}) + "\n"
+            return
+        input_text = body.get("input")
+        if not isinstance(input_text, str):
+            yield _json.dumps({"type": "error", "data": {"error": "invalid_input"}}) + "\n"
+            return
+        input_text = spell_fix(input_text)
+        manual_agent_id = body.get("agentId")
+        model_override = body.get("model")
+        pipeline_id = body.get("pipeline_id")
+        pipeline_data = body.get("pipeline_data") if isinstance(body.get("pipeline_data"), dict) else None
+        if pipeline_id and pipeline_data is None and user:
+            with get_db() as conn:
+                row = conn.execute(
+                    "SELECT id, name, structure FROM pipelines WHERE id = ? AND user_id = ?",
+                    (pipeline_id, user["id"]),
+                ).fetchone()
+                if row:
+                    pipeline_data = _json.loads(row[2]) if row[2] else {}
+        try:
+            from .agents.runner import run_supervisor_stream
+            async for event in run_supervisor_stream(
+                user_text=input_text,
+                current_code=body.get("currentCode"),
+                history=body.get("history"),
+                selection=body.get("selection"),
+                selections=body.get("selections"),
+                uploaded_file_context=body.get("uploadedFile"),
+                structure_metadata=body.get("structureMetadata"),
+                pipeline_id=pipeline_id,
+                pipeline_data=pipeline_data,
+                model_override=model_override,
+                manual_agent_id=manual_agent_id,
+            ):
+                # NDJSON: one JSON object per line for frontend streamAgentRoute()
+                yield _json.dumps(event) + "\n"
+        except Exception as e:
+            log_line("agent_route_stream_failed", {"error": str(e), "trace": traceback.format_exc()})
+            yield _json.dumps({"type": "error", "data": {"error": str(e)}}) + "\n"
+
+    return StreamingResponse(
+        _generate(),
+        media_type="application/x-ndjson",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+def _body_to_stream_args(body: dict, user: Dict[str, Any]) -> dict:
+    """Build run_supervisor_stream kwargs from either legacy payload or LangGraph SDK payload.
+    SDK sends: { input: ..., config: { configurable: { ... } } }
+    Legacy sends: { input: ..., context: { configurable: { ... } } } or flat keys."""
+    import json as _json
+    raw_input = body.get("input")
+    # SDK (FetchStreamTransport) puts configurable inside "config"; legacy used "context"
+    configurable = (
+        (body.get("config") or {}).get("configurable")
+        or (body.get("context") or {}).get("configurable")
+        or {}
+    )
+
+    if isinstance(raw_input, str):
+        input_text = raw_input
+        history = body.get("history") or []
+    elif isinstance(raw_input, dict) and isinstance(raw_input.get("messages"), list):
+        messages = raw_input["messages"]
+        input_text = ""
+        history = []
+        for m in messages:
+            if not isinstance(m, dict):
+                continue
+            content = m.get("content") or m.get("text")
+            if isinstance(content, list):
+                content = next((c.get("text", "") for c in content if c.get("type") == "text"), "") or ""
+            if not isinstance(content, str):
+                content = str(content) if content is not None else ""
+            role = (m.get("type") or m.get("role") or "").lower()
+            if role in ("human", "user"):
+                history.append({"type": "user", "content": content})
+                input_text = content
+            elif role in ("ai", "assistant"):
+                history.append({"type": "ai", "content": content})
+        history = history[:-1] if history and input_text else history  # exclude current user message
+    else:
+        input_text = str(raw_input) if raw_input else ""
+        history = body.get("history") or []
+
+    pipeline_id = body.get("pipeline_id") or configurable.get("pipeline_id")
+    pipeline_data = body.get("pipeline_data") if isinstance(body.get("pipeline_data"), dict) else None
+    if pipeline_id and pipeline_data is None and user:
+        with get_db() as conn:
+            row = conn.execute(
+                "SELECT id, name, structure FROM pipelines WHERE id = ? AND user_id = ?",
+                (pipeline_id, user["id"]),
+            ).fetchone()
+            if row:
+                pipeline_data = _json.loads(row[2]) if row[2] else {}
+
+    # Extract manual agent selection (null/absent = auto-route via supervisor)
+    manual_agent_id = body.get("agentId") or configurable.get("agentId") or None
+
+    return {
+        "user_text": spell_fix(input_text) if input_text else input_text,
+        "current_code": body.get("currentCode") or configurable.get("currentCode"),
+        "history": body.get("history") if body.get("history") is not None else history,
+        "selection": body.get("selection") or configurable.get("selection"),
+        "selections": body.get("selections") or configurable.get("selections"),
+        "uploaded_file_context": body.get("uploadedFile") or configurable.get("uploadedFile"),
+        "structure_metadata": body.get("structureMetadata") or configurable.get("structureMetadata"),
+        "pipeline_id": pipeline_id,
+        "pipeline_data": pipeline_data,
+        "model_override": body.get("model") or configurable.get("model"),
+        "manual_agent_id": manual_agent_id,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Abort registry: allows frontend to cancel in-progress agent streams
+# ---------------------------------------------------------------------------
+import asyncio as _asyncio
+
+_abort_events: dict[str, _asyncio.Event] = {}
+
+def get_abort_event(session_id: str) -> _asyncio.Event:
+    """Get or create an abort event for a session."""
+    if session_id not in _abort_events:
+        _abort_events[session_id] = _asyncio.Event()
+    return _abort_events[session_id]
+
+def clear_abort_event(session_id: str):
+    """Clean up an abort event after the stream completes."""
+    _abort_events.pop(session_id, None)
+
+
+@app.post("/api/agents/abort")
+async def abort_agent_stream(request: Request, user: Dict[str, Any] = Depends(get_current_user)):
+    """Signal the backend to abort an in-progress agent stream."""
+    body = await request.json()
+    session_id = body.get("session_id", "")
+    if not session_id:
+        return {"status": "error", "message": "session_id required"}
+    event = _abort_events.get(session_id)
+    if event:
+        event.set()
+        print(f"[Abort] Set abort flag for session {session_id}", flush=True)
+        return {"status": "aborted"}
+    print(f"[Abort] No active stream for session {session_id}", flush=True)
+    return {"status": "no_active_stream"}
+
+
+@app.post("/api/agents/route/stream/sse")
+@limiter.limit("60/minute")
+async def route_stream_sse(request: Request, user: Dict[str, Any] = Depends(get_current_user)):
+    """Stream agent execution as SSE for LangGraph SDK (FetchStreamTransport).
+    Accepts SDK-style body: { input: { messages: [...] }, config: { configurable: {...} } }.
+
+    IMPORTANT: Request body is read BEFORE creating StreamingResponse because
+    Starlette does not support reading request.json() inside a generator — it hangs.
+    """
+    import json as _json
+
+    def _log(msg: str):
+        print(msg, flush=True)
+
+    # --- Read and parse request body BEFORE creating the streaming generator ---
+    try:
+        body = await request.json()
+    except Exception:
+        _log("[SSE] ERROR: invalid JSON body")
+        async def _err():
+            yield f"event: error\ndata: {_json.dumps({'message': 'invalid_json'})}\n\n"
+        return StreamingResponse(_err(), media_type="text/event-stream",
+                                headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+
+    _log(f"[SSE] body keys: {list(body.keys())}, input type: {type(body.get('input'))}")
+
+    try:
+        stream_args = _body_to_stream_args(body, user)
+    except Exception as e:
+        _log(f"[SSE] ERROR parsing body: {e}")
+        async def _err():
+            yield f"event: error\ndata: {_json.dumps({'message': str(e)})}\n\n"
+        return StreamingResponse(_err(), media_type="text/event-stream",
+                                headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+
+    _log(f"[SSE] user_text: {repr(stream_args['user_text'][:80] if stream_args.get('user_text') else None)}")
+
+    if not stream_args["user_text"]:
+        _log("[SSE] ERROR: empty user_text → invalid_input")
+        async def _err():
+            yield f"event: error\ndata: {_json.dumps({'message': 'invalid_input'})}\n\n"
+        return StreamingResponse(_err(), media_type="text/event-stream",
+                                headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+
+    # --- Abort event for this session ---
+    configurable = body.get("config", {}).get("configurable", {})
+    session_id = configurable.get("session_id", "")
+    abort_event = get_abort_event(session_id) if session_id else _asyncio.Event()
+
+    # --- Now create the streaming generator with pre-parsed data ---
+    async def _generate():
+        try:
+            import uuid as _uuid
+            try:
+                from .agents.runner import run_supervisor_stream
+            except ImportError:
+                from agents.runner import run_supervisor_stream
+
+            collected_content: list = []
+            event_count = 0
+            # Stable message ID so SDK MessageTupleManager concatenates all chunks
+            ai_msg_id = str(_uuid.uuid4())
+            _log(f"[SSE] Starting supervisor stream, ai_msg_id={ai_msg_id}, session_id={session_id}")
+            async for event in run_supervisor_stream(**stream_args, abort_event=abort_event):
+                # Check if client disconnected or abort was requested
+                if abort_event.is_set():
+                    _log(f"[SSE] Abort requested for session {session_id}, stopping stream")
+                    break
+                if await request.is_disconnected():
+                    _log(f"[SSE] Client disconnected, stopping stream")
+                    break
+                event_count += 1
+                etype = event.get("type")
+                _log(f"[SSE] event #{event_count}: type={etype}")
+                if etype == "routing":
+                    # New: tell frontend which agent was selected (agent pill)
+                    payload = _json.dumps(event.get("data") or {})
+                    yield f"event: metadata\ndata: {payload}\n\n"
+                elif etype == "tool_call":
+                    # New: tell frontend which tool was invoked (tool pill)
+                    payload = _json.dumps({"tool": (event.get("data") or {}).get("name")})
+                    yield f"event: metadata\ndata: {payload}\n\n"
+                elif etype == "content":
+                    text = (event.get("data") or {}).get("text") or ""
+                    if isinstance(text, str) and text:
+                        collected_content.append(text)
+                        # SDK StreamManager expects "messages" event with [serialized, metadata]
+                        # serialized MUST have "id" so MessageTupleManager can track/concat chunks
+                        serialized = {"type": "AIMessageChunk", "id": ai_msg_id, "content": text}
+                        metadata = {"langgraph_node": "agent"}
+                        payload = _json.dumps([serialized, metadata])
+                        yield f"event: messages\ndata: {payload}\n\n"
+                elif etype == "complete":
+                    data = event.get("data") or {}
+                    full_text = data.get("text") or "".join(collected_content) or data.get("code") or ""
+                    _log(f"[SSE] complete: full_text len={len(full_text)}, agentId={data.get('agentId')}, tools={data.get('toolsInvoked')}")
+                    # Build history messages with IDs for the SDK values event
+                    history = stream_args.get("history") or []
+                    lc_messages: list = []
+                    for i, h in enumerate(history):
+                        role = h.get("type", "user")
+                        lc_messages.append({
+                            "type": "human" if role == "user" else "ai",
+                            "id": str(_uuid.uuid4()),
+                            "content": h.get("content") or "",
+                        })
+                    # Final AI message uses the same ID as the streamed chunks
+                    lc_messages.append({"type": "ai", "id": ai_msg_id, "content": full_text})
+                    # Include app result so frontend can handle agentId, code, actions, toolsInvoked, etc.
+                    app_result = {
+                        k: data.get(k)
+                        for k in ("agentId", "text", "code", "reason", "type", "thinkingProcess", "toolsInvoked", "toolResults", "uniprotSearchResult", "uniprotDetailResult", "tokenUsage", "alignmentResult", "af2bindResult")
+                        if data.get(k) is not None
+                    }
+                    values_payload = _json.dumps({"messages": lc_messages, "appResult": app_result})
+                    _log(f"[SSE] yielding values event, messages count: {len(lc_messages)}")
+                    yield f"event: values\ndata: {values_payload}\n\n"
+                elif etype == "error":
+                    err = (event.get("data") or {}).get("error") or "Unknown error"
+                    _log(f"[SSE] yielding error event: {err}")
+                    # Emit both: a messages event (so SDK aggregates content) and
+                    # a values event (so SDK completes the stream and frontend can display it).
+                    # Without the values event the SDK never transitions isLoading → false
+                    # and the frontend gets stuck in the loading state.
+                    error_text = f"⚠️ {err}"
+                    err_serialized = {"type": "AIMessageChunk", "id": ai_msg_id, "content": error_text}
+                    err_metadata = {"langgraph_node": "agent"}
+                    yield f"event: messages\ndata: {_json.dumps([err_serialized, err_metadata])}\n\n"
+                    # Build a values event with collected content + error
+                    history = stream_args.get("history") or []
+                    lc_messages_err: list = []
+                    for i, h in enumerate(history):
+                        role = h.get("type", "user")
+                        lc_messages_err.append({
+                            "type": "human" if role == "user" else "ai",
+                            "id": str(_uuid.uuid4()),
+                            "content": h.get("content") or "",
+                        })
+                    lc_messages_err.append({"type": "ai", "id": ai_msg_id, "content": error_text})
+                    err_values_payload = _json.dumps({
+                        "messages": lc_messages_err,
+                        "appResult": {"text": error_text},
+                    })
+                    _log(f"[SSE] yielding values event for error, messages count: {len(lc_messages_err)}")
+                    yield f"event: values\ndata: {err_values_payload}\n\n"
+            _log(f"[SSE] stream ended, total events: {event_count}, collected content len: {len(''.join(collected_content))}")
+        except Exception as e:
+            _log(f"[SSE] EXCEPTION: {e}")
+            import traceback as _tb
+            _log(f"[SSE] traceback: {_tb.format_exc()}")
+            log_line("agent_route_stream_sse_failed", {"error": str(e), "trace": _tb.format_exc()})
+            # Same fix: emit a values event on exception so frontend never gets stuck
+            exc_text = f"⚠️ Something went wrong: {e}"
+            exc_serialized = {"type": "AIMessageChunk", "id": ai_msg_id, "content": exc_text}
+            exc_metadata = {"langgraph_node": "agent"}
+            yield f"event: messages\ndata: {_json.dumps([exc_serialized, exc_metadata])}\n\n"
+            history = stream_args.get("history") or []
+            lc_messages_exc: list = []
+            for i, h in enumerate(history):
+                role = h.get("type", "user")
+                lc_messages_exc.append({
+                    "type": "human" if role == "user" else "ai",
+                    "id": str(_uuid.uuid4()),
+                    "content": h.get("content") or "",
+                })
+            lc_messages_exc.append({"type": "ai", "id": ai_msg_id, "content": exc_text})
+            exc_values_payload = _json.dumps({
+                "messages": lc_messages_exc,
+                "appResult": {"text": exc_text},
+            })
+            _log(f"[SSE] yielding values event for exception, messages count: {len(lc_messages_exc)}")
+            yield f"event: values\ndata: {exc_values_payload}\n\n"
+        finally:
+            if session_id:
+                clear_abort_event(session_id)
+
+    return StreamingResponse(
+        _generate(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no", "Connection": "keep-alive"},
+    )
 
 
 # AlphaFold API endpoints
@@ -733,113 +1103,6 @@ async def alphafold_cancel(request: Request, job_id: str, user: Dict[str, Any] =
         return JSONResponse(status_code=500, content=content)
 
 
-# AlphaFold3 API endpoints
-@app.post("/api/alphafold3/fold")
-@limiter.limit("5/minute")
-async def alphafold3_fold(request: Request, user: Dict[str, Any] = Depends(get_current_user)):
-    try:
-        body = await request.json()
-        entities = body.get("entities", [])
-        msa_files_map = body.get("msaFilesMap", {})
-        job_id = body.get("jobId")
-        
-        log_line("alphafold3_request", {
-            "jobId": job_id,
-            "entity_count": len(entities),
-            "entity_types": [e.get("type") for e in entities],
-            "client_ip": get_remote_address(request)
-        })
-        
-        if not entities or not job_id:
-            log_line("alphafold3_validation_failed", {
-                "missing_entities": not entities,
-                "missing_jobId": not job_id,
-                "jobId": job_id
-            })
-            return JSONResponse(
-                status_code=400,
-                content={
-                    "status": "error",
-                    "error": "Missing entities or jobId",
-                    "errorCode": "MISSING_PARAMETERS",
-                    "userMessage": "Required parameters are missing"
-                }
-            )
-        
-        # Queue background job and return 202 Accepted immediately
-        log_line("alphafold3_submitting", {
-            "jobId": job_id,
-            "handler": "alphafold_handler.submit_alphafold3_job (background)"
-        })
-        
-        try:
-            alphafold_handler.active_jobs[job_id] = "queued"
-        except Exception:
-            pass
-        
-        # Run the folding job asynchronously
-        import asyncio as _asyncio
-        _asyncio.create_task(
-            alphafold_handler.submit_alphafold3_job({
-                "entities": entities,
-                "msaFilesMap": msa_files_map,
-                "jobId": job_id,
-                "sessionId": body.get("sessionId"),
-                "userId": body.get("userId")
-            })
-        )
-        
-        return JSONResponse(
-            status_code=202,
-            content={
-                "status": "accepted",
-                "jobId": job_id,
-                "message": "AlphaFold3 folding job accepted. Poll /api/alphafold3/status/{job_id} for updates."
-            }
-        )
-        
-    except Exception as e:
-        log_line("alphafold3_fold_failed", {"error": str(e), "trace": traceback.format_exc()})
-        return JSONResponse(
-            status_code=500,
-            content={
-                "status": "error",
-                "error": "",
-                "errorCode": "INTERNAL_ERROR",
-                "userMessage": "An unexpected error occurred",
-                "technicalMessage": str(e) if DEBUG_API else "Internal server error"
-            }
-        )
-
-
-@app.get("/api/alphafold3/status/{job_id}")
-@limiter.limit("30/minute")
-async def alphafold3_status(request: Request, job_id: str, user: Dict[str, Any] = Depends(get_current_user)):
-    try:
-        status = alphafold_handler.get_job_status(job_id)
-        return status
-    except Exception as e:
-        log_line("alphafold3_status_failed", {"error": str(e), "trace": traceback.format_exc()})
-        content = {"error": "alphafold3_status_failed"}
-        if DEBUG_API:
-            content["detail"] = str(e)
-        return JSONResponse(status_code=500, content=content)
-
-
-@app.post("/api/alphafold3/cancel/{job_id}")
-@limiter.limit("10/minute")
-async def alphafold3_cancel(request: Request, job_id: str, user: Dict[str, Any] = Depends(get_current_user)):
-    try:
-        result = alphafold_handler.cancel_job(job_id)
-        return result
-    except Exception as e:
-        log_line("alphafold3_cancel_failed", {"error": str(e), "trace": traceback.format_exc()})
-        content = {"error": "alphafold3_cancel_failed"}
-        if DEBUG_API:
-            content["detail"] = str(e)
-        return JSONResponse(status_code=500, content=content)
-
-
 # PDB upload utilities -----------------------------------------------------
 
 
@@ -937,9 +1200,9 @@ async def smiles_to_structure_endpoint(
     try:
         body = await request.json()
         smiles = (body.get("smiles") or "").strip()
-        fmt = (body.get("format") or "pdb").lower()
+        fmt = (body.get("format") or "sdf").lower()
         if fmt not in ("pdb", "sdf"):
-            fmt = "pdb"
+            fmt = "sdf"
         if not smiles:
             return JSONResponse(
                 status_code=400,
@@ -992,10 +1255,65 @@ async def download_uploaded_pdb(request: Request, file_id: str, user: Dict[str, 
     metadata = get_uploaded_pdb(file_id, user["id"])
     if not metadata:
         raise HTTPException(status_code=404, detail="Uploaded file not found")
+    filename = metadata.get("filename") or f"{file_id}.pdb"
+    media_type = "chemical/x-mdl-sdfile" if str(filename).lower().endswith(".sdf") else "chemical/x-pdb"
     return FileResponse(
         metadata["absolute_path"],
+        media_type=media_type,
+        filename=filename,
+    )
+
+
+@app.get("/api/upload/pdb/{file_id}/filtered")
+@limiter.limit("30/minute")
+async def download_filtered_uploaded_pdb(
+    request: Request,
+    file_id: str,
+    chains: Optional[str] = None,
+    include_waters: bool = True,
+    include_ligands: bool = True,
+    user: Dict[str, Any] = Depends(get_current_user),
+):
+    _ = request
+    metadata = get_uploaded_pdb(file_id, user["id"])
+    if not metadata:
+        raise HTTPException(status_code=404, detail="Uploaded file not found")
+
+    source_path = metadata.get("absolute_path")
+    if not source_path:
+        raise HTTPException(status_code=404, detail="Uploaded file path is missing")
+
+    try:
+        source_text = Path(str(source_path)).read_text(encoding="utf-8", errors="ignore")
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Failed to read source PDB: {exc}")
+
+    selected_chains = [c.strip() for c in (chains or "").split(",") if c.strip()]
+    filtered_content = filter_pdb_content(
+        source_text,
+        chains=selected_chains,
+        include_waters=include_waters,
+        include_ligands=include_ligands,
+    )
+
+    has_atoms = any(
+        line.startswith("ATOM") or line.startswith("HETATM")
+        for line in filtered_content.splitlines()
+    )
+    if not has_atoms:
+        raise HTTPException(status_code=400, detail="Filter produced an empty structure")
+
+    original_filename = str(metadata.get("filename") or f"{file_id}.pdb")
+    base_name = Path(original_filename).stem
+    chain_suffix = f"chains-{'-'.join(selected_chains)}" if selected_chains else "all-chains"
+    waters_suffix = "waters-on" if include_waters else "waters-off"
+    ligands_suffix = "ligands-on" if include_ligands else "ligands-off"
+    download_filename = f"{base_name}_{chain_suffix}_{waters_suffix}_{ligands_suffix}_filtered.pdb"
+
+    return Response(
+        content=filtered_content,
         media_type="chemical/x-pdb",
-        filename=metadata.get("filename") or f"{file_id}.pdb",
+        headers={"Content-Disposition": f'attachment; filename="{download_filename}"'},
     )
 
 
@@ -1381,12 +1699,13 @@ async def _generate_error_ai_summary(
     Falls back to a structured message if the LLM call fails.
     """
     try:
-        from .agents.runner import _get_openrouter_api_key, _load_model_map
-        
+        from .agents.runner import _get_openrouter_api_key
+        from .agents.runner_utils import _load_model_map
+
         model_map = _load_model_map()
         model_id = model_map.get("anthropic/claude-3-haiku", "anthropic/claude-3-haiku")
         api_key = _get_openrouter_api_key()
-        
+
         if not api_key:
             return _build_fallback_error_summary(error_msg, original_error, feature, parameters)
         
@@ -1430,6 +1749,12 @@ Do NOT use markdown formatting. Write plain text only. Do NOT repeat the error c
             data = response.json()
             summary = data["choices"][0]["message"]["content"].strip()
             return summary
+    except httpx.HTTPStatusError as e:
+        if e.response.status_code == 401:
+            log_line("ai_error_summary_failed", {"error": "OpenRouter API key invalid or missing (401)"})
+        else:
+            log_line("ai_error_summary_failed", {"error": str(e)})
+        return _build_fallback_error_summary(error_msg, original_error, feature, parameters)
     except Exception as e:
         log_line("ai_error_summary_failed", {"error": str(e)})
         return _build_fallback_error_summary(error_msg, original_error, feature, parameters)
@@ -1910,9 +2235,10 @@ async def chat(request: Request, user: Dict[str, Any] = Depends(get_current_user
         )
         return res
     except Exception as e:
-        if "OpenRouter API key is missing" in str(e):
-            return JSONResponse(status_code=503, content={"error": "api_key_missing", "message": str(e)})
-        log_line("chat_failed", {"error": str(e), "trace": traceback.format_exc()})
+        err_str = str(e)
+        if "OpenRouter API key is missing" in err_str or "OpenRouter API key is invalid or missing" in err_str:
+            return JSONResponse(status_code=503, content={"error": "api_key_missing", "message": err_str})
+        log_line("chat_failed", {"error": err_str, "trace": traceback.format_exc()})
         content = {"error": "chat_failed"}
         if DEBUG_API:
             content["detail"] = str(e)
@@ -1949,8 +2275,9 @@ AI: {ai_content}
 Return ONLY the title text, no quotes, no explanation. Make it specific and meaningful."""
 
         # Use a lightweight model for title generation (Haiku is fast and cheap)
-        from .agents.runner import _get_openrouter_api_key, _load_model_map
-        
+        from .agents.runner import _get_openrouter_api_key
+        from .agents.runner_utils import _load_model_map
+
         model_map = _load_model_map()
         model_id = model_map.get("anthropic/claude-3-haiku", "anthropic/claude-3-haiku")
         api_key = _get_openrouter_api_key()
@@ -1991,7 +2318,9 @@ Return ONLY the title text, no quotes, no explanation. Make it specific and mean
             return {"title": title or "New Chat"}
             
     except httpx.HTTPStatusError as e:
-        if e.response.status_code == 429:
+        if e.response.status_code == 401:
+            log_line("title_generation_failed", {"error": "OpenRouter API key invalid or missing (401)"})
+        elif e.response.status_code == 429:
             log_line("title_generation_failed", {"error": "OpenRouter rate limit (429); using fallback title"})
         else:
             log_line("title_generation_failed", {"error": str(e)})

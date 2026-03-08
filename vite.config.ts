@@ -12,6 +12,20 @@ export default defineConfig({
         target: 'http://localhost:8787',
         changeOrigin: true,
         secure: false,
+        // SSE streaming: configure proxy to not buffer responses
+        configure: (proxy) => {
+          proxy.on('proxyReq', (proxyReq) => {
+            // Remove Accept-Encoding so backend doesn't compress SSE responses
+            proxyReq.removeHeader('Accept-Encoding');
+          });
+          proxy.on('proxyRes', (proxyRes) => {
+            // Disable buffering for SSE responses
+            if (proxyRes.headers['content-type']?.includes('text/event-stream')) {
+              proxyRes.headers['X-Accel-Buffering'] = 'no';
+              proxyRes.headers['Cache-Control'] = 'no-cache, no-transform';
+            }
+          });
+        },
       }
     },
     // Optimize dev server performance

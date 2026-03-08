@@ -13,15 +13,36 @@ import { StructureElement, StructureProperties } from 'molstar/lib/mol-model/str
 import { CodeExecutor } from '../utils/codeExecutor';
 import { MolstarToolbar } from './MolstarToolbar';
 import { ConfidenceScorePanel } from './ConfidenceScorePanel';
+import { MolstarSkeleton } from './MolstarSkeleton';
 import { getCodeToExecute } from '../utils/codeUtils';
 
 export const MolstarViewer: React.FC = () => {
+  const MIN_SKELETON_MS = 300;
+  const SKELETON_FADE_MS = 200;
+  const isDev = typeof window !== 'undefined' && (
+    window.location.hostname === 'localhost' ||
+    window.location.hostname === '127.0.0.1'
+  );
+
   const containerRef = useRef<HTMLDivElement>(null);
   const lastExecutedCodeRef = useRef<string>('');
   const pluginRef = useRef<PluginUIContext | null>(null);
+  const initAttemptRef = useRef(0);
+  const initInProgressRef = useRef(false);
+  const mountedRef = useRef(true);
+  const loadingStartedAtRef = useRef<number | null>(null);
+  const loadingStateRef = useRef<'idle' | 'loading' | 'ending'>('idle');
   const [plugin, setPlugin] = useState<PluginUIContext | null>(null);
   const [isLoading, setIsLoading] = useState(false);
+  const [isLoadingExiting, setIsLoadingExiting] = useState(false);
   const [isInitialized, setIsInitialized] = useState(false);
+  const [initFailed, setInitFailed] = useState(false);
+  const [debugInit, setDebugInit] = useState<{ attempt: number; phase: string; at: string }>({
+    attempt: 0,
+    phase: 'idle',
+    at: '',
+  });
+  const [pdbLoadError, setPdbLoadError] = useState<{ message: string; pdbId?: string } | null>(null);
   const { setPlugin: setStorePlugin, pendingCodeToRun, setPendingCodeToRun, setActivePane, setIsExecuting, currentCode, setCurrentCode, currentStructureOrigin } = useAppStore();
   const addSelection = useAppStore(state => state.addSelection);
   const lastLoadedPdb = useAppStore(state => state.lastLoadedPdb);
@@ -32,9 +53,63 @@ export const MolstarViewer: React.FC = () => {
     return code.includes('blob:http://') || code.includes('blob:https://');
   };
 
+  const PDB_NOT_FOUND_MARKER = 'not found in the RCSB database';
+  const setErrorIfPdbNotFound = (error: unknown): void => {
+    const message = error instanceof Error ? error.message : String(error);
+    if (!message.includes(PDB_NOT_FOUND_MARKER)) return;
+    const pdbIdMatch = message.match(/PDB ID "([^"]+)"/);
+    setPdbLoadError({ message, pdbId: pdbIdMatch?.[1] });
+  };
+  const clearErrorOnSuccess = (result: { success?: boolean; error?: string }): void => {
+    if (result?.success) setPdbLoadError(null);
+    else if (result?.error?.includes(PDB_NOT_FOUND_MARKER)) {
+      const pdbIdMatch = result.error.match(/PDB ID "([^"]+)"/);
+      setPdbLoadError({ message: result.error, pdbId: pdbIdMatch?.[1] });
+    }
+  };
+
   // Get code to execute using shared utility
   const getCode = (): string | null => {
     return getCodeToExecute(currentCode, pendingCodeToRun, activeSessionId, getActiveSession);
+  };
+
+  const markInitPhase = (phase: string): void => {
+    if (!isDev || !mountedRef.current) return;
+    setDebugInit({
+      attempt: initAttemptRef.current,
+      phase,
+      at: new Date().toLocaleTimeString(),
+    });
+  };
+
+  const beginLoading = (): void => {
+    if (loadingStateRef.current === 'loading') return;
+    loadingStateRef.current = 'loading';
+    loadingStartedAtRef.current = Date.now();
+    setIsLoadingExiting(false);
+    setIsLoading(true);
+  };
+
+  const endLoading = async (): Promise<void> => {
+    if (loadingStateRef.current !== 'loading') return;
+    loadingStateRef.current = 'ending';
+
+    const startedAt = loadingStartedAtRef.current ?? Date.now();
+    const elapsed = Date.now() - startedAt;
+    const remaining = Math.max(0, MIN_SKELETON_MS - elapsed);
+    if (remaining > 0) {
+      await new Promise((resolve) => setTimeout(resolve, remaining));
+    }
+
+    if (!mountedRef.current) return;
+    setIsLoadingExiting(true);
+    await new Promise((resolve) => setTimeout(resolve, SKELETON_FADE_MS));
+
+    if (!mountedRef.current) return;
+    setIsLoading(false);
+    setIsLoadingExiting(false);
+    loadingStartedAtRef.current = null;
+    loadingStateRef.current = 'idle';
   };
 
   // Cleanup blob URLs from currentCode when session changes
@@ -48,11 +123,19 @@ export const MolstarViewer: React.FC = () => {
   }, [activeSessionId]); // Run when session changes (intentionally not including currentCode to avoid loops)
 
   useEffect(() => {
+    // In React Strict Mode (dev), effect cleanup runs before setup reruns.
+    // Reset this flag on each setup so loading completion isn't blocked.
+    mountedRef.current = true;
+
     const initViewer = async () => {
-      if (!containerRef.current || isInitialized) return;
+      if (!containerRef.current || isInitialized || initInProgressRef.current) return;
 
       try {
-        setIsLoading(true);
+        initAttemptRef.current += 1;
+        initInProgressRef.current = true;
+        setInitFailed(false);
+        markInitPhase('start');
+        beginLoading();
         console.log('[Molstar] initViewer: start');
         console.log('[Molstar] initViewer: containerRef set?', !!containerRef.current);
 
@@ -92,6 +175,19 @@ export const MolstarViewer: React.FC = () => {
             ]
           },
         });
+
+        // StrictMode/dev can unmount before async init resolves.
+        // Dispose stale instances so they don't conflict with the next mount.
+        if (!mountedRef.current) {
+          try {
+            pluginInstance.dispose();
+          } catch (e) {
+            console.warn('[Molstar] stale init dispose failed', e);
+          }
+          return;
+        }
+
+        markInitPhase('plugin-ui-ready');
         clearTimeout(initTimeout);
         console.log('[Molstar] createPluginUI: success');
 
@@ -99,9 +195,7 @@ export const MolstarViewer: React.FC = () => {
         setPlugin(pluginInstance);
         setStorePlugin(pluginInstance);
         setIsInitialized(true);
-        // Clear loading overlay immediately so the viewer is visible.
-        // Code execution (below) runs in the background without blocking the UI.
-        setIsLoading(false);
+        markInitPhase('plugin-stored');
         console.log('[Molstar] initViewer: plugin stored and initialized');
 
         // Double-click detection built on top of the click event
@@ -146,22 +240,25 @@ export const MolstarViewer: React.FC = () => {
 
         // Priority 1: Run any queued code
         if (pendingCodeToRun && pendingCodeToRun.trim()) {
+          markInitPhase('running-pending-code');
           try {
             setIsExecuting(true);
             const exec = new CodeExecutor(pluginInstance);
             // Add timeout for code execution to prevent infinite loading
             const executionPromise = exec.executeCode(pendingCodeToRun);
-            const timeoutPromise = new Promise((_, reject) => 
+            const timeoutPromise = new Promise<never>((_, reject) =>
               setTimeout(() => reject(new Error('Code execution timeout after 30 seconds')), 30000)
             );
-            await Promise.race([executionPromise, timeoutPromise]);
+            const result = await Promise.race([executionPromise, timeoutPromise]);
+            clearErrorOnSuccess(result);
             setActivePane('viewer');
           } catch (e) {
+            setErrorIfPdbNotFound(e);
             console.error('[Molstar] pending code execution failed', e);
           } finally {
             setIsExecuting(false);
             setPendingCodeToRun(null);
-            setIsLoading(false); // Ensure loading state is cleared
+            await endLoading();
           }
           return;
         }
@@ -170,15 +267,17 @@ export const MolstarViewer: React.FC = () => {
         // getCode() uses shared utility that filters out blob URLs automatically
         const codeToExecute = getCode();
         if (codeToExecute) {
+          markInitPhase('running-restored-code');
           try {
             setIsExecuting(true);
             const exec = new CodeExecutor(pluginInstance);
             // Add timeout for code execution to prevent infinite loading
             const executionPromise = exec.executeCode(codeToExecute);
-            const timeoutPromise = new Promise((_, reject) => 
+            const timeoutPromise = new Promise<never>((_, reject) =>
               setTimeout(() => reject(new Error('Code execution timeout after 30 seconds')), 30000)
             );
-            await Promise.race([executionPromise, timeoutPromise]);
+            const result = await Promise.race([executionPromise, timeoutPromise]);
+            clearErrorOnSuccess(result);
             // Sync to store if it came from message
             if (!currentCode || currentCode.trim() === '') {
               setCurrentCode(codeToExecute);
@@ -186,21 +285,27 @@ export const MolstarViewer: React.FC = () => {
             setActivePane('viewer');
             lastExecutedCodeRef.current = codeToExecute;
           } catch (e) {
+            setErrorIfPdbNotFound(e);
             console.error('[Molstar] execute code on mount failed', e);
           } finally {
             setIsExecuting(false);
-            setIsLoading(false); // Ensure loading state is cleared
+            await endLoading();
           }
           return;
         }
 
         // Viewer initialized - code will be executed when it becomes available
+        markInitPhase('initialized-waiting-code');
         console.log('[Molstar] initViewer: viewer initialized (waiting for code)');
         
       } catch (error) {
         console.error('[Molstar] initViewer: failed', error);
+        setInitFailed(true);
+        markInitPhase('failed');
       } finally {
-        setIsLoading(false);
+        await endLoading();
+        initInProgressRef.current = false;
+        markInitPhase('end');
         console.log('[Molstar] initViewer: end (loading=false)');
       }
     };
@@ -208,6 +313,7 @@ export const MolstarViewer: React.FC = () => {
     void initViewer();
 
     return () => {
+      mountedRef.current = false;
       console.log('[Molstar] cleanup: start');
       const instance = pluginRef.current;
       if (instance) {
@@ -224,6 +330,8 @@ export const MolstarViewer: React.FC = () => {
       if (containerRef.current?.firstChild) {
         containerRef.current.replaceChildren();
       }
+      initInProgressRef.current = false;
+      loadingStateRef.current = 'idle';
       console.log('[Molstar] cleanup: end');
     };
   }, []); // Only initialize once on mount
@@ -312,9 +420,11 @@ export const MolstarViewer: React.FC = () => {
       try {
         setIsExecuting(true);
         const exec = new CodeExecutor(plugin);
-        await exec.executeCode(code);
+        const result = await exec.executeCode(code);
+        clearErrorOnSuccess(result);
         lastExecutedCodeRef.current = code;
       } catch (e) {
+        setErrorIfPdbNotFound(e);
         console.error('[Molstar] re-execute currentCode failed', e);
       } finally {
         setIsExecuting(false);
@@ -344,11 +454,11 @@ export const MolstarViewer: React.FC = () => {
           }
         `}</style>
         {isLoading && (
-          <div className="absolute inset-0 bg-gray-900 flex items-center justify-center z-10">
-            <div className="text-white text-center">
-              <div className="w-8 h-8 border-2 border-white border-t-transparent rounded-full animate-spin mx-auto mb-4"></div>
-              <div>Initializing Molstar Viewer...</div>
-            </div>
+          <div
+            className={`absolute inset-0 z-10 transition-opacity ${isLoadingExiting ? 'opacity-0' : 'opacity-100'}`}
+            style={{ transitionDuration: `${SKELETON_FADE_MS}ms` }}
+          >
+            <MolstarSkeleton message="Initializing Mol* viewer..." />
           </div>
         )}
 
@@ -357,12 +467,56 @@ export const MolstarViewer: React.FC = () => {
           className="absolute inset-0 h-full w-full"
         />
 
-        {!isLoading && !isInitialized && (
+        {pdbLoadError && (
+          <div className="absolute inset-0 z-20 flex items-center justify-center bg-gray-900/80 p-4">
+            <div className="max-w-md rounded-lg bg-gray-800 p-4 shadow-xl ring-1 ring-gray-700">
+              <h3 className="mb-2 text-sm font-semibold text-red-400">Structure could not be loaded</h3>
+              <p className="mb-3 text-sm text-gray-200">
+                {pdbLoadError.pdbId ? (
+                  <>PDB ID <strong className="font-mono">{pdbLoadError.pdbId}</strong> was not found. The AI may have used an invalid or hallucinated ID.</>
+                ) : (
+                  <>This PDB ID doesn&apos;t exist. The AI may have hallucinated it.</>
+                )}
+              </p>
+              <a
+                href="https://www.rcsb.org/search"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="mb-3 inline-block text-sm text-blue-400 hover:underline"
+              >
+                Search RCSB PDB for a valid structure →
+              </a>
+              <button
+                type="button"
+                onClick={() => setPdbLoadError(null)}
+                className="w-full rounded bg-gray-700 py-2 text-sm font-medium text-white hover:bg-gray-600"
+              >
+                Dismiss
+              </button>
+            </div>
+          </div>
+        )}
+
+        {!isLoading && !isInitialized && initFailed && (
           <div className="absolute inset-0 bg-gray-900 flex items-center justify-center">
             <div className="text-white text-center">
               <div className="text-red-400 mb-2">Failed to initialize Molstar viewer</div>
               <div className="text-sm text-gray-400">Please refresh the page to try again</div>
             </div>
+          </div>
+        )}
+
+        {isDev && (
+          <div className="absolute left-2 top-2 z-30 rounded bg-black/55 px-2 py-1 text-[11px] text-gray-200 pointer-events-none">
+            <span className="font-mono">mol* init #{debugInit.attempt}</span>
+            <span className="mx-1">|</span>
+            <span>{debugInit.phase}</span>
+            {debugInit.at && (
+              <>
+                <span className="mx-1">|</span>
+                <span>{debugInit.at}</span>
+              </>
+            )}
           </div>
         )}
       </div>

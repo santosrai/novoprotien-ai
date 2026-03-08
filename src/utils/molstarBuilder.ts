@@ -1,5 +1,5 @@
 import { PluginUIContext } from 'molstar/lib/mol-plugin-ui/context';
-import { getPDBUrl, validatePDBId } from './pdbUtils';
+import { getPDBUrl, validatePDBId, checkPDBExists } from './pdbUtils';
 import { getAuthHeaders } from './api';
 
 export interface ResidueSelector {
@@ -9,9 +9,17 @@ export interface ResidueSelector {
   auth_seq_id?: number;
 }
 
+export interface AlignmentResult {
+  rmsd: number;
+  alignedLength: number;
+  alignmentScore: number;
+}
+
 export interface MolstarBuilder {
   loadStructure: (pdbId: string) => Promise<void>;
   loadStructureFromContent: (content: string, format: 'pdb' | 'sdf') => Promise<void>;
+  loadAdditionalStructure: (content: string, format?: 'pdb' | 'sdf') => Promise<any>;
+  alignStructures: (structure1: any, structure2: any) => Promise<AlignmentResult>;
   addCartoonRepresentation: (options?: any) => Promise<void>;
   addBallAndStickRepresentation: (options?: any) => Promise<void>;
   addSurfaceRepresentation: (options?: any) => Promise<void>;
@@ -47,6 +55,19 @@ export const createMolstarBuilder = (
       // If it's not a URL, validate as PDB ID
       if (!isUrl && !validatePDBId(pdbIdOrUrl)) {
         throw new Error(`Invalid PDB ID or URL: ${pdbIdOrUrl}`);
+      }
+
+      // For PDB IDs, check existence in RCSB before downloading (avoids 404 on hallucinated IDs)
+      if (!isUrl) {
+        try {
+          const exists = await checkPDBExists(pdbIdOrUrl);
+          if (!exists) {
+            throw new Error(`PDB ID "${pdbIdOrUrl}" was not found in the RCSB database. It may be invalid or hallucinated. Search at https://www.rcsb.org/search`);
+          }
+        } catch (e) {
+          if (e instanceof Error && e.message.includes('not found in the RCSB database')) throw e;
+          // Network or other error: fall through to normal download
+        }
       }
 
       try {
@@ -87,7 +108,12 @@ export const createMolstarBuilder = (
           });
         }
 
-        const trajectory = await plugin.builders.structure.parseTrajectory(data, 'pdb');
+        let trajectory: any;
+        try {
+          trajectory = await plugin.builders.structure.parseTrajectory(data, 'pdb');
+        } catch {
+          trajectory = await plugin.builders.structure.parseTrajectory(data, 'sdf');
+        }
         const model = await plugin.builders.structure.createModel(trajectory);
         currentStructure = await plugin.builders.structure.createStructure(model);
         
@@ -134,6 +160,86 @@ export const createMolstarBuilder = (
         return currentStructure;
       } catch (error) {
         throw new Error(`Failed to load structure from content (${format}): ${error}`);
+      }
+    },
+
+    async loadAdditionalStructure(content: string, format: 'pdb' | 'sdf' = 'pdb') {
+      if (!content || !content.trim()) {
+        throw new Error('Content is required for loadAdditionalStructure');
+      }
+      try {
+        // Load WITHOUT clearing existing structures
+        const blob = new Blob([content], { type: 'text/plain' });
+        const blobUrl = URL.createObjectURL(blob);
+        let data: any;
+        try {
+          data = await plugin.builders.data.download({
+            url: blobUrl,
+            isBinary: false,
+          });
+        } finally {
+          URL.revokeObjectURL(blobUrl);
+        }
+
+        const trajectory = await plugin.builders.structure.parseTrajectory(data, format);
+        const model = await plugin.builders.structure.createModel(trajectory);
+        const structure = await plugin.builders.structure.createStructure(model);
+
+        return structure;
+      } catch (error) {
+        throw new Error(`Failed to load additional structure (${format}): ${error}`);
+      }
+    },
+
+    async alignStructures(structure1: any, structure2: any): Promise<AlignmentResult> {
+      try {
+        // Use Molstar's built-in sequence alignment + RMSD superposition
+        const { alignAndSuperpose } = await import('molstar/lib/mol-model/structure/structure/util/superposition');
+        const { StructureElement } = await import('molstar/lib/mol-model/structure/structure/element');
+        const { StateTransforms } = await import('molstar/lib/mol-plugin-state/transforms');
+
+        const data1 = structure1.cell?.obj?.data;
+        const data2 = structure2.cell?.obj?.data;
+
+        if (!data1 || !data2) {
+          throw new Error('Could not access structure data for alignment');
+        }
+
+        // Get whole-structure loci for both structures
+        const loci1 = StructureElement.Loci.all(data1);
+        const loci2 = StructureElement.Loci.all(data2);
+
+        // Run sequence alignment + RMSD superposition (uses BLOSUM62 for proteins)
+        const results = alignAndSuperpose([loci1, loci2]);
+
+        if (results.length === 0) {
+          throw new Error('Alignment produced no results');
+        }
+
+        const result = results[0]; // { bTransform, rmsd, alignmentScore }
+
+        // Apply transformation to structure2 to superpose onto structure1
+        const b = plugin.state.data.build().to(structure2)
+          .insert(StateTransforms.Model.TransformStructureConformation, {
+            transform: { name: 'matrix' as const, params: { data: result.bTransform, transpose: false } }
+          });
+        await plugin.runTask(plugin.state.data.updateTree(b));
+
+        const alignedLen = Math.min(
+          StructureElement.Loci.size(loci1),
+          StructureElement.Loci.size(loci2)
+        );
+
+        console.log(`[Molstar] Superposition: RMSD=${result.rmsd.toFixed(2)}, alignmentScore=${result.alignmentScore.toFixed(1)}, aligned=${alignedLen}`);
+
+        return {
+          rmsd: result.rmsd,
+          alignedLength: alignedLen,
+          alignmentScore: result.alignmentScore,
+        };
+      } catch (error) {
+        console.error('[Molstar] Superposition failed:', error);
+        throw new Error(`Structure superposition failed: ${error}`);
       }
     },
 

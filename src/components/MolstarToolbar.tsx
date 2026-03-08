@@ -15,7 +15,8 @@ import {
   Link2,
   Circle,
   Trash2,
-  Code
+  Code,
+  Download
 } from 'lucide-react';
 import { PluginUIContext } from 'molstar/lib/mol-plugin-ui/context';
 import {
@@ -40,12 +41,14 @@ import {
   addLabels,
   subscribeToSelectionChanges,
   toggleAtomsBondsVisibility,
+  getSelectedChainIds,
   type ColorScheme,
   type RepresentationType,
 } from '../utils/molstarSelections';
 import { useAppStore } from '../stores/appStore';
 import { useSettingsStore } from '../stores/settingsStore';
 import { CodeExecutor } from '../utils/codeExecutor';
+import { getAuthHeaders } from '../utils/api';
 
 interface MolstarToolbarProps {
   plugin: PluginUIContext | null;
@@ -210,8 +213,14 @@ const SelectionIndicator: React.FC<SelectionIndicatorProps> = ({ hasSelection: h
 export const MolstarToolbar: React.FC<MolstarToolbarProps> = ({ plugin }) => {
   const [selectionCount, setSelectionCount] = useState(0);
   const [chainIds, setChainIds] = useState<string[]>([]);
+  const [selectedChainIds, setSelectedChainIds] = useState<string[]>([]);
   const [selectionLabel, setSelectionLabel] = useState<string>('');
-  const { setMolstarSelectionCount, recordMolstarAction, setActivePane } = useAppStore();
+  const [showExportDialog, setShowExportDialog] = useState(false);
+  const [includeWaters, setIncludeWaters] = useState(false);
+  const [includeLigands, setIncludeLigands] = useState(false);
+  const [isExporting, setIsExporting] = useState(false);
+  const [exportError, setExportError] = useState<string | null>(null);
+  const { setMolstarSelectionCount, recordMolstarAction, setActivePane, currentCode, currentStructureOrigin } = useAppStore();
   const codeEditorEnabled = useSettingsStore((s) => s.settings.codeEditor.enabled);
   
   // Subscribe to selection changes
@@ -223,6 +232,7 @@ export const MolstarToolbar: React.FC<MolstarToolbarProps> = ({ plugin }) => {
     setSelectionCount(initialCount);
     setMolstarSelectionCount(initialCount);
     setChainIds(getChainIds(plugin));
+    setSelectedChainIds(initialCount > 0 ? getSelectedChainIds(plugin) : []);
     if (initialCount === 0) {
       setSelectionLabel('');
     }
@@ -234,12 +244,18 @@ export const MolstarToolbar: React.FC<MolstarToolbarProps> = ({ plugin }) => {
       // Clear label when selection is cleared from elsewhere
       if (count === 0) {
         setSelectionLabel('');
+        setSelectedChainIds([]);
+      } else {
+        setSelectedChainIds(getSelectedChainIds(plugin));
       }
     });
     
     // Also update chain IDs when structure changes
     const structureSub = plugin.state.data.events.changed.subscribe(() => {
       setChainIds(getChainIds(plugin));
+      if (getSelectionCount(plugin) > 0) {
+        setSelectedChainIds(getSelectedChainIds(plugin));
+      }
     });
     
     return () => {
@@ -250,6 +266,33 @@ export const MolstarToolbar: React.FC<MolstarToolbarProps> = ({ plugin }) => {
   
   const isDisabled = !plugin;
   const hasSel = selectionCount > 0;
+
+  const resolveCurrentUploadFileId = (): string | null => {
+    const metadataFileId = currentStructureOrigin?.metadata?.file_id;
+    if (typeof metadataFileId === 'string' && metadataFileId.trim()) {
+      return metadataFileId.trim();
+    }
+
+    const metadataFileUrl = currentStructureOrigin?.metadata?.file_url;
+    if (typeof metadataFileUrl === 'string') {
+      const metadataMatch = metadataFileUrl.match(/\/api\/upload\/pdb\/([a-f0-9]+)/i);
+      if (metadataMatch?.[1]) return metadataMatch[1];
+    }
+
+    const codeMatch = currentCode?.match(/\/api\/upload\/pdb\/([a-f0-9]+)/i);
+    if (codeMatch?.[1]) return codeMatch[1];
+
+    return null;
+  };
+
+  const parseFilename = (disposition: string | null, fallback: string): string => {
+    if (!disposition) return fallback;
+    const match = disposition.match(/filename="?([^"]+)"?/i);
+    return match?.[1] || fallback;
+  };
+
+  const currentUploadFileId = resolveCurrentUploadFileId();
+  const canExportFilteredPdb = !!plugin && hasSel && !!currentUploadFileId;
   
   // Selection handlers
   const handleSelectResidue = (residue: string) => {
@@ -352,8 +395,57 @@ export const MolstarToolbar: React.FC<MolstarToolbarProps> = ({ plugin }) => {
       console.error('[MolstarToolbar] Failed to clear structure:', e);
     }
   };
+
+  const handleExportFilteredPdb = async () => {
+    if (!plugin) return;
+    if (!currentUploadFileId) {
+      setExportError('No uploaded source file found for export. Load a file from Uploads first.');
+      return;
+    }
+    if (selectedChainIds.length === 0) {
+      setExportError('Select at least one chain or residue before exporting.');
+      return;
+    }
+
+    setIsExporting(true);
+    setExportError(null);
+    try {
+      const params = new URLSearchParams({
+        chains: selectedChainIds.join(','),
+        include_waters: String(includeWaters),
+        include_ligands: String(includeLigands),
+      });
+
+      const response = await fetch(`/api/upload/pdb/${currentUploadFileId}/filtered?${params.toString()}`, {
+        headers: getAuthHeaders(),
+      });
+      if (!response.ok) {
+        const errorBody = await response.text();
+        throw new Error(errorBody || `Export failed (${response.status})`);
+      }
+
+      const blob = await response.blob();
+      const disposition = response.headers.get('Content-Disposition');
+      const filename = parseFilename(disposition, 'filtered_structure.pdb');
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+      setShowExportDialog(false);
+    } catch (error) {
+      console.error('[MolstarToolbar] Export filtered PDB failed:', error);
+      setExportError(error instanceof Error ? error.message : 'Failed to export filtered PDB');
+    } finally {
+      setIsExporting(false);
+    }
+  };
   
   return (
+    <>
     <div className="flex items-center gap-1 px-2 py-1 bg-gray-50 border-b border-gray-200">
       {/* Select Menu */}
       <DropdownMenu label="Select" disabled={isDisabled}>
@@ -525,6 +617,30 @@ export const MolstarToolbar: React.FC<MolstarToolbarProps> = ({ plugin }) => {
         <Trash2 className="w-4 h-4" />
         <span className="hidden sm:inline">Clear</span>
       </button>
+
+      {/* Export Filtered PDB Button */}
+      <button
+        onClick={() => {
+          setExportError(null);
+          setShowExportDialog(true);
+        }}
+        disabled={!canExportFilteredPdb}
+        className={`flex items-center gap-1 px-2 py-1 text-sm font-medium rounded transition-colors ${
+          !canExportFilteredPdb
+            ? 'text-gray-400 cursor-not-allowed'
+            : 'text-emerald-600 hover:bg-emerald-50 hover:text-emerald-700'
+        }`}
+        title={
+          !currentUploadFileId
+            ? 'Load an uploaded PDB-backed structure to export'
+            : !hasSel
+              ? 'Select at least one chain/residue to export'
+              : 'Export filtered PDB'
+        }
+      >
+        <Download className="w-4 h-4" />
+        <span className="hidden sm:inline">Export</span>
+      </button>
       
       {/* Selection Indicator */}
       <SelectionIndicator 
@@ -533,6 +649,64 @@ export const MolstarToolbar: React.FC<MolstarToolbarProps> = ({ plugin }) => {
         selectionLabel={selectionLabel}
       />
     </div>
+    {showExportDialog && (
+      <div className="fixed inset-0 z-[10000] flex items-center justify-center bg-black/50 p-4">
+        <div className="w-full max-w-md rounded-lg bg-white p-4 shadow-xl">
+          <h3 className="text-base font-semibold text-gray-900">Export Filtered PDB</h3>
+          <p className="mt-1 text-sm text-gray-600">
+            Export current selection as a new PDB file.
+          </p>
+
+          <div className="mt-3 rounded border border-gray-200 bg-gray-50 p-3 text-sm">
+            <div><span className="font-medium">Selected chains:</span> {selectedChainIds.join(', ') || 'None'}</div>
+            <div className="mt-1 text-xs text-gray-500">Selection must be active to export.</div>
+          </div>
+
+          <label className="mt-4 flex items-center gap-2 text-sm text-gray-800">
+            <input
+              type="checkbox"
+              checked={includeWaters}
+              onChange={(e) => setIncludeWaters(e.target.checked)}
+            />
+            Include waters
+          </label>
+          <label className="mt-2 flex items-center gap-2 text-sm text-gray-800">
+            <input
+              type="checkbox"
+              checked={includeLigands}
+              onChange={(e) => setIncludeLigands(e.target.checked)}
+            />
+            Include ligands
+          </label>
+
+          {exportError && (
+            <div className="mt-3 rounded border border-red-200 bg-red-50 px-2 py-1.5 text-sm text-red-700">
+              {exportError}
+            </div>
+          )}
+
+          <div className="mt-4 flex justify-end gap-2">
+            <button
+              type="button"
+              onClick={() => setShowExportDialog(false)}
+              className="rounded border border-gray-300 px-3 py-1.5 text-sm text-gray-700 hover:bg-gray-100"
+              disabled={isExporting}
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              onClick={handleExportFilteredPdb}
+              disabled={!canExportFilteredPdb || isExporting}
+              className="rounded bg-emerald-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-emerald-700 disabled:cursor-not-allowed disabled:bg-emerald-300"
+            >
+              {isExporting ? 'Exporting...' : 'Download PDB'}
+            </button>
+          </div>
+        </div>
+      </div>
+    )}
+    </>
   );
 };
 

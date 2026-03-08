@@ -11,6 +11,8 @@ from .prompts.proteinmpnn import PROTEINMPNN_AGENT_SYSTEM_PROMPT
 from .prompts.pipeline import PIPELINE_AGENT_SYSTEM_PROMPT
 from .prompts.validation import VALIDATION_AGENT_SYSTEM_PROMPT
 from .prompts.diffdock import DIFFDOCK_AGENT_SYSTEM_PROMPT
+from .prompts.alignment import ALIGNMENT_AGENT_SYSTEM_PROMPT
+from .prompts.af2bind import AF2BIND_AGENT_SYSTEM_PROMPT
 
 
 agents = {
@@ -122,6 +124,26 @@ agents = {
         "modelEnv": "CLAUDE_CHAT_MODEL",
         "defaultModel": os.getenv("CLAUDE_CHAT_MODEL", "claude-3-5-sonnet-20241022"),
         "kind": "validation",
+        "category": "analysis",
+    },
+    "alignment-agent": {
+        "id": "alignment-agent",
+        "name": "Structure Alignment (TM-align)",
+        "description": "Compares two protein structures using TM-align superposition. Use when user asks to compare, align, overlay, or superpose two structures. Fetches structures and returns them for client-side TM-align visualization.",
+        "system": ALIGNMENT_AGENT_SYSTEM_PROMPT,
+        "modelEnv": "CLAUDE_CHAT_MODEL",
+        "defaultModel": os.getenv("CLAUDE_CHAT_MODEL", "claude-3-5-sonnet-20241022"),
+        "kind": "alignment",
+        "category": "analysis",
+    },
+    "af2bind-agent": {
+        "id": "af2bind-agent",
+        "name": "AF2Bind Binding Site Prediction",
+        "description": "Predicts ligand-binding sites on proteins using AF2Bind (AlphaFold2 pair representations). Provide a PDB ID or UniProt accession to get per-residue binding probabilities with 3D heatmap visualization.",
+        "system": AF2BIND_AGENT_SYSTEM_PROMPT,
+        "modelEnv": "CLAUDE_CHAT_MODEL",
+        "defaultModel": os.getenv("CLAUDE_CHAT_MODEL", "claude-3-5-sonnet-20241022"),
+        "kind": "af2bind",
         "category": "analysis",
     },
 }

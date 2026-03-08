@@ -27,17 +27,6 @@
       }
     },
     {
-      "id": "anthropic/claude-3-opus",
-      "name": "Claude 3 Opus",
-      "provider": "Anthropic",
-      "description": "Anthropic's most capable model for highly complex tasks.",
-      "context_length": 200000,
-      "pricing": {
-        "prompt": "0.000015",
-        "completion": "0.000075"
-      }
-    },
-    {
       "id": "anthropic/claude-3-haiku",
       "name": "Claude 3 Haiku",
       "provider": "Anthropic",
@@ -46,28 +35,6 @@
       "pricing": {
         "prompt": "0.00000025",
         "completion": "0.00000125"
-      }
-    },
-    {
-      "id": "anthropic/claude-3.7-sonnet:thinking",
-      "name": "Claude 3.5 Sonnet Thinking",
-      "provider": "Anthropic",
-      "description": "Claude 3.5 Sonnet with extended thinking capabilities for enhanced reasoning and step-by-step problem solving.",
-      "context_length": 200000,
-      "pricing": {
-        "prompt": "0.000003",
-        "completion": "0.000015"
-      }
-    },
-    {
-      "id": "anthropic/claude-3-opus-thinking",
-      "name": "Claude 3 Opus Thinking",
-      "provider": "Anthropic",
-      "description": "Claude 3 Opus with extended thinking capabilities for complex reasoning tasks requiring deep analysis.",
-      "context_length": 200000,
-      "pricing": {
-        "prompt": "0.000015",
-        "completion": "0.000075"
       }
     },
     {
@@ -82,28 +49,6 @@
       }
     },
     {
-      "id": "google/gemma-3n-e2b-it:free",
-      "name": "Gemini 3n",
-      "provider": "Google",
-      "description": "Google's advanced AI model for complex reasoning and multimodal tasks.",
-      "context_length": 32768,
-      "pricing": {
-        "prompt": "0.0000005",
-        "completion": "0.0000015"
-      }
-    },
-    {
-      "id": "meta-llama/llama-3-70b-instruct",
-      "name": "Llama 3 70B Instruct",
-      "provider": "Meta",
-      "description": "Meta's open-source 70B parameter model optimized for instruction following.",
-      "context_length": 8192,
-      "pricing": {
-        "prompt": "0.0000007",
-        "completion": "0.0000009"
-      }
-    },
-    {
       "id": "meta-llama/llama-3-8b-instruct",
       "name": "Llama 3 8B Instruct",
       "provider": "Meta",
@@ -112,17 +57,6 @@
       "pricing": {
         "prompt": "0.00000005",
         "completion": "0.0000001"
-      }
-    },
-    {
-      "id": "cohere/command-r-plus",
-      "name": "Command R+",
-      "provider": "Cohere",
-      "description": "Cohere's advanced model for complex tasks and tool use.",
-      "context_length": 128000,
-      "pricing": {
-        "prompt": "0.000003",
-        "completion": "0.000015"
       }
     },
     {
@@ -145,6 +79,28 @@
       "pricing": {
         "prompt": "0.00000045",
         "completion": "0.00000225"
+      }
+    },
+    {
+      "id": "upstage/solar-pro-3:free",
+      "name": "Solar Pro 3 (Free)",
+      "provider": "Upstage",
+      "description": "Mixture-of-Experts model with 102B total / 12B active parameters. Optimized for Korean with English and Japanese support. Free tier.",
+      "context_length": 128000,
+      "pricing": {
+        "prompt": "0",
+        "completion": "0"
+      }
+    },
+    {
+      "id": "arcee-ai/trinity-large-preview:free",
+      "name": "Trinity Large Preview (Free)",
+      "provider": "Arcee AI",
+      "description": "400B sparse MoE model with 13B active parameters. Excels at creative writing, chat, and agentic tasks with tool use. Free tier.",
+      "context_length": 131000,
+      "pricing": {
+        "prompt": "0",
+        "completion": "0"
       }
     }
   ]

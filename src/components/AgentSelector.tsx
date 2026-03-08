@@ -1,53 +1,38 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { ChevronDown, Infinity } from 'lucide-react';
-import { Agent } from '../utils/api';
+import { ChevronDown, Infinity, Bot, Code, GitBranch } from 'lucide-react';
 import { useAgentSettings } from '../stores/settingsStore';
 
+interface SupervisorAgent {
+  id: string;
+  name: string;
+  description: string;
+  icon: React.ElementType;
+}
+
+const SUPERVISOR_AGENTS: SupervisorAgent[] = [
+  { id: 'bio_chat', name: 'BioChat', description: 'Protein Q&A, structure analysis, computational tools', icon: Bot },
+  { id: 'code_builder', name: 'Code Builder', description: 'MolStar visualization, 3D structure code', icon: Code },
+  { id: 'pipeline', name: 'Pipeline', description: 'Workflow composition, multi-step pipelines', icon: GitBranch },
+];
+
 interface AgentSelectorProps {
-  agents: Agent[];
   onAgentChange?: (agentId: string | null) => void;
 }
 
-const categoryLabels: Record<string, string> = {
-  ask: 'Ask',
-  plan: 'Plan',
-  code: 'Code',
-  fold: 'Fold',
-  design: 'Design',
-  dock: 'Dock',
-  workflow: 'Workflow',
-  analysis: 'Analysis',
-  other: 'Other',
-};
-
-const categoryOrder = ['ask', 'plan', 'code', 'fold', 'design', 'dock', 'workflow', 'analysis', 'other'];
-
-export const AgentSelector: React.FC<AgentSelectorProps> = ({ agents, onAgentChange }) => {
+export const AgentSelector: React.FC<AgentSelectorProps> = ({ onAgentChange }) => {
   const { settings, updateSettings } = useAgentSettings();
   const [isOpen, setIsOpen] = useState(false);
   const dropdownRef = useRef<HTMLDivElement>(null);
 
   const selectedAgentId = settings.selectedAgentId;
-  const selectedAgent = agents.find(a => a.id === selectedAgentId);
+  const selectedAgent = SUPERVISOR_AGENTS.find(a => a.id === selectedAgentId);
 
-  // Group agents by category
-  const agentsByCategory = agents.reduce((acc, agent) => {
-    const category = agent.category || 'other';
-    if (!acc[category]) {
-      acc[category] = [];
-    }
-    acc[category].push(agent);
-    return acc;
-  }, {} as Record<string, Agent[]>);
-
-  // Close dropdown on outside click
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
       if (dropdownRef.current && !dropdownRef.current.contains(event.target as Node)) {
         setIsOpen(false);
       }
     };
-
     if (isOpen) {
       document.addEventListener('mousedown', handleClickOutside);
       return () => document.removeEventListener('mousedown', handleClickOutside);
@@ -76,8 +61,8 @@ export const AgentSelector: React.FC<AgentSelectorProps> = ({ agents, onAgentCha
       </button>
 
       {isOpen && (
-        <div className="absolute bottom-full left-0 mb-2 w-64 sm:w-80 bg-white border border-gray-200 rounded-lg shadow-lg z-[100] max-h-96 overflow-hidden flex flex-col">
-          <div className="p-2 overflow-y-auto flex-1 min-h-0">
+        <div className="absolute bottom-full left-0 mb-2 w-64 bg-white border border-gray-200 rounded-lg shadow-lg z-[100] overflow-hidden flex flex-col">
+          <div className="p-2">
             {/* Auto option */}
             <button
               onClick={() => handleSelect(null)}
@@ -89,41 +74,36 @@ export const AgentSelector: React.FC<AgentSelectorProps> = ({ agents, onAgentCha
             >
               <div className="flex items-center gap-2">
                 <Infinity className="w-4 h-4" />
-                <span>Auto (Router decides)</span>
+                <div>
+                  <div className="font-medium">Auto</div>
+                  <div className="text-xs text-gray-500">Supervisor routes automatically</div>
+                </div>
               </div>
             </button>
 
             <div className="border-t border-gray-200 my-2" />
 
-            {/* Categorized agents */}
-            {categoryOrder.map(category => {
-              const categoryAgents = agentsByCategory[category] || [];
-              if (categoryAgents.length === 0) return null;
-
+            {/* 3 supervisor agents */}
+            {SUPERVISOR_AGENTS.map(agent => {
+              const Icon = agent.icon;
               return (
-                <div key={category} className="mb-2">
-                  <div className="px-3 py-1.5 text-xs font-semibold text-gray-500 uppercase tracking-wide">
-                    {categoryLabels[category] || category}
-                  </div>
-                  {categoryAgents.map(agent => (
-                    <button
-                      key={agent.id}
-                      onClick={() => handleSelect(agent.id)}
-                      className={`w-full text-left px-3 py-2 rounded-md text-sm transition-colors ${
-                        selectedAgentId === agent.id
-                          ? 'bg-blue-50 text-blue-700 font-medium'
-                          : 'text-gray-700 hover:bg-gray-50'
-                      }`}
-                    >
+                <button
+                  key={agent.id}
+                  onClick={() => handleSelect(agent.id)}
+                  className={`w-full text-left px-3 py-2 rounded-md text-sm transition-colors ${
+                    selectedAgentId === agent.id
+                      ? 'bg-blue-50 text-blue-700 font-medium'
+                      : 'text-gray-700 hover:bg-gray-50'
+                  }`}
+                >
+                  <div className="flex items-center gap-2">
+                    <Icon className="w-4 h-4 shrink-0" />
+                    <div>
                       <div className="font-medium">{agent.name}</div>
-                      {agent.description && (
-                        <div className="text-xs text-gray-500 mt-0.5 line-clamp-1">
-                          {agent.description}
-                        </div>
-                      )}
-                    </button>
-                  ))}
-                </div>
+                      <div className="text-xs text-gray-500 line-clamp-1">{agent.description}</div>
+                    </div>
+                  </div>
+                </button>
               );
             })}
           </div>
@@ -132,10 +112,3 @@ export const AgentSelector: React.FC<AgentSelectorProps> = ({ agents, onAgentCha
     </div>
   );
 };
-
-
-
-
-
-
-
