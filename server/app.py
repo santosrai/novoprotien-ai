@@ -1,12 +1,13 @@
 import os
 from pathlib import Path
+from typing import Any, Dict, Optional
 
 from dotenv import load_dotenv
 
 # Load env as early as possible, before importing modules that read env at import-time
 # Load .env from project root (one level up from server directory)
 project_root = os.path.dirname(os.path.dirname(__file__))
-env_path = os.path.join(project_root, '.env')
+env_path = os.path.join(project_root, ".env")
 
 if os.path.exists(env_path):
     load_dotenv(env_path, override=True)
@@ -15,7 +16,7 @@ else:
     print(f"Warning: .env file not found at {env_path}")
 
 # Also load from server directory (for keys like NVCF_RUN_KEY)
-server_env_path = os.path.join(os.path.dirname(__file__), '.env')
+server_env_path = os.path.join(os.path.dirname(__file__), ".env")
 if os.path.exists(server_env_path):
     load_dotenv(server_env_path, override=True)
     print(f"Also loaded .env from: {server_env_path}")
@@ -24,10 +25,12 @@ if os.path.exists(server_env_path):
 # LangSmith tracing (must run after env load, before agent imports)
 try:
     from .infrastructure.langsmith_config import setup_langsmith
+
     setup_langsmith()
 except ImportError:
     try:
         from infrastructure.langsmith_config import setup_langsmith
+
         setup_langsmith()
     except Exception:
         pass
@@ -36,36 +39,127 @@ except Exception:
 
 
 from fastapi import FastAPI
-from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
-from slowapi.middleware import SlowAPIMiddleware
-from slowapi.errors import RateLimitExceeded
 from fastapi.responses import JSONResponse, Response
+from fastapi.staticfiles import StaticFiles
+from slowapi.errors import RateLimitExceeded
+from slowapi.middleware import SlowAPIMiddleware
 
 try:
+    from .agents.graph_state import AgentGraphState
     from .agents.registry import agents
     from .agents.router import init_router
     from .api.limiter import limiter
     from .api.routes import (
-        auth, chat_sessions, chat_messages, pipelines, credits,
-        reports, admin, three_d_canvases, attachments,
-        agents as agents_routes, alphafold, rfdiffusion, proteinmpnn,
-        openfold2, diffdock, files, misc,
+        admin,
+        agents as agents_routes,
+        alphafold,
+        attachments,
+        chat_messages,
+        chat_sessions,
+        credits,
+        diffdock,
+        esmfold,
+        proteinmpnn,
+        files,
+        misc,
+        openfold2,
+        pipelines,
+        rfdiffusion,
+        reports,
+        three_d_canvases,
+        auth,
     )
 except ImportError:
     import sys
+
     current_dir = os.path.dirname(os.path.abspath(__file__))
     if current_dir not in sys.path:
         sys.path.insert(0, current_dir)
+    from agents.graph_state import AgentGraphState
     from agents.registry import agents
     from agents.router import init_router
     from api.limiter import limiter
     from api.routes import (
-        auth, chat_sessions, chat_messages, pipelines, credits,
-        reports, admin, three_d_canvases, attachments,
-        agents as agents_routes, alphafold, rfdiffusion, proteinmpnn,
-        openfold2, diffdock, files, misc,
+        admin,
+        agents as agents_routes,
+        alphafold,
+        attachments,
+        chat_messages,
+        chat_sessions,
+        credits,
+        diffdock,
+        esmfold,
+        proteinmpnn,
+        files,
+        misc,
+        openfold2,
+        pipelines,
+        rfdiffusion,
+        reports,
+        three_d_canvases,
+        auth,
     )
+
+
+def _build_initial_state(
+    *,
+    input_text: str,
+    body: Dict[str, Any],
+    manual_agent_id: Optional[str],
+    pipeline_id: Optional[str],
+    pipeline_data: Optional[Dict[str, Any]],
+    model_override: Optional[str],
+    user: Optional[Dict[str, Any]],
+) -> AgentGraphState:
+    """
+    Build the initial AgentGraphState from the HTTP request body and params.
+
+    This mirrors the fields used by router_node/agent_dispatcher_node and keeps
+    all keys optional, as defined in AgentGraphState.
+    """
+    uploaded_ctx = body.get("uploadedFile")
+    state: AgentGraphState = {
+        "input": input_text or body.get("input") or "",
+        "selection": body.get("selection"),
+        "selections": body.get("selections"),
+        "history": body.get("history"),
+        "currentCode": body.get("currentCode"),
+        "uploadedFileId": (uploaded_ctx or {}).get("file_id") if isinstance(uploaded_ctx, dict) else None,
+        "uploadedFileContext": uploaded_ctx,
+        "currentStructureOrigin": body.get("currentStructureOrigin"),
+        "structureMetadata": body.get("structureMetadata"),
+        "pipeline_id": pipeline_id,
+        "pipeline_data": pipeline_data,
+        "pdb_content": body.get("pdb_content"),
+        "model_override": model_override or body.get("model"),
+        "user_id": (user or {}).get("id"),
+    }
+
+    if manual_agent_id and manual_agent_id in agents:
+        # Pre-select agent when user explicitly chooses one
+        state["routed_agent_id"] = manual_agent_id
+        state["agent_config"] = agents[manual_agent_id]
+
+    return state
+
+
+def _final_state_to_response(final_state: AgentGraphState) -> Dict[str, Any]:
+    """
+    Map the final LangGraph state to the public API response shape.
+    """
+    response: Dict[str, Any] = {
+        "agentId": final_state.get("routed_agent_id"),
+        "reason": final_state.get("routing_reason"),
+        "type": final_state.get("result_type"),
+        "text": final_state.get("result_text"),
+    }
+
+    # When the graph produced an error result, surface it explicitly
+    if final_state.get("result_type") == "error":
+        response["error"] = final_state.get("result_text")
+
+    return response
 
 
 app = FastAPI()
@@ -158,6 +252,7 @@ app.include_router(rfdiffusion.router)
 app.include_router(proteinmpnn.router)
 app.include_router(openfold2.router)
 app.include_router(diffdock.router)
+app.include_router(esmfold.router)
 app.include_router(files.router)
 app.include_router(misc.router)
 

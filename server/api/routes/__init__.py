@@ -5,6 +5,6 @@ __all__ = [
     "auth", "credits", "reports", "admin", "pipelines",
     "chat_sessions", "chat_messages", "three_d_canvases", "attachments",
     "agents", "alphafold", "rfdiffusion", "proteinmpnn",
-    "openfold2", "diffdock", "files", "misc",
+    "openfold2", "diffdock", "files", "misc", "esmfold",
 ]
 

@@ -13,6 +13,7 @@ from .prompts.validation import VALIDATION_AGENT_SYSTEM_PROMPT
 from .prompts.diffdock import DIFFDOCK_AGENT_SYSTEM_PROMPT
 from .prompts.alignment import ALIGNMENT_AGENT_SYSTEM_PROMPT
 from .prompts.af2bind import AF2BIND_AGENT_SYSTEM_PROMPT
+from .prompts.esmfold import ESMFOLD_AGENT_SYSTEM_PROMPT
 
 
 agents = {
@@ -74,6 +75,21 @@ agents = {
         "modelEnv": "CLAUDE_CHAT_MODEL",
         "defaultModel": os.getenv("CLAUDE_CHAT_MODEL", "claude-3-5-sonnet-20241022"),
         "kind": "openfold2",
+        "category": "fold",
+    },
+    "esmfold-agent": {
+        "id": "esmfold-agent",
+        "name": "ESMFold Structure Prediction",
+        "description": (
+            "Predicts 3D protein structure from sequence using ESMFold (ESM-2 language model) "
+            "via NVIDIA NIM. No MSA or templates required — extremely fast (seconds). "
+            "Supports sequences up to 400 residues. Use for rapid screening before AlphaFold2. "
+            "Use when user asks for fast folding, ESMFold, or has sequences ≤400 residues."
+        ),
+        "system": ESMFOLD_AGENT_SYSTEM_PROMPT,
+        "modelEnv": "CLAUDE_CHAT_MODEL",
+        "defaultModel": os.getenv("CLAUDE_CHAT_MODEL", "claude-3-5-sonnet-20241022"),
+        "kind": "esmfold",
         "category": "fold",
     },
     "rfdiffusion-agent": {
