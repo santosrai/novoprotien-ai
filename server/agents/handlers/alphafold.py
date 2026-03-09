@@ -9,6 +9,7 @@ import json
 import logging
 import os
 import sys
+import hashlib
 from pathlib import Path
 from typing import Dict, Any, Optional
 
@@ -63,6 +64,13 @@ def setup_alphafold_logging():
 logger = logging.getLogger(__name__)
 api_logger = setup_alphafold_logging()
 
+
+def _sequence_fingerprint(sequence: Optional[str]) -> str:
+    clean_sequence = "".join((sequence or "").split()).upper()
+    if not clean_sequence:
+        return "empty"
+    return hashlib.sha256(clean_sequence.encode("utf-8")).hexdigest()[:12]
+
 class AlphaFoldHandler:
     """Handles AlphaFold folding requests from the frontend"""
     
@@ -72,6 +80,7 @@ class AlphaFoldHandler:
         self.alphafold3_client = None  # Initialize when needed (AlphaFold3)
         self.active_jobs = {}  # Track running jobs: queued|running|completed|error|cancelled
         self.job_results: Dict[str, Any] = {}  # Store results or errors by job_id
+        self.job_owners: Dict[str, str] = {}  # user_id by job_id
     
     def _get_nims_client(self) -> NIMSClient:
         """Get or create NIMS client (AlphaFold2)"""
@@ -254,6 +263,10 @@ class AlphaFoldHandler:
         job_id = job_data.get("jobId")
         sequence = job_data.get("sequence")
         parameters = job_data.get("parameters", {})
+        user_id = job_data.get("userId")
+
+        if user_id and job_id:
+            self.job_owners[job_id] = str(user_id)
         
         # Log to both console and file
         logger.info(f"[AlphaFold Handler] Starting job {job_id} with sequence length {len(sequence) if sequence else 0}")
@@ -263,7 +276,7 @@ class AlphaFoldHandler:
         api_logger.info(f"=== AlphaFold Job Started ===")
         api_logger.info(f"Job ID: {job_id}")
         api_logger.info(f"Sequence Length: {len(sequence) if sequence else 0}")
-        api_logger.info(f"Sequence Preview: {sequence[:50] + '...' if sequence and len(sequence) > 50 else sequence}")
+        api_logger.info(f"Sequence Fingerprint: {_sequence_fingerprint(sequence)}")
         api_logger.info(f"Parameters: {json.dumps(parameters, indent=2)}")
         
         if not sequence or not job_id:
@@ -361,6 +374,7 @@ class AlphaFoldHandler:
                         "metadata": {
                             "sequence_length": len(sequence),
                             "job_id": job_id,
+                            "user_id": user_id,
                             "parameters": parameters
                         },
                         "status": result.get("status", "completed")
@@ -417,8 +431,12 @@ class AlphaFoldHandler:
                 "error": str(e)
             }
     
-    def get_job_status(self, job_id: str) -> Dict[str, Any]:
+    def get_job_status(self, job_id: str, user_id: Optional[str] = None) -> Dict[str, Any]:
         """Get status of a running job"""
+        owner_id = self.job_owners.get(job_id)
+        if user_id and owner_id != user_id:
+            return {"job_id": job_id, "status": "not_found"}
+
         status = self.active_jobs.get(job_id, "not_found")
         response: Dict[str, Any] = {"job_id": job_id, "status": status}
         if status == "completed":
@@ -438,8 +456,15 @@ class AlphaFoldHandler:
                 response.update(self.job_results[job_id])
         return response
     
-    def cancel_job(self, job_id: str) -> Dict[str, Any]:
+    def cancel_job(self, job_id: str, user_id: Optional[str] = None) -> Dict[str, Any]:
         """Cancel a running job"""
+        owner_id = self.job_owners.get(job_id)
+        if user_id and owner_id != user_id:
+            return {
+                "job_id": job_id,
+                "status": "not_found"
+            }
+
         if job_id in self.active_jobs:
             self.active_jobs[job_id] = "cancelled"
             self.job_results[job_id] = {

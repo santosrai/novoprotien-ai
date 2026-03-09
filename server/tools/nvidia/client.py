@@ -8,6 +8,7 @@ import os
 import json
 import time
 import asyncio
+import hashlib
 from typing import Dict, Any, Optional, Callable, Tuple
 from pathlib import Path
 import aiohttp
@@ -50,6 +51,13 @@ def setup_nims_logging():
 logger = logging.getLogger(__name__)
 api_logger = setup_nims_logging()
 
+
+def _sequence_fingerprint(sequence: str) -> str:
+    clean_sequence = "".join(sequence.split()).upper()
+    if not clean_sequence:
+        return "empty"
+    return hashlib.sha256(clean_sequence.encode("utf-8")).hexdigest()[:12]
+
 class NIMSClient:
     """Client for NVIDIA NIMS AlphaFold2 API"""
     
@@ -65,7 +73,7 @@ class NIMSClient:
         # Use the correct NVIDIA Health API endpoints (same as the reference script)
         # Handle empty env vars by using defaults
         self.base_url = os.getenv("NIMS_URL") or "https://health.api.nvidia.com/v1/biology/deepmind/alphafold2"
-        self.status_url = os.getenv("STATUS_URL") or "https://health.api.nvidia.com/v1/status"
+        self.status_url = os.getenv("STATUS_URL") or "[REDACTED]"
         # Polling configuration
         # Default to a more patient interval (closer to NVIDIA guidance ~30s) but overrideable
         self.poll_interval = max(5, int(os.getenv("POLL_INTERVAL", "30")))  # seconds
@@ -175,7 +183,7 @@ class NIMSClient:
         # Detailed API logging
         api_logger.info(f"=== NVIDIA NIMS API Submit Request ===")
         api_logger.info(f"Sequence Length: {len(sequence)}")
-        api_logger.info(f"Sequence Preview: {sequence[:50] + '...' if len(sequence) > 50 else sequence}")
+        api_logger.info(f"Sequence Fingerprint: {_sequence_fingerprint(sequence)}")
         api_logger.info(f"Parameters: {json.dumps(params, indent=2)}")
         
         # Validate sequence
