@@ -98,6 +98,20 @@ def extract_code_and_text(content: str) -> tuple:
     return code, text
 
 
+def summarize_json(raw: str, max_len: int = 200) -> str:
+    """Truncate a JSON string for LLM context, preserving structure hints."""
+    if not raw:
+        return ""
+    try:
+        obj = json.loads(raw) if isinstance(raw, str) else raw
+        compact = json.dumps(obj, separators=(",", ":"))
+    except (json.JSONDecodeError, TypeError):
+        compact = str(raw)
+    if len(compact) <= max_len:
+        return compact
+    return compact[:max_len] + "…"
+
+
 def spell_fix(input_text: str) -> str:
     replacements = {
         "strucutre": "structure",
