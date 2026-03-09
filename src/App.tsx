@@ -79,14 +79,6 @@ function App() {
     setActivePane('viewer');
   };
 
-  // Mark App as ready for test detection
-  useEffect(() => {
-    const timer = setTimeout(() => {
-      document.body.setAttribute('data-app-ready', 'true');
-    }, 500);
-    return () => clearTimeout(timer);
-  }, []);
-
   return (
     <div className="h-screen flex flex-col bg-app text-app" data-testid="app-container" data-app-ready="true">
         <Header />
