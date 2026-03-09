@@ -43,6 +43,7 @@ except Exception:
 
 
 from fastapi import FastAPI, Request, UploadFile, File, HTTPException, Depends
+from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 from slowapi import Limiter
 from slowapi.util import get_remote_address
@@ -261,8 +262,16 @@ app.add_middleware(
 
 @app.on_event("startup")
 async def startup():
+    # Initialize database (create tables + run pending migrations)
+    from database.db import init_db
+    try:
+        init_db()
+        print("Database initialized successfully")
+    except Exception as e:
+        print(f"Warning: Database initialization error: {e}")
+
     await init_router(list(agents.values()))
-    
+
     # Suppress harmless Windows asyncio connection reset errors
     # These occur when clients close connections abruptly (browser refresh, tab close, etc.)
     import asyncio
@@ -2328,3 +2337,11 @@ Return ONLY the title text, no quotes, no explanation. Make it specific and mean
     except Exception as e:
         log_line("title_generation_failed", {"error": str(e), "trace": traceback.format_exc()})
         return {"title": "New Chat"}
+
+
+# ─── Static File Serving (Production) ────────────────────────────────────────
+# In production (Docker), serve the built frontend from the dist/ directory.
+# In development, Vite handles this via its dev server + proxy.
+_dist_dir = Path(__file__).parent.parent / "dist"
+if _dist_dir.exists() and (_dist_dir / "index.html").exists():
+    app.mount("/", StaticFiles(directory=str(_dist_dir), html=True), name="frontend")
