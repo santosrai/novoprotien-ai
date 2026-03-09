@@ -48,8 +48,8 @@ if (!rootElement) {
 ReactDOM.createRoot(rootElement).render(
   <React.StrictMode>
     <QueryClientProvider client={queryClient}>
-      <ThemeProvider>
-        <ErrorBoundary>
+      <ErrorBoundary>
+        <ThemeProvider>
           <AuthBootstrap>
             <PipelineProviderWrapper>
               <BrowserRouter>
@@ -137,8 +137,8 @@ ReactDOM.createRoot(rootElement).render(
               </BrowserRouter>
             </PipelineProviderWrapper>
           </AuthBootstrap>
-        </ErrorBoundary>
-      </ThemeProvider>
+        </ThemeProvider>
+      </ErrorBoundary>
     </QueryClientProvider>
   </React.StrictMode>,
 )
