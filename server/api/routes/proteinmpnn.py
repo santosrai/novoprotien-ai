@@ -9,11 +9,13 @@ from fastapi.responses import FileResponse, JSONResponse
 
 try:
     from ...agents.handlers.proteinmpnn import proteinmpnn_handler
+    from ...domain.storage.protein_labels import register_protein_label
     from ...infrastructure.utils import log_line
     from ...api.middleware.auth import get_current_user
     from ...api.limiter import limiter, DEBUG_API
 except ImportError:
     from agents.handlers.proteinmpnn import proteinmpnn_handler
+    from domain.storage.protein_labels import register_protein_label
     from infrastructure.utils import log_line
     from api.middleware.auth import get_current_user
     from api.limiter import limiter, DEBUG_API
@@ -54,6 +56,7 @@ async def proteinmpnn_design(request: Request, user: Dict[str, Any] = Depends(ge
         )
 
     user_id = user.get("id")
+    session_id = body.get("sessionId")
     job_payload = {
         "jobId": job_id,
         "parameters": body.get("parameters", {}),
@@ -64,6 +67,7 @@ async def proteinmpnn_design(request: Request, user: Dict[str, Any] = Depends(ge
         "pdbContent": body.get("pdbContent"),
         "source": body.get("source"),
         "userId": user_id,
+        "sessionId": session_id,
     }
 
     try:

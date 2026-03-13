@@ -19,17 +19,17 @@ if _server_dir not in sys.path:
 
 # Import sequence_utils and nims_client
 try:
-    # Try relative import first (when running as module)
     from ...domain.protein.sequence import SequenceExtractor
     from ...tools.nvidia.client import NIMSClient
     from ...tools.nvidia.alphafold3_client import AlphaFold3Client
     from ...domain.storage.session_tracker import associate_file_with_session
+    from ...domain.storage.protein_labels import register_protein_label
 except ImportError:
-    # Fallback to absolute import (when running directly)
     from domain.protein.sequence import SequenceExtractor
     from tools.nvidia.client import NIMSClient
     from tools.nvidia.alphafold3_client import AlphaFold3Client
     from domain.storage.session_tracker import associate_file_with_session
+    from domain.storage.protein_labels import register_protein_label
 
 # Set up file logging for AlphaFold API
 def setup_alphafold_logging():
@@ -351,9 +351,23 @@ class AlphaFoldHandler:
                             )
                         except Exception as e:
                             logger.warning(f"Failed to associate AlphaFold file with session: {e}")
-                    
+
+                    user_id = job_data.get("userId")
+                    protein_label = None
+                    if session_id and user_id:
+                        try:
+                            protein_label = register_protein_label(
+                                session_id=str(session_id),
+                                user_id=user_id,
+                                kind="folded",
+                                source_tool="AlphaFold",
+                                file_id=job_id,
+                                job_id=job_id,
+                            )
+                        except Exception as e:
+                            logger.warning(f"Failed to register protein label for AlphaFold job: {e}")
+
                     self.active_jobs[job_id] = "completed"
-                    # Persist result for status polling retrieval
                     self.job_results[job_id] = {
                         "pdbContent": pdb_content,
                         "filename": filename,
@@ -363,8 +377,10 @@ class AlphaFoldHandler:
                             "job_id": job_id,
                             "parameters": parameters
                         },
-                        "status": result.get("status", "completed")
+                        "status": result.get("status", "completed"),
                     }
+                    if protein_label:
+                        self.job_results[job_id]["proteinLabel"] = protein_label
                     return {
                         "status": "success",
                         "data": self.job_results[job_id]
