@@ -67,6 +67,8 @@ BIO_CHAT_SYSTEM_PROMPT = (
 REACT_SYSTEM_PROMPT = (
     BIO_CHAT_SYSTEM_PROMPT
     + "\n\n"
-    + "Tools: You have tools for specific actions (UniProt search, structure validation, MVS Builder). Use them when the user's intent matches the tool description. Do not use keywords to decide—use the tool's description and the user's request. After calling a tool, summarize the result for the user.\n"
+    + "Tools: You have tools for specific actions (UniProt search, structure validation, MVS Builder). Use them when the user's intent matches the tool description. Do not use keywords to decide—use the tool's description and the user's request.\n"
+    + "Structured tool results (UniProt search/detail, validation) are displayed automatically as interactive cards — do not repeat or summarize the data they contain. After a card appears, add only a brief sentence of context if helpful (e.g., 'Here are the top UniProt hits for your query.').\n"
+    + "For any protein name/gene lookup (e.g., 'find IL21', 'search for insulin', 'what proteins match BRCA1'), always call search_uniprot — never answer from memory alone.\n"
 )
 
