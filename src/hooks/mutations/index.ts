@@ -7,3 +7,4 @@ export * from './useStreamAgentRoute';
 export * from './useAlphaFold';
 export * from './useOpenFold2';
 export * from './useRFdiffusion';
+export * from './useRegisterProteinLabel';
