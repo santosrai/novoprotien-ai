@@ -65,6 +65,7 @@ try:
         misc,
         openfold2,
         pipelines,
+        proteins,
         rfdiffusion,
         reports,
         three_d_canvases,
@@ -95,6 +96,7 @@ except ImportError:
         misc,
         openfold2,
         pipelines,
+        proteins,
         rfdiffusion,
         reports,
         three_d_canvases,
@@ -254,6 +256,7 @@ app.include_router(openfold2.router)
 app.include_router(diffdock.router)
 app.include_router(esmfold.router)
 app.include_router(files.router)
+app.include_router(proteins.router)
 app.include_router(misc.router)
 
 
