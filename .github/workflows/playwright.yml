@@ -23,11 +23,11 @@ jobs:
       - name: Install Python dependencies
         run: pip install -r server/requirements.txt && pip install playwright && playwright install --with-deps chromium
       - name: Run E2E tests
-        run: cd tests/e2e && python3 utils/test_runner.py
+        run: cd __tests__/e2e && python3 utils/test_runner.py
         continue-on-error: true
       - uses: actions/upload-artifact@v4
         if: always()
         with:
           name: e2e-report
-          path: tests/e2e/reports/
+          path: __tests__/e2e/reports/
           retention-days: 30
