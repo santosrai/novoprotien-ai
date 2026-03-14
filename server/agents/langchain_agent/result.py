@@ -28,7 +28,7 @@ def _looks_like_builder_code(code: str) -> bool:
     if not code or not code.strip():
         return False
     text = code.strip()
-    return any(kw in text for kw in ("builder.", "await ", "loadStructure", "mvs.", "plugin."))
+    return any(kw in text for kw in ("builder.", "await ", "loadStructure", "mvs.", "MVS", "plugin."))
 
 
 def _to_int(value: Any) -> Optional[int]:
