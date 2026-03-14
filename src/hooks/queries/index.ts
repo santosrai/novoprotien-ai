@@ -5,3 +5,4 @@ export * from './useFiles';
 export * from './usePipelines';
 export * from './useChatSessions';
 export * from './useJobStatus';
+export * from './useProteinLabels';

@@ -4,6 +4,20 @@ import type { PipelineBlueprint } from '../components/pipeline-canvas';
 
 export type { Message };
 
+export interface ProteinLabel {
+  id: string;
+  user_id: string;
+  session_id: string;
+  short_label: string;
+  kind: string;
+  source_tool: string | null;
+  file_id: string | null;
+  job_id: string | null;
+  metadata: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
 export interface ExtendedMessage extends Message {
   tokenUsage?: {
     inputTokens: number;

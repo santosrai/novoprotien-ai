@@ -37,6 +37,8 @@ import { MessageList } from './chat/MessageList';
 import { WelcomeScreen } from './chat/WelcomeScreen';
 import { PageRefreshSkeleton } from './chat/PageRefreshSkeleton';
 import { ChatInput } from './chat/ChatInput';
+import ProteinLabelPanel from './ProteinLabelPanel';
+import { useProteinLabels } from '../hooks/queries/useProteinLabels';
 
 export const ChatPanel: React.FC = () => {
   const {
@@ -61,6 +63,12 @@ export const ChatPanel: React.FC = () => {
 
   const { settings: agentSettings } = useAgentSettings();
   const langsmithSettings = useSettingsStore((s) => s.settings?.langsmith);
+  const { data: proteinLabels = [], isLoading: labelsLoading } = useProteinLabels(activeSessionId);
+  const setProteinLabels = useAppStore(state => state.setProteinLabels);
+
+  useEffect(() => {
+    setProteinLabels(proteinLabels);
+  }, [proteinLabels, setProteinLabels]);
 
   const [input, setInput] = useState('');
   const [isLoading, setIsLoading] = useState(false);
@@ -696,6 +704,10 @@ export const ChatPanel: React.FC = () => {
             </div>
           </div>
         </div>
+      )}
+
+      {!showCenteredLayout && (proteinLabels.length > 0 || labelsLoading) && (
+        <ProteinLabelPanel labels={proteinLabels} isLoading={labelsLoading} />
       )}
 
       {showRestoreLayout ? (

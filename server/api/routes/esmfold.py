@@ -8,12 +8,14 @@ from fastapi.responses import FileResponse, JSONResponse
 
 try:
     from ...agents.handlers.esmfold import esmfold_handler
+    from ...domain.storage.protein_labels import register_protein_label
     from ...infrastructure.utils import log_line
     from ...api.middleware.auth import get_current_user
     from ...api.limiter import limiter, DEBUG_API
     from ...domain.storage.file_access import get_user_file_path
 except ImportError:
     from agents.handlers.esmfold import esmfold_handler
+    from domain.storage.protein_labels import register_protein_label
     from infrastructure.utils import log_line
     from api.middleware.auth import get_current_user
     from api.limiter import limiter, DEBUG_API
@@ -74,6 +76,21 @@ async def esmfold_predict(request: Request, user: Dict[str, Any] = Depends(get_c
                 "SEQUENCE_EMPTY", "SEQUENCE_TOO_LONG", "SEQUENCE_TOO_SHORT", "SEQUENCE_INVALID"
             ) else 502
             return JSONResponse(status_code=http_status, content=result)
+
+        if session_id and result.get("status") == "completed":
+            file_id = result.get("file_id")
+            try:
+                label = register_protein_label(
+                    session_id=session_id,
+                    user_id=user["id"],
+                    kind="folded",
+                    source_tool="ESMFold",
+                    file_id=file_id,
+                    job_id=job_id,
+                )
+                result["proteinLabel"] = label
+            except Exception as label_err:
+                log_line("protein_label_failed", {"error": str(label_err), "job_id": job_id})
 
         return JSONResponse(status_code=200, content=result)
 

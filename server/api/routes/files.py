@@ -11,6 +11,7 @@ from fastapi.responses import FileResponse, JSONResponse, Response
 try:
     from ...domain.storage.pdb_storage import save_uploaded_pdb, get_uploaded_pdb, filter_pdb_content
     from ...domain.storage.file_access import list_user_files, verify_file_ownership, get_file_metadata, get_user_file_path
+    from ...domain.storage.protein_labels import register_protein_label
     from ...tools.smiles_converter import smiles_to_structure
     from ...database.db import get_db
     from ...infrastructure.utils import log_line
@@ -19,6 +20,7 @@ try:
 except ImportError:
     from domain.storage.pdb_storage import save_uploaded_pdb, get_uploaded_pdb, filter_pdb_content
     from domain.storage.file_access import list_user_files, verify_file_ownership, get_file_metadata, get_user_file_path
+    from domain.storage.protein_labels import register_protein_label
     from tools.smiles_converter import smiles_to_structure
     from database.db import get_db
     from infrastructure.utils import log_line
@@ -33,6 +35,7 @@ router = APIRouter()
 async def upload_pdb(
     request: Request,
     file: UploadFile = File(...),
+    session_id: Optional[str] = None,
     user: Dict[str, Any] = Depends(get_current_user),
 ):
     _ = request
@@ -42,19 +45,34 @@ async def upload_pdb(
         if not user_id:
             raise HTTPException(status_code=401, detail="User ID not found")
         metadata = save_uploaded_pdb(file.filename, contents, user_id)
+        file_id = metadata.get("file_id")
         log_line("pdb_upload_success", {
             "filename": file.filename,
-            "file_id": metadata["file_id"],
+            "file_id": file_id,
             "size": metadata.get("size"),
             "chains": metadata.get("chains"),
         })
-        return {
+
+        protein_label = None
+        if session_id and file_id:
+            try:
+                protein_label = register_protein_label(
+                    session_id=session_id,
+                    user_id=user_id,
+                    kind="upload",
+                    source_tool="upload",
+                    file_id=file_id,
+                )
+            except Exception as label_err:
+                log_line("protein_label_failed", {"error": str(label_err), "file_id": file_id})
+
+        response: Dict[str, Any] = {
             "status": "success",
             "message": "File uploaded",
             "file_info": {
                 "filename": metadata.get("filename"),
-                "file_id": metadata.get("file_id"),
-                "file_url": f"/api/upload/pdb/{metadata.get('file_id')}",
+                "file_id": file_id,
+                "file_url": f"/api/upload/pdb/{file_id}",
                 "file_path": metadata.get("stored_path"),
                 "size": metadata.get("size"),
                 "atoms": metadata.get("atoms"),
@@ -63,6 +81,9 @@ async def upload_pdb(
                 "total_residues": metadata.get("total_residues"),
             },
         }
+        if protein_label:
+            response["proteinLabel"] = protein_label
+        return response
     except HTTPException:
         raise
     except Exception as e:

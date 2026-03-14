@@ -11,11 +11,13 @@ from fastapi.responses import JSONResponse
 
 try:
     from ...agents.handlers.rfdiffusion import rfdiffusion_handler
+    from ...domain.storage.protein_labels import register_protein_label
     from ...infrastructure.utils import log_line
     from ...api.middleware.auth import get_current_user
     from ...api.limiter import limiter, DEBUG_API
 except ImportError:
     from agents.handlers.rfdiffusion import rfdiffusion_handler
+    from domain.storage.protein_labels import register_protein_label
     from infrastructure.utils import log_line
     from api.middleware.auth import get_current_user
     from api.limiter import limiter, DEBUG_API
@@ -161,6 +163,21 @@ async def rfdiffusion_design(request: Request, user: Dict[str, Any] = Depends(ge
             "userId": user["id"],
             "sessionId": session_id,
         })
+
+        if result.get("status") != "error" and session_id:
+            file_id = result.get("file_id")
+            try:
+                label = register_protein_label(
+                    session_id=session_id,
+                    user_id=user["id"],
+                    kind="design",
+                    source_tool="RFdiffusion",
+                    file_id=file_id,
+                    job_id=job_id,
+                )
+                result["proteinLabel"] = label
+            except Exception as label_err:
+                log_line("protein_label_failed", {"error": str(label_err), "job_id": job_id})
 
         if result.get("status") == "error":
             error_msg = result.get("error", "Unknown error")

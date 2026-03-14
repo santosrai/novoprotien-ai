@@ -10,11 +10,13 @@ from slowapi.util import get_remote_address
 
 try:
     from ...agents.handlers.alphafold import alphafold_handler
+    from ...domain.storage.protein_labels import register_protein_label
     from ...infrastructure.utils import log_line
     from ...api.middleware.auth import get_current_user
     from ...api.limiter import limiter, DEBUG_API
 except ImportError:
     from agents.handlers.alphafold import alphafold_handler
+    from domain.storage.protein_labels import register_protein_label
     from infrastructure.utils import log_line
     from api.middleware.auth import get_current_user
     from api.limiter import limiter, DEBUG_API
@@ -55,6 +57,8 @@ async def alphafold_fold(request: Request, user: Dict[str, Any] = Depends(get_cu
                 },
             )
 
+        session_id = body.get("sessionId")
+
         log_line("alphafold_submitting", {
             "jobId": job_id,
             "handler": "alphafold_handler.submit_folding_job (background)",
@@ -69,6 +73,8 @@ async def alphafold_fold(request: Request, user: Dict[str, Any] = Depends(get_cu
                 "sequence": sequence,
                 "parameters": parameters,
                 "jobId": job_id,
+                "userId": user["id"],
+                "sessionId": session_id,
             })
         )
 
