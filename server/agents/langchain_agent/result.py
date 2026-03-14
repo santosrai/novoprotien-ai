@@ -157,7 +157,37 @@ def react_state_to_app_result(final_state: Dict[str, Any]) -> Dict[str, Any]:
         out["toolResults"] = tool_results
     if token_usage:
         out["tokenUsage"] = token_usage
+
+    _attach_uniprot_results(out, tool_results)
     return out
+
+
+def _attach_uniprot_results(out: Dict[str, Any], tool_results: List[Dict[str, Any]]) -> None:
+    """Surface UniProt search/detail results as top-level fields on the app result."""
+    for tr in tool_results:
+        r = tr.get("result")
+        if not isinstance(r, dict):
+            continue
+        action = r.get("action")
+        if action == "show_uniprot_results":
+            out["uniprotSearchResult"] = {
+                "query": r.get("query", ""),
+                "results": r.get("results", []),
+                "count": r.get("count", 0),
+            }
+        elif action == "show_uniprot_detail":
+            out["uniprotDetailResult"] = {
+                "accession": r.get("accession"),
+                "id": r.get("id"),
+                "protein": r.get("protein"),
+                "organism": r.get("organism"),
+                "length": r.get("length"),
+                "sequence": r.get("sequence"),
+                "pdb_ids": r.get("pdb_ids"),
+                "gene_names": r.get("gene_names"),
+                "function_description": r.get("function_description"),
+                "reviewed": r.get("reviewed"),
+            }
 
 
 def agent_output_to_app_result(
@@ -187,6 +217,7 @@ def agent_output_to_app_result(
         token_usage = _extract_token_usage(messages)
         if token_usage:
             result["tokenUsage"] = token_usage
+        _attach_uniprot_results(result, tool_results or [])
         return result
 
     if agent_kind == "code":
