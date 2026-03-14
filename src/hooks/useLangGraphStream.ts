@@ -175,6 +175,9 @@ export function useLangGraphStream({
           ...(uniprotDetailResult ? { uniprotDetailResult } : {}),
           ...(alignmentResult ? { alignmentResult } : {}),
           ...(af2bindResult ? { af2bindResult } : {}),
+          ...((appResult as any)?.blueprint ? { blueprint: (appResult as any).blueprint } : {}),
+          ...((appResult as any)?.blueprintRationale ? { blueprintRationale: (appResult as any).blueprintRationale } : {}),
+          ...(typeof (appResult as any)?.blueprintApproved === 'boolean' ? { blueprintApproved: (appResult as any).blueprintApproved } : {}),
         } as ExtendedMessage;
         if (replaceTargetMessageId && replaceMessageById) {
           replaceMessageById(replaceTargetMessageId, aiMessage);

@@ -159,7 +159,24 @@ def react_state_to_app_result(final_state: Dict[str, Any]) -> Dict[str, Any]:
         out["tokenUsage"] = token_usage
 
     _attach_uniprot_results(out, tool_results)
+    _attach_blueprint(out)
     return out
+
+
+def _attach_blueprint(out: Dict[str, Any]) -> None:
+    """Detect pipeline blueprint JSON in text and surface it as top-level fields."""
+    text = out.get("text", "")
+    if not isinstance(text, str) or '"type"' not in text:
+        return
+    try:
+        parsed = json.loads(text.strip())
+        if isinstance(parsed, dict) and parsed.get("type") == "blueprint" and parsed.get("blueprint"):
+            out["blueprint"] = parsed["blueprint"]
+            out["blueprintRationale"] = parsed.get("rationale") or parsed.get("message", "")
+            out["blueprintApproved"] = False
+            out["text"] = parsed.get("message") or parsed.get("rationale") or "Here is the proposed pipeline blueprint."
+    except (json.JSONDecodeError, ValueError):
+        pass
 
 
 def _attach_uniprot_results(out: Dict[str, Any], tool_results: List[Dict[str, Any]]) -> None:
