@@ -383,7 +383,8 @@ const createSaveMessageToBackend = (getSessions: () => ChatSession[]) => async (
           smilesResult: message.smilesResult,
           uploadedFile: message.uploadedFile,
           error: message.error,
-          // Include blueprint data for persistence
+          uniprotSearchResult: (message as any).uniprotSearchResult,
+          uniprotDetailResult: (message as any).uniprotDetailResult,
           blueprint: (message as any).blueprint,
           blueprintRationale: (message as any).blueprintRationale,
           blueprintApproved: (message as any).blueprintApproved,
@@ -1119,7 +1120,8 @@ export const useChatHistoryStore = create<ChatHistoryState>()(
                     smilesResult: message.smilesResult,
                     uploadedFile: message.uploadedFile,
                     error: message.error,
-                    // Include blueprint data for persistence
+                    uniprotSearchResult: (message as any).uniprotSearchResult,
+                    uniprotDetailResult: (message as any).uniprotDetailResult,
                     blueprint: (message as any).blueprint,
                     blueprintRationale: (message as any).blueprintRationale,
                     blueprintApproved: (message as any).blueprintApproved,
@@ -1578,6 +1580,13 @@ export const useChatHistoryStore = create<ChatHistoryState>()(
                     { smilesResult: metadata.smilesResult }),
                 ...(metadata.uploadedFile != null && { uploadedFile: metadata.uploadedFile }),
                 ...(metadata.error != null && { error: metadata.error }),
+                // UniProt results - restore from metadata
+                ...(metadata.uniprotSearchResult != null &&
+                    typeof metadata.uniprotSearchResult === 'object' &&
+                    { uniprotSearchResult: metadata.uniprotSearchResult }),
+                ...(metadata.uniprotDetailResult != null &&
+                    typeof metadata.uniprotDetailResult === 'object' &&
+                    { uniprotDetailResult: metadata.uniprotDetailResult }),
                 // Blueprint data - restore from metadata
                 ...(metadata.blueprint != null && { blueprint: metadata.blueprint } as any),
                 ...(metadata.blueprintRationale != null && { blueprintRationale: metadata.blueprintRationale } as any),
