@@ -2310,7 +2310,58 @@ async def run_supervisor_stream(
         "diffdock": {"action": "open_diffdock_dialog"},
     }
     if agent_id in _DIRECT_ACTION_MAP:
-        action_json = json.dumps(_DIRECT_ACTION_MAP[agent_id])
+        action_payload = dict(_DIRECT_ACTION_MAP[agent_id])
+
+        # For AlphaFold: detect UniProt accessions and auto-fill the sequence
+        if agent_id == "alphafold":
+            import re as _re
+            _uniprot_pattern = _re.compile(
+                r"\b([OPQ][0-9][A-Z0-9]{3}[0-9]|[A-NR-Z][0-9](?:[A-Z][A-Z0-9]{2}[0-9]){1,2})\b",
+                _re.IGNORECASE,
+            )
+            _accession_match = _uniprot_pattern.search(user_text)
+            if _accession_match:
+                _accession = _accession_match.group(1).upper()
+                print(f"[supervisor] detected UniProt accession: {_accession}")
+                try:
+                    from .domain_bridge import fetch_uniprot_sequence
+                    _entry = await fetch_uniprot_sequence(_accession)
+                    if _entry and _entry.get("sequence"):
+                        _seq = _entry["sequence"]
+                        _protein_name = _entry.get("protein") or _accession
+                        _organism = _entry.get("organism") or ""
+                        _source = f"UniProt: {_accession}"
+                        if _protein_name and _protein_name != _accession:
+                            _source = f"UniProt: {_accession} ({_protein_name})"
+                        action_payload = {
+                            "action": "confirm_folding",
+                            "sequence": _seq,
+                            "source": _source,
+                            "parameters": {
+                                "algorithm": "mmseqs2",
+                                "e_value": 0.0001,
+                                "iterations": 1,
+                                "databases": ["small_bfd"],
+                                "relax_prediction": False,
+                                "skip_template_search": True,
+                            },
+                            "estimated_time": (
+                                "2-5 minutes" if len(_seq) < 100
+                                else "5-15 minutes" if len(_seq) < 300
+                                else "15-30 minutes" if len(_seq) < 600
+                                else "30-60 minutes"
+                            ),
+                            "message": (
+                                f"Ready to fold {len(_seq)}-residue protein from {_source}"
+                                + (f" ({_organism})" if _organism else "")
+                                + ". Please confirm parameters."
+                            ),
+                        }
+                        print(f"[supervisor] UniProt sequence fetched: {len(_seq)} residues")
+                except Exception as _uf_err:
+                    print(f"[supervisor] UniProt fetch failed for {_accession}: {_uf_err}")
+
+        action_json = json.dumps(action_payload)
         print(f"[supervisor] direct action: {agent_id} → {action_json}")
         yield {"type": "complete", "data": {
             "type": "text",
