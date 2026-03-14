@@ -1,0 +1,37 @@
+# =============================================================================
+# NovoProtein AI — Docker Compose
+# =============================================================================
+# Usage:
+#   docker compose up --build        # Build and start
+#   docker compose up -d             # Start in background
+#   docker compose down              # Stop
+#   docker compose logs -f app       # Follow logs
+# =============================================================================
+
+services:
+  app:
+    build: .
+    ports:
+      - "8787:8787"
+    env_file:
+      - .env
+    environment:
+      - DATABASE_PATH=/app/server/data/novoprotein.db
+    volumes:
+      # Persist database across restarts
+      - db-data:/app/server/data
+      # Persist uploaded files
+      - uploads:/app/server/uploads
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8787/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+    restart: unless-stopped
+
+volumes:
+  db-data:
+    driver: local
+  uploads:
+    driver: local

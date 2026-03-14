@@ -1,6 +1,8 @@
 import React, { useState } from 'react';
 import { ChevronDown, ChevronRight, AlertCircle, RefreshCw, ExternalLink, MessageCircle, Wrench } from 'lucide-react';
-import { ErrorDetails, ErrorSeverity, AlphaFoldErrorHandler, RFdiffusionErrorHandler } from '../utils/errorHandler';
+import { ErrorDetails, ErrorSeverity, AlphaFoldErrorHandler, RFdiffusionErrorHandler, OpenFold2ErrorHandler, DiffDockErrorHandler } from '../utils/errorHandler';
+
+type ErrorHandlerType = typeof AlphaFoldErrorHandler | typeof RFdiffusionErrorHandler | typeof OpenFold2ErrorHandler | typeof DiffDockErrorHandler;
 
 interface ErrorDisplayProps {
   error: ErrorDetails;
@@ -18,33 +20,42 @@ export const ErrorDisplay: React.FC<ErrorDisplayProps> = ({
   const [showDetails, setShowDetails] = useState(false);
   const [showTechnical, setShowTechnical] = useState(false);
 
-  // Determine error type from error code or context
-  const getErrorType = (): { name: string; handler: typeof AlphaFoldErrorHandler | typeof RFdiffusionErrorHandler } => {
+  // Determine error type from error code, context, jobId, or message content
+  const getErrorType = (): { name: string; handler: ErrorHandlerType } => {
+    // Check context feature field (explicit source)
+    const feature = error.context?.feature;
+    if (feature === 'RFdiffusion') return { name: 'RFdiffusion Error', handler: RFdiffusionErrorHandler };
+    if (feature === 'AlphaFold' || feature === 'AlphaFold2') return { name: 'AlphaFold Error', handler: AlphaFoldErrorHandler };
+    if (feature === 'OpenFold2') return { name: 'OpenFold2 Error', handler: OpenFold2ErrorHandler };
+    if (feature === 'DiffDock') return { name: 'DiffDock Error', handler: DiffDockErrorHandler };
+
     // Check error code prefix
-    if (error.code.startsWith('RFDIFFUSION_')) {
+    if (error.code.startsWith('RFDIFFUSION_')) return { name: 'RFdiffusion Error', handler: RFdiffusionErrorHandler };
+
+    // Check job ID prefix (rf_, af_, of2_, diffdock_)
+    const jobId = error.context?.jobId ?? '';
+    if (jobId.startsWith('rf_')) return { name: 'RFdiffusion Error', handler: RFdiffusionErrorHandler };
+    if (jobId.startsWith('af_')) return { name: 'AlphaFold Error', handler: AlphaFoldErrorHandler };
+    if (jobId.startsWith('of2_')) return { name: 'OpenFold2 Error', handler: OpenFold2ErrorHandler };
+    if (jobId.startsWith('diffdock_')) return { name: 'DiffDock Error', handler: DiffDockErrorHandler };
+
+    // Infer from message content when context doesn't identify the source
+    const msg = `${error.userMessage ?? ''} ${error.technicalMessage ?? ''} ${error.originalError ?? ''}`.toLowerCase();
+    if (msg.includes('dock') || msg.includes('ligand') || msg.includes('sdf') || msg.includes('binding pose')) {
+      return { name: 'DiffDock Error', handler: DiffDockErrorHandler };
+    }
+    if (msg.includes('openfold2') || (msg.includes('1000 residues') && msg.includes('alphafold'))) {
+      return { name: 'OpenFold2 Error', handler: OpenFold2ErrorHandler };
+    }
+    if (msg.includes('design') || msg.includes('contigs') || msg.includes('rfdiffusion')) {
       return { name: 'RFdiffusion Error', handler: RFdiffusionErrorHandler };
     }
-    
-    // Check context feature field
-    if (error.context?.feature === 'RFdiffusion') {
-      return { name: 'RFdiffusion Error', handler: RFdiffusionErrorHandler };
-    }
-    
-    if (error.context?.feature === 'AlphaFold' || error.context?.feature === 'AlphaFold2') {
+    if (msg.includes('fold') || msg.includes('sequence') || msg.includes('alphafold') || msg.includes('msa')) {
       return { name: 'AlphaFold Error', handler: AlphaFoldErrorHandler };
     }
-    
-    // Check job ID prefix (rf_ for RFdiffusion, af_ for AlphaFold)
-    if (error.context?.jobId?.startsWith('rf_')) {
-      return { name: 'RFdiffusion Error', handler: RFdiffusionErrorHandler };
-    }
-    
-    if (error.context?.jobId?.startsWith('af_')) {
-      return { name: 'AlphaFold Error', handler: AlphaFoldErrorHandler };
-    }
-    
-    // Default to AlphaFold for backward compatibility
-    return { name: 'AlphaFold Error', handler: AlphaFoldErrorHandler };
+
+    // Generic fallback so we don't mislabel unknown errors
+    return { name: 'Error', handler: AlphaFoldErrorHandler };
   };
 
   const errorType = getErrorType();

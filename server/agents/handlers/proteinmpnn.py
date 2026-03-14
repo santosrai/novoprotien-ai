@@ -20,11 +20,13 @@ try:
     from ...tools.nvidia.proteinmpnn import get_proteinmpnn_client, ProteinMPNNClient
     from ...domain.storage.pdb_storage import get_uploaded_pdb, list_uploaded_pdbs
     from ...domain.storage.file_access import list_user_files, get_file_metadata
+    from ...domain.storage.protein_labels import register_protein_label
 except ImportError:
     from infrastructure.utils import log_line
     from tools.nvidia.proteinmpnn import get_proteinmpnn_client, ProteinMPNNClient
     from domain.storage.pdb_storage import get_uploaded_pdb, list_uploaded_pdbs
     from domain.storage.file_access import list_user_files, get_file_metadata
+    from domain.storage.protein_labels import register_protein_label
 
 logger = logging.getLogger(__name__)
 
@@ -461,11 +463,24 @@ class ProteinMPNNHandler:
 
             if result.get("status") == "completed":
                 self.active_jobs[job_id] = "completed"
-                # Extract sequences before saving
                 await self._persist_design_outputs(result_dir, result)
-                # Update result with extracted sequences if available
                 if "sequences" in result:
                     metadata["sequences"] = result["sequences"]
+
+                session_id = job_data.get("sessionId")
+                if session_id and user_id and user_id != "system":
+                    try:
+                        label = register_protein_label(
+                            session_id=session_id,
+                            user_id=user_id,
+                            kind="design",
+                            source_tool="ProteinMPNN",
+                            job_id=job_id,
+                        )
+                        metadata["proteinLabel"] = label
+                    except Exception as label_err:
+                        logger.warning("Failed to register protein label for %s: %s", job_id, label_err)
+
                 self.job_results[job_id] = {
                     "status": "completed",
                     "metadata": metadata,

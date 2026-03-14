@@ -4,7 +4,7 @@ import { useAuthStore } from '../../stores/authStore';
 
 export interface FileMetadata {
   file_id: string;
-  type: 'upload' | 'rfdiffusion' | 'alphafold' | 'proteinmpnn';
+  type: 'upload' | 'rfdiffusion' | 'alphafold' | 'proteinmpnn' | 'openfold2' | 'diffdock';
   filename: string;
   size: number;
   job_id?: string;

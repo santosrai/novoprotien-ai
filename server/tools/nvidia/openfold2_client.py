@@ -8,6 +8,7 @@ import asyncio
 import json
 import logging
 import os
+from pathlib import Path
 from typing import Any, Dict, Optional, Tuple
 
 import aiohttp
@@ -226,3 +227,16 @@ class OpenFold2Client:
         except Exception as e:
             logger.error(f"Error extracting PDB from result: {e}")
             return None
+
+    def save_pdb_file(self, pdb_content: str, filename: str) -> str:
+        """Save PDB content to openfold2_results folder (same pattern as AlphaFold/RFdiffusion)."""
+        try:
+            base_dir = Path(__file__).parent
+            results_dir = base_dir / "openfold2_results"
+            results_dir.mkdir(exist_ok=True)
+            filepath = results_dir / filename
+            filepath.write_text(pdb_content, encoding="utf-8")
+            return str(filepath.relative_to(base_dir))
+        except Exception as e:
+            logger.error(f"Error saving OpenFold2 PDB file: {e}")
+            raise

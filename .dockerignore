@@ -1,0 +1,62 @@
+# Dependencies (rebuilt in container)
+node_modules/
+.venv/
+venv/
+
+# Build output (rebuilt in container)
+dist/
+
+# Database files (use volumes)
+*.db
+*.db-journal
+*.db-wal
+
+# Python cache
+__pycache__/
+*.py[cod]
+*.pyo
+.pytest_cache/
+.mypy_cache/
+htmlcov/
+.coverage
+
+# IDE / Editor
+.vscode/
+.idea/
+.cursor/
+*.swp
+*.tmp
+
+# Git
+.git/
+.gitignore
+
+# Claude
+.claude/
+
+# Tests (not needed in production image)
+__tests__/
+server/__tests__/
+tests/
+
+# Test outputs
+test-results/
+playwright-report/
+coverage/
+
+# Documentation
+*.md
+!README.md
+
+# Environment files (secrets — use env_file or secrets manager)
+.env
+.env.local
+.env.*.local
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Generated results (use volumes)
+server/proteinmpnn_results/
+server/uploads/

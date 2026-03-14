@@ -348,9 +348,9 @@ export default function ValidationPanel({
                       color: '#e5e7eb',
                       fontSize: '12px',
                     }}
-                    content={({ payload }) => {
+                    content={({ payload }: { payload?: readonly { payload?: unknown }[] }) => {
                       if (!payload || payload.length === 0) return null;
-                      const d = payload[0].payload as {
+                      const d = (payload[0]?.payload ?? {}) as {
                         label: string;
                         phi: number;
                         psi: number;

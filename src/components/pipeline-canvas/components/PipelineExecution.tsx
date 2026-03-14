@@ -75,7 +75,7 @@ interface PipelineExecutionProps {
   apiClient?: ApiClient;
 }
 
-export const PipelineExecution: React.FC<PipelineExecutionProps> = ({ apiClient }) => {
+export const PipelineExecution: React.FC<PipelineExecutionProps> = ({ apiClient: apiClientProp }) => {
   const {
     currentPipeline,
     isExecuting,
@@ -84,7 +84,8 @@ export const PipelineExecution: React.FC<PipelineExecutionProps> = ({ apiClient 
     stopExecution,
   } = usePipelineStore();
   
-  const { sessionId, config } = usePipelineContext();
+  const { sessionId, config, apiClient: contextApiClient } = usePipelineContext();
+  const apiClient = apiClientProp ?? contextApiClient;
   const effectiveSessionId = sessionId;
   
   // Debug: Log session ID

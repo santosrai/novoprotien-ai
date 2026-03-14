@@ -12,7 +12,7 @@ export const FileBrowser: React.FC<FileBrowserProps> = ({ onFileSelect }) => {
   const { data: files = [], isLoading, error } = useFiles();
   const deleteFile = useFileDelete();
   const queryClient = useQueryClient();
-  const [expandedFolders, setExpandedFolders] = useState<Set<string>>(new Set(['uploads', 'rfdiffusion', 'alphafold', 'proteinmpnn']));
+  const [expandedFolders, setExpandedFolders] = useState<Set<string>>(new Set(['uploads', 'rfdiffusion', 'alphafold', 'proteinmpnn', 'openfold2']));
   const [searchQuery, setSearchQuery] = useState('');
   const [deletingFileId, setDeletingFileId] = useState<string | null>(null);
 
@@ -64,6 +64,7 @@ export const FileBrowser: React.FC<FileBrowserProps> = ({ onFileSelect }) => {
   const rfdiffusion = filteredFiles.filter(f => f.type === 'rfdiffusion');
   const alphafold = filteredFiles.filter(f => f.type === 'alphafold');
   const proteinmpnn = filteredFiles.filter(f => f.type === 'proteinmpnn');
+  const openfold2 = filteredFiles.filter(f => f.type === 'openfold2');
 
   const handleDeleteFile = async (file: FileMetadata, e: React.MouseEvent) => {
     e.stopPropagation(); // Prevent file selection when clicking delete
@@ -211,6 +212,7 @@ export const FileBrowser: React.FC<FileBrowserProps> = ({ onFileSelect }) => {
             {renderFolder('Uploads', 'uploads', uploads)}
             {renderFolder('RF-diffusion Results', 'rfdiffusion', rfdiffusion)}
             {renderFolder('AlphaFold Results', 'alphafold', alphafold)}
+            {renderFolder('OpenFold2 Results', 'openfold2', openfold2)}
             {renderFolder('ProteinMPNN Results', 'proteinmpnn', proteinmpnn)}
           </div>
         )}

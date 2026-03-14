@@ -106,7 +106,7 @@ try {
 
     // Set structure origin for LLM context
     setCurrentStructureOrigin({
-      type: fileType as 'upload' | 'rfdiffusion' | 'alphafold',
+      type: fileType as 'upload' | 'rfdiffusion' | 'alphafold' | 'openfold2' | 'diffdock',
       filename: filename,
       metadata: {
         file_id: fileId,
@@ -174,9 +174,10 @@ try {
 
   // Check if file is a PDB file that can be viewed in 3D
   const isPdbFile = filename.toLowerCase().endsWith('.pdb') || 
-                    fileType === 'upload' || 
-                    fileType === 'rfdiffusion' || 
-                    fileType === 'alphafold';
+                    fileType === 'upload' ||
+                    fileType === 'rfdiffusion' ||
+                    fileType === 'alphafold' ||
+                    fileType === 'openfold2';
 
   return (
     <div className="h-full flex flex-col bg-white">

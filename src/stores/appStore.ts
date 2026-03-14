@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 import { persist, createJSONStorage } from 'zustand/middleware';
 import { PluginUIContext } from 'molstar/lib/mol-plugin-ui/context';
+import type { ProteinLabel } from '../types/chat';
 
 export interface SelectionContext {
   pdbId?: string;
@@ -15,7 +16,7 @@ export interface SelectionContext {
 }
 
 export interface StructureOrigin {
-  type: 'pdb' | 'rfdiffusion' | 'alphafold' | 'upload';
+  type: 'pdb' | 'rfdiffusion' | 'alphafold' | 'upload' | 'openfold2' | 'diffdock' | 'smiles';
   pdbId?: string;
   jobId?: string;
   parameters?: any;
@@ -57,8 +58,8 @@ interface AppState {
   isViewerVisible: boolean;
   currentStructureOrigin: StructureOrigin | null;
   selectedFile: { id: string; type: string; content: string; filename?: string } | null;
-  // Molstar visual selection tracking
   molstarSelection: MolstarSelectionState;
+  proteinLabels: ProteinLabel[];
   
   setActivePane: (pane: 'viewer' | 'editor' | 'files' | 'pipeline' | null) => void;
   setPlugin: (plugin: PluginUIContext | null) => void;
@@ -74,10 +75,12 @@ interface AppState {
   setViewerVisible: (visible: boolean) => void;
   setCurrentStructureOrigin: (origin: StructureOrigin | null) => void;
   setSelectedFile: (file: { id: string; type: string; content: string; filename?: string } | null) => void;
-  // Molstar selection methods
   setMolstarSelectionCount: (count: number) => void;
   recordMolstarAction: (action: MolstarSelectionState['lastAction']) => void;
   hasMolstarSelection: () => boolean;
+  setProteinLabels: (labels: ProteinLabel[]) => void;
+  addProteinLabel: (label: ProteinLabel) => void;
+  getProteinLabelByFileId: (fileId: string) => ProteinLabel | undefined;
   // Backward compatibility
   setSelection: (selection: SelectionContext | null) => void;
   selection: SelectionContext | null;
@@ -98,6 +101,7 @@ export const useAppStore = create<AppState>()(
       currentStructureOrigin: null,
       selectedFile: null,
       molstarSelection: { count: 0 },
+      proteinLabels: [],
       
       setActivePane: (pane) => set({ activePane: pane }),
       setPlugin: (plugin) => set({ plugin }),
@@ -118,7 +122,14 @@ export const useAppStore = create<AppState>()(
         molstarSelection: { ...state.molstarSelection, lastAction: action }
       })),
       hasMolstarSelection: () => get().molstarSelection.count > 0,
-      
+
+      setProteinLabels: (labels) => set({ proteinLabels: labels }),
+      addProteinLabel: (label) => set((state) => ({
+        proteinLabels: [...state.proteinLabels.filter(l => l.id !== label.id), label],
+      })),
+      getProteinLabelByFileId: (fileId) =>
+        get().proteinLabels.find(l => l.file_id === fileId),
+
       addSelection: (selection) => set((state) => {
         // Check for duplicates based on key identifying properties
         const isDuplicate = state.selections.some(existing => 

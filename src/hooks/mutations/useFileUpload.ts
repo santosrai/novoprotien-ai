@@ -31,13 +31,15 @@ export function useFileUpload() {
     mutationFn: async ({ file, sessionId }) => {
       const formData = new FormData();
       formData.append('file', file);
-      if (sessionId) {
-        formData.append('session_id', sessionId);
-      }
-      
+
       const headers = getAuthHeaders();
-      
-      const response = await fetch('/api/upload/pdb', {
+
+      let url = '/api/upload/pdb';
+      if (sessionId) {
+        url += `?session_id=${encodeURIComponent(sessionId)}`;
+      }
+
+      const response = await fetch(url, {
         method: 'POST',
         headers,
         body: formData,
@@ -51,10 +53,8 @@ export function useFileUpload() {
       return await response.json();
     },
     onSuccess: () => {
-      // Invalidate files query to refresh file list
       queryClient.invalidateQueries({ queryKey: ['files'] });
-      
-      // Dispatch event for other components
+      queryClient.invalidateQueries({ queryKey: ['proteinLabels'] });
       window.dispatchEvent(new CustomEvent('session-file-added'));
     },
   });

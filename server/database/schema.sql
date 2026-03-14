@@ -490,3 +490,26 @@ CREATE INDEX idx_alphafold_jobs_status ON alphafold_jobs(status);
 CREATE INDEX idx_alphafold_jobs_created_at ON alphafold_jobs(created_at);
 CREATE INDEX idx_alphafold_jobs_nvidia_req_id ON alphafold_jobs(nvidia_req_id);
 
+-- Protein labels (session-scoped, e.g. U1, P1, P2)
+CREATE TABLE IF NOT EXISTS protein_labels (
+    id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL,
+    session_id TEXT NOT NULL,
+    short_label TEXT NOT NULL,
+    kind TEXT NOT NULL,
+    source_tool TEXT,
+    file_id TEXT,
+    job_id TEXT,
+    metadata TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+    FOREIGN KEY (session_id) REFERENCES chat_sessions(id) ON DELETE CASCADE,
+    FOREIGN KEY (file_id) REFERENCES user_files(id) ON DELETE SET NULL,
+    UNIQUE (session_id, short_label)
+);
+
+CREATE INDEX IF NOT EXISTS idx_protein_labels_user_id ON protein_labels(user_id);
+CREATE INDEX IF NOT EXISTS idx_protein_labels_session_id ON protein_labels(session_id);
+CREATE INDEX IF NOT EXISTS idx_protein_labels_short_label ON protein_labels(short_label);
+

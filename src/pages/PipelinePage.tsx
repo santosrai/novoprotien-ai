@@ -1,19 +1,10 @@
-import { useEffect, useMemo, useState } from 'react';
-import { PipelineCanvas, PipelineManager, PipelineExecution, PipelineThemeWrapper, PipelineProvider } from '../components/pipeline-canvas';
-import { useAuthStore } from '../stores/authStore';
-import { api, getAuthHeaders } from '../utils/api';
+import { useEffect, useState } from 'react';
+import { PipelineCanvas, PipelineManager, PipelineExecution, PipelineThemeWrapper } from '../components/pipeline-canvas';
 import { useTheme } from '../contexts/ThemeContext';
 
 export function PipelinePage() {
   const [isPipelineManagerOpen, setIsPipelineManagerOpen] = useState(false);
-  const user = useAuthStore((state) => state.user);
   const { theme } = useTheme();
-
-  // Memoize authState to prevent PipelineProvider from re-syncing on every render
-  const authState = useMemo(
-    () => ({ user: user ?? null, isAuthenticated: !!user }),
-    [user?.id]
-  );
 
   // Listen for pipeline manager open event
   useEffect(() => {
@@ -37,27 +28,20 @@ export function PipelinePage() {
         </a>
       </div>
       
-      {/* Full-screen pipeline canvas with provider for API/auth and sync */}
-      <PipelineProvider
-        apiClient={api}
-        authState={authState}
-        getAuthHeaders={getAuthHeaders}
-      >
-        <div className="flex-1 min-h-0">
-          <PipelineThemeWrapper externalTheme={theme} className="h-full">
-            <PipelineCanvas />
-          </PipelineThemeWrapper>
-        </div>
+      <div className="flex-1 min-h-0">
+        <PipelineThemeWrapper externalTheme={theme} className="h-full">
+          <PipelineCanvas />
+        </PipelineThemeWrapper>
+      </div>
 
-        {/* Pipeline Manager Modal */}
-        <PipelineManager
-          isOpen={isPipelineManagerOpen}
-          onClose={() => setIsPipelineManagerOpen(false)}
-        />
+      {/* Pipeline Manager Modal */}
+      <PipelineManager
+        isOpen={isPipelineManagerOpen}
+        onClose={() => setIsPipelineManagerOpen(false)}
+      />
 
-        {/* Pipeline Execution Monitor */}
-        <PipelineExecution apiClient={api} />
-      </PipelineProvider>
+      {/* Pipeline Execution Monitor */}
+      <PipelineExecution />
     </div>
   );
 }

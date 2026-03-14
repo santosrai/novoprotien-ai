@@ -1,4 +1,4 @@
-import React from 'react'
+import React, { useMemo } from 'react'
 import ReactDOM from 'react-dom/client'
 import { BrowserRouter, Routes, Route } from 'react-router-dom'
 import { QueryClientProvider } from '@tanstack/react-query'
@@ -14,9 +14,30 @@ import { AuthGuard } from './components/auth/AuthGuard'
 import { AuthBootstrap } from './components/auth/AuthBootstrap'
 import { ErrorBoundary } from './components/ErrorBoundary'
 import { ThemeProvider } from './contexts/ThemeContext'
+import { PipelineProvider } from './components/pipeline-canvas'
+import { api, getAuthHeaders } from './utils/api'
+import { useAuthStore } from './stores/authStore'
 import './index.css'
 // Import pipeline-canvas library styles
 import './components/pipeline-canvas/style.css'
+
+// Wraps app with PipelineProvider; reads auth from store so pipeline context lives in one place (main).
+function PipelineProviderWrapper({ children }: { children: React.ReactNode }) {
+  const user = useAuthStore((state) => state.user);
+  const authState = useMemo(
+    () => ({ user: user ?? null, isAuthenticated: !!user }),
+    [user?.id]
+  );
+  return (
+    <PipelineProvider
+      apiClient={api}
+      authState={authState}
+      getAuthHeaders={getAuthHeaders}
+    >
+      {children}
+    </PipelineProvider>
+  );
+}
 
 // Verify root element exists before rendering
 const rootElement = document.getElementById('root');
@@ -27,11 +48,12 @@ if (!rootElement) {
 ReactDOM.createRoot(rootElement).render(
   <React.StrictMode>
     <QueryClientProvider client={queryClient}>
-      <ThemeProvider>
-        <ErrorBoundary>
+      <ErrorBoundary>
+        <ThemeProvider>
           <AuthBootstrap>
-            <BrowserRouter>
-              <Routes>
+            <PipelineProviderWrapper>
+              <BrowserRouter>
+                <Routes>
                 {/* Public Landing Page */}
                 <Route path="/" element={<LandingPage />} />
                 <Route path="/pricing" element={<PricingPage />} />
@@ -111,11 +133,12 @@ ReactDOM.createRoot(rootElement).render(
                     </AuthGuard>
                   }
                 />
-              </Routes>
-            </BrowserRouter>
+                </Routes>
+              </BrowserRouter>
+            </PipelineProviderWrapper>
           </AuthBootstrap>
-        </ErrorBoundary>
-      </ThemeProvider>
+        </ThemeProvider>
+      </ErrorBoundary>
     </QueryClientProvider>
   </React.StrictMode>,
 )

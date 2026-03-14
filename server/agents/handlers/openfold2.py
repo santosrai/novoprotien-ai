@@ -198,6 +198,7 @@ class OpenFold2Handler:
 
             filename = f"openfold2_{job_id}.pdb"
             try:
+                # Save to user-scoped storage (for downloads and user_files)
                 stored_path = save_result_file(
                     user_id=user_id,
                     file_id=job_id,
@@ -207,6 +208,11 @@ class OpenFold2Handler:
                     job_id=job_id,
                     metadata={"sequence_length": len(sequence)},
                 )
+                # Also save to dedicated openfold2_results folder (same pattern as AlphaFold/RFdiffusion)
+                try:
+                    client.save_pdb_file(pdb_content, filename)
+                except Exception as e:
+                    logger.warning(f"Failed to save OpenFold2 result to openfold2_results folder: {e}")
             except Exception as e:
                 logger.error(f"Failed to save OpenFold2 result: {e}")
                 # Still return pdbContent so frontend can use it

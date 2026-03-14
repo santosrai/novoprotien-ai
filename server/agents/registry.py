@@ -10,6 +10,10 @@ from .prompts.rfdiffusion import RFDIFFUSION_AGENT_SYSTEM_PROMPT
 from .prompts.proteinmpnn import PROTEINMPNN_AGENT_SYSTEM_PROMPT
 from .prompts.pipeline import PIPELINE_AGENT_SYSTEM_PROMPT
 from .prompts.validation import VALIDATION_AGENT_SYSTEM_PROMPT
+from .prompts.diffdock import DIFFDOCK_AGENT_SYSTEM_PROMPT
+from .prompts.alignment import ALIGNMENT_AGENT_SYSTEM_PROMPT
+from .prompts.af2bind import AF2BIND_AGENT_SYSTEM_PROMPT
+from .prompts.esmfold import ESMFOLD_AGENT_SYSTEM_PROMPT
 
 
 agents = {
@@ -73,6 +77,21 @@ agents = {
         "kind": "openfold2",
         "category": "fold",
     },
+    "esmfold-agent": {
+        "id": "esmfold-agent",
+        "name": "ESMFold Structure Prediction",
+        "description": (
+            "Predicts 3D protein structure from sequence using ESMFold (ESM-2 language model) "
+            "via NVIDIA NIM. No MSA or templates required — extremely fast (seconds). "
+            "Supports sequences up to 400 residues. Use for rapid screening before AlphaFold2. "
+            "Use when user asks for fast folding, ESMFold, or has sequences ≤400 residues."
+        ),
+        "system": ESMFOLD_AGENT_SYSTEM_PROMPT,
+        "modelEnv": "CLAUDE_CHAT_MODEL",
+        "defaultModel": os.getenv("CLAUDE_CHAT_MODEL", "claude-3-5-sonnet-20241022"),
+        "kind": "esmfold",
+        "category": "fold",
+    },
     "rfdiffusion-agent": {
         "id": "rfdiffusion-agent",
         "name": "RFdiffusion Protein Design",
@@ -93,6 +112,16 @@ agents = {
         "kind": "proteinmpnn",
         "category": "design",
     },
+    "diffdock-agent": {
+        "id": "diffdock-agent",
+        "name": "DiffDock Protein-Ligand Docking",
+        "description": "Predicts how a small molecule (ligand) binds to a protein using DiffDock via NVIDIA NIM. Inputs: protein PDB and ligand SDF. Output: binding poses for visualization in MolStar.",
+        "system": DIFFDOCK_AGENT_SYSTEM_PROMPT,
+        "modelEnv": "CLAUDE_CHAT_MODEL",
+        "defaultModel": os.getenv("CLAUDE_CHAT_MODEL", "claude-3-5-sonnet-20241022"),
+        "kind": "diffdock",
+        "category": "dock",
+    },
     "pipeline-agent": {
         "id": "pipeline-agent",
         "name": "Pipeline Architect",
@@ -111,6 +140,26 @@ agents = {
         "modelEnv": "CLAUDE_CHAT_MODEL",
         "defaultModel": os.getenv("CLAUDE_CHAT_MODEL", "claude-3-5-sonnet-20241022"),
         "kind": "validation",
+        "category": "analysis",
+    },
+    "alignment-agent": {
+        "id": "alignment-agent",
+        "name": "Structure Alignment (TM-align)",
+        "description": "Compares two protein structures using TM-align superposition. Use when user asks to compare, align, overlay, or superpose two structures. Fetches structures and returns them for client-side TM-align visualization.",
+        "system": ALIGNMENT_AGENT_SYSTEM_PROMPT,
+        "modelEnv": "CLAUDE_CHAT_MODEL",
+        "defaultModel": os.getenv("CLAUDE_CHAT_MODEL", "claude-3-5-sonnet-20241022"),
+        "kind": "alignment",
+        "category": "analysis",
+    },
+    "af2bind-agent": {
+        "id": "af2bind-agent",
+        "name": "AF2Bind Binding Site Prediction",
+        "description": "Predicts ligand-binding sites on proteins using AF2Bind (AlphaFold2 pair representations). Provide a PDB ID or UniProt accession to get per-residue binding probabilities with 3D heatmap visualization.",
+        "system": AF2BIND_AGENT_SYSTEM_PROMPT,
+        "modelEnv": "CLAUDE_CHAT_MODEL",
+        "defaultModel": os.getenv("CLAUDE_CHAT_MODEL", "claude-3-5-sonnet-20241022"),
+        "kind": "af2bind",
         "category": "analysis",
     },
 }
