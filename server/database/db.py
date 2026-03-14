@@ -33,16 +33,24 @@ def get_db() -> Generator[sqlite3.Connection, None, None]:
 
 
 def init_db() -> None:
-    """Initialize database with all tables."""
+    """Initialize database with all tables and run pending migrations."""
     # Ensure database directory exists
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
-    
+
     # Read schema SQL
     schema_path = Path(__file__).parent / "schema.sql"
     with open(schema_path, "r", encoding="utf-8") as f:
         schema_sql = f.read()
-    
-    # Execute schema
+
+    # Execute schema (CREATE TABLE IF NOT EXISTS — idempotent)
     with get_db() as conn:
         conn.executescript(schema_sql)
+
+    # Run any pending migrations
+    try:
+        from .migrate import run_migrations
+        run_migrations(db_path=DB_PATH)
+    except Exception as e:
+        print(f"Warning: Migration runner failed: {e}")
+        # Don't block startup if migrations fail — schema.sql has the full schema
 

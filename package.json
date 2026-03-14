@@ -19,7 +19,13 @@
     "test:backend:unit": "cd server && python3 -m pytest __tests__/unit/ -v",
     "test:backend:integration": "cd server && python3 -m pytest __tests__/integration/ -v",
     "test:e2e": "cd __tests__/e2e && python3 utils/test_runner.py",
-    "test:all": "npm run test:frontend && npm run test:backend && npm run test:e2e"
+    "test:all": "npm run test:frontend && npm run test:backend && npm run test:e2e",
+    "docker:build": "docker build -t novoprotein-ai .",
+    "docker:up": "docker compose up -d --build",
+    "docker:down": "docker compose down",
+    "docker:logs": "docker compose logs -f app",
+    "db:migrate": "cd server && python3 -m database.migrate",
+    "db:migrate:status": "cd server && python3 -m database.migrate --status"
   },
   "dependencies": {
     "@langchain/core": "^1.1.16",

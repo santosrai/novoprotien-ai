@@ -10,6 +10,14 @@ Traces appear at https://smith.langchain.com
 """
 
 import os
+from contextlib import nullcontext
+from typing import Any, Dict, Optional
+
+try:
+    from langsmith import tracing_context, Client as LangSmithClient
+except ImportError:
+    tracing_context = None
+    LangSmithClient = None
 
 
 def _is_tracing_enabled() -> bool:
@@ -40,3 +48,32 @@ def setup_langsmith() -> bool:
         else:
             print("[LangSmith] Tracing requested but LANGCHAIN_API_KEY/LANGSMITH_API_KEY not set")
     return enabled
+
+
+def langsmith_context(langsmith_config: Optional[Dict[str, Any]]):
+    """
+    Return a context manager for LangSmith tracing based on user settings.
+    - enabled=False: explicitly disable tracing
+    - enabled=True + apiKey: use user's LangSmith client
+    - enabled=True, no apiKey: use env (no-op context, default behavior)
+    - no config: use env (no-op context)
+    """
+    if tracing_context is None:
+        return nullcontext()
+
+    cfg = langsmith_config or {}
+    enabled = cfg.get("enabled", True)
+
+    if enabled is False:
+        return tracing_context(enabled=False)
+
+    api_key = (cfg.get("apiKey") or "").strip()
+    if api_key and LangSmithClient:
+        project = cfg.get("project") or "novoprotein-agent"
+        client = LangSmithClient(
+            api_key=api_key,
+            api_url="https://api.smith.langchain.com",
+        )
+        return tracing_context(client=client, project_name=project)
+
+    return nullcontext()

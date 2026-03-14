@@ -22,11 +22,12 @@ def get_uniprot_fetch_tool():
 
     @tool
     async def fetch_uniprot_entry(accession: str) -> str:
-        """Fetch detailed information for a single UniProt accession.
-        Returns JSON with accession, name, organism, length, full sequence,
-        PDB cross-references, gene names, and function description.
-        Use when the user asks to fetch, show details, or get info for a
-        specific UniProt ID / accession."""
+        """Fetch detailed information for a single UniProt entry by accession ID.
+        Returns full sequence, PDB cross-references, gene names, and function
+        description for one protein.
+        Use ONLY when the user explicitly provides a UniProt accession ID
+        (alphanumeric format like Q9HBE4, P00533, O15522).
+        Do NOT use for name/gene/keyword searches — use search_uniprot instead."""
         entry = await _fetch(accession)
         if not entry or not entry.get("accession"):
             return f"No UniProt entry found for accession '{accession}'."

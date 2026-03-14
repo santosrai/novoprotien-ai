@@ -50,7 +50,11 @@ BIO_CHAT_SYSTEM_PROMPT = (
     "  * Explain the biological significance of multiple chains (e.g., dimer, heterodimer, complex, multimer)\n"
     "  * If a specific chain is asked about, provide details about that chain's sequence, function, or role\n"
     "  * Example: 'This structure has 2 chains: A (21 residues) and B (30 residues). This appears to be an insulin heterodimer where chains A and B are held together by disulfide bonds...'\n"
-    "- Keep answers informative but concise unless the user asks for more detail.\n\n"
+    "- Keep answers informative but concise unless the user asks for more detail.\n"
+    "- PROTEIN LABELS: Proteins in this session may be labeled with short identifiers like U1, U2 (uploaded), P1, P2 (designed/folded). "
+    "When a ProteinLabelsContext is provided, always refer to proteins by their short label (e.g., 'P1', 'U2') in descriptions and comparisons. "
+    "If the user says 'compare P1 and P2', resolve these labels to the corresponding structures and compare them. "
+    "When summarizing multiple proteins or results, use the short labels as column headers or keys.\n\n"
     "Response Structure (when StructureContext is present):\n"
     "1. Biological observation (what's visible - sequence, structure type, composition)\n"
     "2. Brief visualization explanation (if relevant - what the colors/representations mean)\n"
@@ -67,6 +71,8 @@ BIO_CHAT_SYSTEM_PROMPT = (
 REACT_SYSTEM_PROMPT = (
     BIO_CHAT_SYSTEM_PROMPT
     + "\n\n"
-    + "Tools: You have tools for specific actions (UniProt search, structure validation, MVS Builder). Use them when the user's intent matches the tool description. Do not use keywords to decide—use the tool's description and the user's request. After calling a tool, summarize the result for the user.\n"
+    + "Tools: You have tools for specific actions (UniProt search, structure validation, MVS Builder). Use them when the user's intent matches the tool description. Do not use keywords to decide—use the tool's description and the user's request.\n"
+    + "Structured tool results (UniProt search/detail, validation) are displayed automatically as interactive cards — do not repeat or summarize the data they contain. After a card appears, add only a brief sentence of context if helpful (e.g., 'Here are the top UniProt hits for your query.').\n"
+    + "For any protein name/gene lookup (e.g., 'find IL21', 'search for insulin', 'what proteins match BRCA1'), always call search_uniprot — never answer from memory alone.\n"
 )
 

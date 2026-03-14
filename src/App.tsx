@@ -15,8 +15,12 @@ import { useTheme } from './contexts/ThemeContext';
 import { useAppStore } from './stores/appStore';
 import { useSettingsStore } from './stores/settingsStore';
 import { useChatHistoryStore } from './stores/chatHistoryStore';
-import { useEffect, useState, useCallback, Suspense, lazy } from 'react';
-import { MobileSegmentedControl, MobileTab } from './components/MobileSegmentedControl';
+import { Suspense, lazy } from 'react';
+import { MobileSegmentedControl } from './components/MobileSegmentedControl';
+import { useMobileLayout } from './hooks/useMobileLayout';
+import { usePipelineManagerOpen } from './hooks/usePipelineManagerOpen';
+import { useEditorPaneGuard } from './hooks/useEditorPaneGuard';
+import { useAppReady } from './hooks/useAppReady';
 
 // Lazy load MolstarViewer - only load when viewer is visible
 const MolstarViewer = lazy(() => import('./components/MolstarViewer').then(module => ({ default: module.MolstarViewer })));
@@ -25,68 +29,14 @@ function App() {
   const { activePane, setActivePane, chatPanelWidth, setChatPanelWidth, isViewerVisible, selectedFile, setSelectedFile } = useAppStore();
   const { settings, isSettingsDialogOpen, setSettingsDialogOpen } = useSettingsStore();
   const { isHistoryPanelOpen, setHistoryPanelOpen } = useChatHistoryStore();
-  const [isPipelineManagerOpen, setIsPipelineManagerOpen] = useState(false);
   const errorDashboard = useErrorDashboard();
   const { theme } = useTheme();
 
-  // Mobile state
-  const [isMobile, setIsMobile] = useState(() => window.innerWidth < 768);
-  const [mobileActiveTab, setMobileActiveTab] = useState<MobileTab>('chat');
-
-  useEffect(() => {
-    const onResize = () => setIsMobile(window.innerWidth < 768);
-    window.addEventListener('resize', onResize);
-    return () => window.removeEventListener('resize', onResize);
-  }, []);
-
-  // Auto-switch mobile tab when viewer/pane becomes active
-  useEffect(() => {
-    if (!isMobile) return;
-    if (isViewerVisible && activePane) {
-      const paneToTab: Record<string, MobileTab> = {
-        viewer: 'viewer',
-        editor: 'viewer',
-        pipeline: 'pipeline',
-        files: 'files',
-      };
-      const tab = paneToTab[activePane];
-      if (tab) setMobileActiveTab(tab);
-    }
-  }, [isMobile, isViewerVisible, activePane]);
-
-  const handleMobileTabChange = useCallback((tab: MobileTab) => {
-    setMobileActiveTab(tab);
-    if (tab === 'chat') return; // chat doesn't change activePane
-    if (tab === 'viewer') {
-      setActivePane('viewer');
-      if (!isViewerVisible) {
-        // Ensure viewer is visible when switching to viewer tab
-        useAppStore.getState().setViewerVisible(true);
-      }
-    } else if (tab === 'pipeline') {
-      setActivePane('pipeline');
-      if (!isViewerVisible) useAppStore.getState().setViewerVisible(true);
-    } else if (tab === 'files') {
-      setActivePane('files');
-      if (!isViewerVisible) useAppStore.getState().setViewerVisible(true);
-    }
-  }, [setActivePane, isViewerVisible]);
-
-  // Listen for pipeline manager open event
-  useEffect(() => {
-    const handleOpenPipelineManager = () => {
-      setIsPipelineManagerOpen(true);
-    };
-    window.addEventListener('open-pipeline-manager', handleOpenPipelineManager);
-    return () => window.removeEventListener('open-pipeline-manager', handleOpenPipelineManager);
-  }, []);
-  
-  // Auto-switch to viewer when editor gets disabled
-  useEffect(() => {
-    if (!settings.codeEditor.enabled && activePane === 'editor') {
-      setActivePane('viewer');
-    }
-  }, [settings.codeEditor.enabled, activePane, setActivePane]);
+  // Extracted hooks — see src/hooks/ for implementations
+  const { isMobile, mobileActiveTab, handleMobileTabChange } = useMobileLayout();
+  const { isPipelineManagerOpen, setIsPipelineManagerOpen } = usePipelineManagerOpen();
+  useEditorPaneGuard();
+  useAppReady();
 
   const handleFileSelect = async (file: any) => {
     // Load file content and show in editor
@@ -128,14 +78,6 @@ function App() {
     setSelectedFile(null);
     setActivePane('viewer');
   };
-
-  // Mark App as ready for test detection
-  useEffect(() => {
-    const timer = setTimeout(() => {
-      document.body.setAttribute('data-app-ready', 'true');
-    }, 500);
-    return () => clearTimeout(timer);
-  }, []);
 
   return (
     <div className="h-screen flex flex-col bg-app text-app" data-testid="app-container" data-app-ready="true">

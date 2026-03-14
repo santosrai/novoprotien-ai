@@ -23,10 +23,12 @@ def get_uniprot_tool():
     @tool
     async def search_uniprot(query: str, size: int = 5) -> str:
         """Search UniProt for proteins by name, gene, organism, or keyword.
-        Returns structured JSON with accession, name, organism, length,
-        sequence preview, and PDB cross-references.
-        Use when the user asks to search UniProt, find a protein in UniProt,
-        or look up a protein by name/gene."""
+        Returns a list of up to 5 matching entries (accession, name, organism,
+        length, sequence preview, PDB cross-references) displayed as a results card.
+        Use this tool whenever the user wants to find, discover, search, or list
+        proteins — even if you already know the accession. Always prefer this
+        tool over fetch_uniprot_entry for name/gene/keyword queries so the user
+        can see all matching results."""
         items = await _search_uniprot(query, size=size)
         if not items:
             return "No UniProt entries found for that query."

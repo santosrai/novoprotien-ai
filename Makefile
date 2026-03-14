@@ -1,7 +1,7 @@
-.PHONY: help setup client server dev lint test
+.PHONY: help setup client server dev lint test docker-build docker-up docker-down db-migrate
 
 help:
-	@echo "Targets: setup, client, server, dev, lint, test"
+	@echo "Targets: setup, client, server, dev, lint, test, docker-build, docker-up, docker-down, db-migrate"
 
 # One-shot setup for frontend and backend
 setup:
@@ -54,4 +54,32 @@ test-all: test-frontend test-backend test-e2e
 test-coverage:
 	npx vitest run --coverage
 	cd server && python3 -m pytest __tests__/unit/ -v --cov=server --cov-report=term-missing
+
+# ---------- Docker ----------
+
+# Build Docker image
+docker-build:
+	docker build -t novoprotein-ai .
+
+# Start containers (build + detach)
+docker-up:
+	docker compose up -d --build
+
+# Stop containers
+docker-down:
+	docker compose down
+
+# Follow container logs
+docker-logs:
+	docker compose logs -f app
+
+# ---------- Database ----------
+
+# Run pending database migrations
+db-migrate:
+	cd server && python3 -m database.migrate
+
+# Show migration status
+db-migrate-status:
+	cd server && python3 -m database.migrate --status
 
