@@ -23,6 +23,14 @@ except ImportError:
     from infrastructure.safety import violates_whitelist, ensure_clear_on_change
 
 
+def _looks_like_builder_code(code: str) -> bool:
+    """Return True if *code* looks like valid MolStar builder JavaScript."""
+    if not code or not code.strip():
+        return False
+    text = code.strip()
+    return any(kw in text for kw in ("builder.", "await ", "loadStructure", "mvs.", "plugin."))
+
+
 def _to_int(value: Any) -> Optional[int]:
     try:
         if value is None:
@@ -119,14 +127,20 @@ def react_state_to_app_result(final_state: Dict[str, Any]) -> Dict[str, Any]:
     if action_text:
         text = action_text
 
-    # Detect code in last AI content
+    # Detect code in last AI content, but skip if the SMILES viewer tool
+    # already handled visualization (the tool result contains the structure data).
+    _smiles_tool_used = any(
+        t.get("name") == "show_smiles_in_viewer" for t in tool_results
+    )
     content_for_code = ""
-    for m in reversed(messages):
-        if AIMessage and isinstance(m, AIMessage) and m.content:
-            content_for_code = m.content if isinstance(m.content, str) else str(m.content)
-            break
+    if not _smiles_tool_used:
+        for m in reversed(messages):
+            if AIMessage and isinstance(m, AIMessage) and m.content:
+                content_for_code = m.content if isinstance(m.content, str) else str(m.content)
+                break
     code, explanation = extract_code_and_text(content_for_code)
-    if code and code.strip():
+
+    if code and code.strip() and _looks_like_builder_code(code):
         code = ensure_clear_on_change(None, code)
         if violates_whitelist(code):
             out = {"type": "code", "code": code, "text": explanation or text}
@@ -176,21 +190,27 @@ def agent_output_to_app_result(
         return result
 
     if agent_kind == "code":
+        _, tool_results = langchain_to_app_text(messages)
+        _smiles_tool_used = any(
+            t.get("name") == "show_smiles_in_viewer" for t in (tool_results or [])
+        )
         content = ""
-        for m in reversed(messages):
-            if AIMessage and isinstance(m, AIMessage) and m.content:
-                content = m.content if isinstance(m.content, str) else str(m.content)
-                break
+        if not _smiles_tool_used:
+            for m in reversed(messages):
+                if AIMessage and isinstance(m, AIMessage) and m.content:
+                    content = m.content if isinstance(m.content, str) else str(m.content)
+                    break
         code, explanation_text = extract_code_and_text(content)
-        if code and code.strip() and violates_whitelist(code):
-            code = ensure_clear_on_change(current_code, code)
+        if code and code.strip() and _looks_like_builder_code(code):
+            if violates_whitelist(code):
+                code = ensure_clear_on_change(current_code, code)
+            else:
+                code = ensure_clear_on_change(current_code, code)
         else:
-            code = ensure_clear_on_change(current_code, code)
+            code = ""
         out = {"type": "code", "code": code}
         if explanation_text:
             out["text"] = explanation_text
-        # Include tool results (e.g. show_smiles_in_viewer) so frontend can load PDB/SDF
-        _, tool_results = langchain_to_app_text(messages)
         if tool_results:
             out["toolResults"] = tool_results
         token_usage = _extract_token_usage(messages)
