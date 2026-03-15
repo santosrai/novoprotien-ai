@@ -1860,6 +1860,20 @@ export const useChatHistoryStore = create<ChatHistoryState>()(
           useChatHistoryStore.setState({ hasHydrated: true, isRestoring: false, restoreResolved: true });
           return;
         }
+
+        // Immediately clear sessions if no auth tokens are present in localStorage.
+        // This prevents stored sessions from flashing visible during the 1 s delay below.
+        const rawAuth = localStorage.getItem('novoprotein-auth-storage');
+        const hasStoredTokens = rawAuth
+          ? Boolean((JSON.parse(rawAuth) as { state?: { accessToken?: string } })?.state?.accessToken)
+          : false;
+
+        if (!hasStoredTokens) {
+          state.clearAllSessions();
+          useChatHistoryStore.setState({ hasHydrated: true, isRestoring: false, restoreResolved: true });
+          return;
+        }
+
         useChatHistoryStore.setState({ hasHydrated: true, isRestoring: true, restoreResolved: false });
         // Always sync with backend after rehydration to ensure user-specific data
         setTimeout(async () => {
