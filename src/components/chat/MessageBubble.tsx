@@ -129,31 +129,44 @@ const MessageBubble: React.FC<MessageBubbleProps> = ({
           remarkPlugins={[remarkGfm]}
           components={{
             // eslint-disable-next-line @typescript-eslint/no-explicit-any
-            pre({ children }: any) {
-              const kids = React.Children.toArray(children);
-              const codeEl = kids.find(
-                (c): c is React.ReactElement<any> =>
-                  React.isValidElement(c) && (c as React.ReactElement<any>).type === 'code'
-              ) as React.ReactElement<any> | undefined;
-              const cls = codeEl?.props?.className || '';
-              const langMatch = /language-(\w+)/.exec(cls);
-              const label = langMatch?.[1] ?? 'Code';
+            code({ inline, className, children, ...props }: any) {
+              const match = /language-(\w+)/.exec(className || '');
+              if (inline) {
+                return (
+                  <code className={className} {...props}>
+                    {children}
+                  </code>
+                );
+              }
+
+              const text = String(children).replace(/\n$/, '');
+              const lineCount = text.split('\n').length;
+              const lang = match?.[1]?.toLowerCase() || '';
+              const REAL_CODE_LANGS = new Set([
+                'ts', 'tsx', 'js', 'jsx', 'python', 'py', 'bash', 'sh', 'shell',
+                'json', 'yaml', 'yml', 'sql', 'go', 'rust', 'java', 'cpp', 'c',
+                'html', 'css', 'xml', 'ruby', 'r', 'swift', 'kotlin',
+              ]);
+              const hasCodeChars = /[{}();=<>]/.test(text);
+              const isRealCode = REAL_CODE_LANGS.has(lang) || (lineCount > 2 && hasCodeChars);
+
+              if (!isRealCode && lineCount <= 2 && text.length <= 80) {
+                return (
+                  <code className="px-1.5 py-0.5 bg-gray-100 text-gray-800 rounded text-xs font-mono" {...props}>
+                    {children}
+                  </code>
+                );
+              }
+
+              const languageLabel = match?.[1] ? match[1] : 'Code';
               return (
                 <div className="my-1.5">
-                  <CollapsibleSection title={label}>
+                  <CollapsibleSection title={languageLabel}>
                     <pre className="text-[10px] whitespace-pre bg-white border border-gray-200 rounded p-1.5 overflow-auto leading-relaxed">
                       {children}
                     </pre>
                   </CollapsibleSection>
                 </div>
-              );
-            },
-            // eslint-disable-next-line @typescript-eslint/no-explicit-any
-            code({ className, children, ...props }: any) {
-              return (
-                <code className={className} {...props}>
-                  {children}
-                </code>
               );
             },
           }}

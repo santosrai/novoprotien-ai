@@ -34,6 +34,11 @@ export interface LangGraphState extends Record<string, unknown> {
       outputTokens: number;
       totalTokens: number;
     };
+    blueprint?: any;
+    blueprintRationale?: string;
+    blueprintApproved?: boolean;
+    uniprotSearchResult?: any;
+    uniprotDetailResult?: any;
   };
 }
 

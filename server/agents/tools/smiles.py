@@ -42,15 +42,19 @@ def _make_smiles_tool() -> Any:
             smiles: The SMILES string (e.g. O=C1NC2=C(N1)C(=O)NC(=O)N2). Extract exactly from the user message.
             format: Output format: 'pdb' or 'sdf'. Use 'sdf' by default unless the user explicitly asks for PDB.
         """
-        # Enforce SDF output for viewer/download consistency.
+        import json as _json
         fmt = "sdf"
         try:
             content, filename = smiles_to_structure((smiles or "").strip(), fmt)
-            return (
-                f"Successfully converted SMILES to 3D structure. Output file: {filename} ({len(content)} chars). "
-                "The structure is ready to load in the viewer."
-            )
+            return _json.dumps({
+                "action": "show_smiles_in_viewer",
+                "smiles": smiles.strip(),
+                "content": content,
+                "filename": filename,
+                "format": fmt,
+                "message": f"Converted SMILES to 3D structure ({filename}, {len(content)} chars). Ready to view.",
+            })
         except Exception as e:
-            return f"Conversion failed: {e!s}"
+            return _json.dumps({"error": str(e)})
 
     return show_smiles_in_viewer
