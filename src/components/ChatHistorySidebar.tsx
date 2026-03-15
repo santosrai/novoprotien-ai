@@ -13,8 +13,11 @@ import {
 import { useChatHistoryStore, useSessionManagement } from '../stores/chatHistoryStore';
 import { ChatHistoryItem } from './ChatHistoryItem';
 import { useAppStore } from '../stores/appStore';
+import { useAuthStore } from '../stores/authStore';
 
 export const ChatHistorySidebar: React.FC = () => {
+  const { isAuthenticated } = useAuthStore();
+
   const {
     activeSessionId,
     isSidebarCollapsed,
@@ -118,6 +121,11 @@ export const ChatHistorySidebar: React.FC = () => {
       setShowBulkActions(false);
     }
   };
+
+  // Don't render chat history for unauthenticated users
+  if (!isAuthenticated) {
+    return null;
+  }
 
   // Collapsed sidebar view
   if (isSidebarCollapsed) {
