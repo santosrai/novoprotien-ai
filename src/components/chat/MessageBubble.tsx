@@ -17,6 +17,8 @@ import {
 import { CollapsibleSection } from './CollapsibleSection';
 import { AgentPill } from '../AgentPill';
 import { ToolPill } from '../ToolPill';
+import ProteinLabelBadge from '../ProteinLabelBadge';
+import { useAppStore } from '../../stores/appStore';
 import { ThinkingProcessDisplay } from '../ThinkingProcessDisplay';
 import { JobLoadingPill } from '../JobLoadingPill';
 import { PipelineBlueprintDisplay } from '../PipelineBlueprintDisplay';
@@ -82,8 +84,21 @@ const MessageBubble: React.FC<MessageBubbleProps> = ({
   retryingMessageId,
 }) => {
   const [isCopying, setIsCopying] = React.useState(false);
+  const proteinLabels = useAppStore(state => state.proteinLabels);
 
   const isRetryingThisMessage = retryingMessageId === message.id;
+
+  // Find protein label associated with this AI message (via previous user's uploaded file)
+  const relatedProteinLabel = React.useMemo(() => {
+    if (message.type !== 'ai') return null;
+    const idx = messages.findIndex(m => m.id === message.id);
+    if (idx <= 0) return null;
+    const prevMsg = messages[idx - 1];
+    if (prevMsg?.type === 'user' && prevMsg.uploadedFile?.file_id) {
+      return proteinLabels.find(l => l.file_id === prevMsg.uploadedFile!.file_id) ?? null;
+    }
+    return null;
+  }, [message, messages, proteinLabels]);
 
   const handleCopy = async () => {
     setIsCopying(true);
@@ -114,26 +129,31 @@ const MessageBubble: React.FC<MessageBubbleProps> = ({
           remarkPlugins={[remarkGfm]}
           components={{
             // eslint-disable-next-line @typescript-eslint/no-explicit-any
-            code({ inline, className, children, ...props }: any) {
-              const match = /language-(\w+)/.exec(className || '');
-              if (inline) {
-                return (
-                  <code className={className} {...props}>
-                    {children}
-                  </code>
-                );
-              }
-              const languageLabel = match?.[1] ? match[1] : 'Code';
+            pre({ children }: any) {
+              const kids = React.Children.toArray(children);
+              const codeEl = kids.find(
+                (c): c is React.ReactElement<any> =>
+                  React.isValidElement(c) && (c as React.ReactElement<any>).type === 'code'
+              ) as React.ReactElement<any> | undefined;
+              const cls = codeEl?.props?.className || '';
+              const langMatch = /language-(\w+)/.exec(cls);
+              const label = langMatch?.[1] ?? 'Code';
               return (
                 <div className="my-1.5">
-                  <CollapsibleSection title={languageLabel}>
+                  <CollapsibleSection title={label}>
                     <pre className="text-[10px] whitespace-pre bg-white border border-gray-200 rounded p-1.5 overflow-auto leading-relaxed">
-                      <code className={className} {...props}>
-                        {children}
-                      </code>
+                      {children}
                     </pre>
                   </CollapsibleSection>
                 </div>
+              );
+            },
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            code({ className, children, ...props }: any) {
+              return (
+                <code className={className} {...props}>
+                  {children}
+                </code>
               );
             },
           }}
@@ -181,7 +201,7 @@ colorByConfidence();`;
       >
         {message.type === 'ai' ? (
           <>
-            {((message as ExtendedMessage).agentId || (message as ExtendedMessage).toolsInvoked?.length) && (
+            {((message as ExtendedMessage).agentId || (message as ExtendedMessage).toolsInvoked?.length || relatedProteinLabel) && (
               <div className="flex flex-wrap items-center gap-1 mb-1.5">
                 {(message as ExtendedMessage).agentId && (
                   <AgentPill agentId={(message as ExtendedMessage).agentId!} />
@@ -189,6 +209,9 @@ colorByConfidence();`;
                 {(message as ExtendedMessage).toolsInvoked?.map((tool) => (
                   <ToolPill key={tool} toolName={tool} />
                 ))}
+                {relatedProteinLabel && (
+                  <ProteinLabelBadge label={relatedProteinLabel} size="sm" />
+                )}
               </div>
             )}
             {message.thinkingProcess && (

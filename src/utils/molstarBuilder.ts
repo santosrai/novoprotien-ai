@@ -77,6 +77,9 @@ export const createMolstarBuilder = (
         await this.clearStructure();
 
         let data: any;
+        // rawText is saved for the API URL path so we can re-create a fresh
+        // Molstar data state if the PDB parse fails and we need to retry as SDF.
+        let rawText: string | undefined;
 
         if (isApiUrl) {
           // For internal API URLs, fetch with authentication headers since
@@ -86,10 +89,10 @@ export const createMolstarBuilder = (
           if (!response.ok) {
             throw new Error(`HTTP ${response.status}: ${response.statusText}`);
           }
-          const pdbText = await response.text();
+          rawText = await response.text();
           // Create a blob URL from the fetched data so MolStar's download()
           // processes it through its standard pipeline (same as external PDB files).
-          const blob = new Blob([pdbText], { type: 'text/plain' });
+          const blob = new Blob([rawText], { type: 'text/plain' });
           const blobUrl = URL.createObjectURL(blob);
           try {
             data = await plugin.builders.data.download({
@@ -112,7 +115,27 @@ export const createMolstarBuilder = (
         try {
           trajectory = await plugin.builders.structure.parseTrajectory(data, 'pdb');
         } catch {
-          trajectory = await plugin.builders.structure.parseTrajectory(data, 'sdf');
+          // When parseTrajectory fails, Molstar tears down the data StateObject node,
+          // making data.ref undefined. Re-using the same `data` for the SDF retry
+          // causes "Cannot read properties of undefined (reading 'ref')".
+          // Fix: create a FRESH data state before retrying with SDF format.
+          let data2: any;
+          if (rawText !== undefined) {
+            // isApiUrl path — reuse already-fetched text to avoid a second network request
+            const blob2 = new Blob([rawText], { type: 'text/plain' });
+            const blobUrl2 = URL.createObjectURL(blob2);
+            try {
+              data2 = await plugin.builders.data.download({ url: blobUrl2, isBinary: false });
+            } finally {
+              URL.revokeObjectURL(blobUrl2);
+            }
+          } else {
+            // External / blob URL path — re-download from the original URL.
+            // Blob URLs remain valid until explicitly revoked, so this is safe.
+            const url = isUrl ? pdbIdOrUrl : getPDBUrl(pdbIdOrUrl);
+            data2 = await plugin.builders.data.download({ url, isBinary: false });
+          }
+          trajectory = await plugin.builders.structure.parseTrajectory(data2, 'sdf');
         }
         const model = await plugin.builders.structure.createModel(trajectory);
         currentStructure = await plugin.builders.structure.createStructure(model);

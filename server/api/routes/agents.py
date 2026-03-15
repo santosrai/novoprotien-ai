@@ -147,6 +147,19 @@ def _body_to_stream_args(body: dict, user: Dict[str, Any]) -> dict:
 
     manual_agent_id = body.get("agentId") or configurable.get("agentId") or None
 
+    # Fetch protein labels for the session so the AI knows U1, P1, etc.
+    session_id = configurable.get("session_id", "") or body.get("session_id", "")
+    protein_labels: list = []
+    if session_id and user:
+        try:
+            try:
+                from ...domain.storage.protein_labels import get_protein_labels_for_session
+            except ImportError:
+                from domain.storage.protein_labels import get_protein_labels_for_session
+            protein_labels = get_protein_labels_for_session(session_id, user["id"])
+        except Exception:
+            protein_labels = []
+
     return {
         "user_text": spell_fix(input_text) if input_text else input_text,
         "current_code": body.get("currentCode") or configurable.get("currentCode"),
@@ -159,6 +172,7 @@ def _body_to_stream_args(body: dict, user: Dict[str, Any]) -> dict:
         "pipeline_data": pipeline_data,
         "model_override": body.get("model") or configurable.get("model"),
         "manual_agent_id": manual_agent_id,
+        "protein_labels": protein_labels,
     }
 
 

@@ -1217,6 +1217,7 @@ def _build_react_messages(
     pipeline_id: Optional[str] = None,
     pipeline_data: Optional[Dict[str, Any]] = None,
     agent_id: Optional[str] = None,
+    protein_labels: Optional[List[Dict[str, Any]]] = None,
 ) -> List[Dict[str, Any]]:
     """Build OpenRouter-style message list for the ReAct agent (system + context + history + user)."""
 
@@ -1228,6 +1229,19 @@ def _build_react_messages(
     )
 
     context_parts = []
+    if protein_labels:
+        label_parts = []
+        for lbl in protein_labels:
+            short = lbl.get("short_label", "?")
+            kind = lbl.get("kind", "")
+            source = lbl.get("source_tool") or kind
+            fn = lbl.get("metadata") or ""
+            label_parts.append(f"{short} ({source})")
+        context_parts.append(
+            "ProteinLabelsContext: The following protein labels are active in this session: "
+            + ", ".join(label_parts)
+            + ". When the user refers to any of these labels (e.g. 'U1', 'P1'), treat it as referring to that protein."
+        )
     if uploaded_file_context:
         fn = uploaded_file_context.get("filename", "uploaded file")
         chains = uploaded_file_context.get("chains", [])
@@ -2251,6 +2265,7 @@ async def run_supervisor_stream(
     temperature: float = 0.5,
     max_tokens: int = 1000,
     abort_event: Optional["asyncio.Event"] = None,
+    protein_labels: Optional[List[Dict[str, Any]]] = None,
 ) -> AsyncGenerator[Dict[str, Any], None]:
     """Supervisor streaming: route to a sub-agent, then stream its ReAct loop.
 
@@ -2519,6 +2534,7 @@ async def run_supervisor_stream(
         pipeline_id=pipeline_id,
         pipeline_data=pipeline_data,
         agent_id=agent_id,  # Fix 3: agent-aware CodeContext
+        protein_labels=protein_labels,
     )
     lc_messages = openrouter_to_langchain(openrouter_messages)
     # Strip the hardcoded bio_chat system message — each sub-agent graph

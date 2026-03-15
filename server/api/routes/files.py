@@ -105,8 +105,9 @@ async def upload_pdb_from_content(
         filename = body.get("filename", "structure.pdb")
         if not pdb_content:
             raise HTTPException(status_code=400, detail="pdbContent is required")
-        if not filename.lower().endswith(".pdb"):
-            filename = f"{filename}.pdb" if not filename.endswith(".pdb") else "structure.pdb"
+        lower_fn = filename.lower()
+        if not lower_fn.endswith(".pdb") and not lower_fn.endswith(".sdf"):
+            filename = filename + ".pdb"
         user_id = user.get("id")
         if not user_id:
             raise HTTPException(status_code=401, detail="User ID not found")

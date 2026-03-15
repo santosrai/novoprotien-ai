@@ -39,12 +39,15 @@ const UniProtResultCard: React.FC<Props> = ({ result, onFetchEntry, onViewStruct
           <tbody>
             {result.results.map((entry) => (
               <tr key={entry.accession} className="hover:bg-blue-50/50 border-b border-blue-100 last:border-b-0">
-                <td className="px-2 py-2 max-w-[160px]">
+                <td className="px-2 py-2 max-w-[220px]">
                   <div className="font-medium text-gray-900 truncate" title={entry.protein || entry.id}>
                     {entry.protein || entry.id}
                   </div>
                   <div className="text-[10px] text-gray-500 truncate" title={entry.organism || ''}>
                     {entry.organism || ''}
+                  </div>
+                  <div className="text-[10px] text-gray-500 font-mono truncate" title={entry.accession}>
+                    UniProt: {entry.accession}
                   </div>
                 </td>
                 <td className="px-2 py-2">
@@ -62,12 +65,16 @@ const UniProtResultCard: React.FC<Props> = ({ result, onFetchEntry, onViewStruct
                     </span>
                   )}
                 </td>
-                <td className="px-2 py-2 font-mono text-[10px] text-gray-600 max-w-[140px]">
-                  <span className="truncate block" title={entry.sequence}>
-                    {entry.sequence?.slice(0, 30)}{entry.sequence?.length > 30 ? '...' : ''}
-                  </span>
+                <td className="px-2 py-2 font-mono text-[10px] text-gray-600 max-w-[260px]">
+                  <div className="max-h-20 overflow-y-auto rounded bg-white/60 border border-blue-100 px-1 py-0.5">
+                    <span className="whitespace-pre-wrap break-all" title={entry.sequence}>
+                      {entry.sequence}
+                    </span>
+                  </div>
                   {entry.length != null && (
-                    <span className="text-[9px] text-gray-400">{entry.length} aa</span>
+                    <span className="block mt-0.5 text-[9px] text-gray-400">
+                      Length: {entry.length} aa
+                    </span>
                   )}
                 </td>
                 <td className="px-2 py-2">

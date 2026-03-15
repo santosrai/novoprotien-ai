@@ -20,6 +20,7 @@ from .mvs_builder import get_mvs_builder_tool
 
 AGENT_TOOL_MAP = {
     "bio_chat": [
+        get_smiles_tool,
         get_validation_tool,
         get_uniprot_tool,
         get_uniprot_fetch_tool,
