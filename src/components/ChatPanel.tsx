@@ -1,5 +1,7 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { Sparkles } from 'lucide-react';
+import { useQueryClient } from '@tanstack/react-query';
 import { useAppStore } from '../stores/appStore';
 import type { StructureOrigin } from '../stores/appStore';
 import { useChatHistoryStore, useActiveSession, Message } from '../stores/chatHistoryStore';
@@ -37,8 +39,10 @@ import { MessageList } from './chat/MessageList';
 import { WelcomeScreen } from './chat/WelcomeScreen';
 import { PageRefreshSkeleton } from './chat/PageRefreshSkeleton';
 import { ChatInput } from './chat/ChatInput';
-import ProteinLabelPanel from './ProteinLabelPanel';
 import { useProteinLabels } from '../hooks/queries/useProteinLabels';
+import type { ProteinLabel } from '../types/chat';
+
+const EMPTY_PROTEIN_LABELS: ProteinLabel[] = [];
 
 export const ChatPanel: React.FC = () => {
   const {
@@ -61,9 +65,10 @@ export const ChatPanel: React.FC = () => {
   const { activeSession, addMessage, updateMessages } = useActiveSession();
   const activeSessionMessageCount = activeSession?.messages?.length ?? -1;
 
+  const queryClient = useQueryClient();
   const { settings: agentSettings } = useAgentSettings();
   const langsmithSettings = useSettingsStore((s) => s.settings?.langsmith);
-  const { data: proteinLabels = [], isLoading: labelsLoading } = useProteinLabels(activeSessionId);
+  const { data: proteinLabels = EMPTY_PROTEIN_LABELS } = useProteinLabels(activeSessionId);
   const setProteinLabels = useAppStore(state => state.setProteinLabels);
 
   useEffect(() => {
@@ -107,6 +112,8 @@ export const ChatPanel: React.FC = () => {
   const isRestoring = useChatHistoryStore(state => state.isRestoring);
   const sessions = useChatHistoryStore(state => state.sessions);
   const authResolved = useAuthStore(state => state.authResolved);
+  const isAuthenticated = useAuthStore(state => state.isAuthenticated);
+  const navigate = useNavigate();
 
   useAgents();
   const { data: modelsData } = useModels();
@@ -347,10 +354,12 @@ export const ChatPanel: React.FC = () => {
       setUploadError(null);
       const formData = new FormData();
       formData.append('file', file);
-      if (activeSessionId) formData.append('session_id', activeSessionId);
 
       const headers = getAuthHeaders();
-      const response = await fetch('/api/upload/pdb', { method: 'POST', headers, body: formData });
+      const uploadUrl = activeSessionId
+        ? `/api/upload/pdb?session_id=${encodeURIComponent(activeSessionId)}`
+        : '/api/upload/pdb';
+      const response = await fetch(uploadUrl, { method: 'POST', headers, body: formData });
       if (!response.ok) {
         const errorData = await response.json();
         throw new Error(errorData.detail || 'Upload failed');
@@ -378,6 +387,7 @@ export const ChatPanel: React.FC = () => {
       });
 
       window.dispatchEvent(new CustomEvent('session-file-added'));
+      queryClient.invalidateQueries({ queryKey: ['proteinLabels', activeSessionId] });
       setCurrentCode('');
       setCurrentStructureOrigin(null);
 
@@ -436,6 +446,12 @@ export const ChatPanel: React.FC = () => {
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!input.trim() || isLoading) return;
+
+    // Unauthenticated users are redirected to sign in before sending a message
+    if (!isAuthenticated) {
+      navigate('/signin');
+      return;
+    }
 
     const uploadedFileInfo = fileUploads.find(f => f.status === 'uploaded' && f.fileInfo)?.fileInfo || null;
     const attachedPipeline = selectedPipeline;
@@ -706,9 +722,6 @@ export const ChatPanel: React.FC = () => {
         </div>
       )}
 
-      {!showCenteredLayout && (proteinLabels.length > 0 || labelsLoading) && (
-        <ProteinLabelPanel labels={proteinLabels} isLoading={labelsLoading} />
-      )}
 
       {showRestoreLayout ? (
         <PageRefreshSkeleton />
